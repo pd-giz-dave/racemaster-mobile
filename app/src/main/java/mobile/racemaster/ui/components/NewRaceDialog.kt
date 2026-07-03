@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import mobile.racemaster.util.withClickSound
 
 @Composable
 fun NewRaceDialog(
@@ -30,12 +31,12 @@ fun NewRaceDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onConfirm(name.trim()) },
+                onClick = withClickSound { onConfirm(name.trim()) },
                 enabled = name.isNotBlank(),
             ) { Text("Create") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = withClickSound(onDismiss)) { Text("Cancel") }
         },
     )
 }

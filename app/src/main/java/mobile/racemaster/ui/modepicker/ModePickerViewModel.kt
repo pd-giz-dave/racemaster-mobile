@@ -5,10 +5,12 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import mobile.racemaster.data.db.entity.BibEntryType
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.repository.buildRaceLabel
+import mobile.racemaster.data.repository.hasRealEntries
 import mobile.racemaster.data.repository.isRaceInProgress
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
@@ -59,14 +61,15 @@ class ModePickerViewModel(
                     val inProgress = isRaceInProgress(
                         race.timeModeStartedAtMillis,
                         race.timeModeStoppedAtMillis,
-                        bibEntries.isNotEmpty(),
+                        bibEntries.hasRealEntries(),
+                        race.bibsModeStoppedAtMillis,
                     )
                     if (!inProgress) return@combine null
                     ActiveRaceStatus(
                         raceLabel = race.label,
                         currentModeLabel = mode.displayName(),
                         splitCount = splits.count { it.splitNumber != 0 },
-                        bibCount = bibEntries.size,
+                        bibCount = bibEntries.count { it.type != BibEntryType.CLOCK },
                     )
                 }
             }
@@ -82,10 +85,25 @@ class ModePickerViewModel(
     }
 
     /** First-time mode pick — creates the initial race under the given name. */
-    fun selectModeAndCreateRace(mode: AppMode, raceName: String, onComplete: () -> Unit) {
+    fun selectModeAndCreateRace(
+        mode: AppMode,
+        raceName: String,
+        bibsRangeStart: Int? = null,
+        bibsRangeCount: Int? = null,
+        onComplete: () -> Unit,
+    ) {
         viewModelScope.launch {
             settingsRepository.setAppMode(mode)
-            val newRaceId = raceRepository.startNewRace(buildRaceLabel(raceName))
+            val label = buildRaceLabel(raceName)
+            val newRaceId = if (mode == AppMode.BIBS) {
+                bibsModeRepository.createRaceWithClockMarker(
+                    label,
+                    requireNotNull(bibsRangeStart) { "Bibs races require a bib range start" },
+                    requireNotNull(bibsRangeCount) { "Bibs races require a bib range count" },
+                )
+            } else {
+                raceRepository.startNewRace(label)
+            }
             settingsRepository.setActiveRaceId(newRaceId)
             onComplete()
         }

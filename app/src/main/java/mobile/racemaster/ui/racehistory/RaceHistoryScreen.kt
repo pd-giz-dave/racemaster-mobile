@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.util.withClickSound
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,7 +35,7 @@ fun RaceHistoryScreen(
         topBar = {
             TopAppBar(
                 title = { Text("Past Races") },
-                navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
+                navigationIcon = { TextButton(onClick = withClickSound(onBack)) { Text("Back") } },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },
@@ -48,7 +49,7 @@ fun RaceHistoryScreen(
                 items(races, key = { it.id }) { race ->
                     ListItem(
                         headlineContent = { Text(race.label) },
-                        modifier = Modifier.clickable { onRaceSelected(race.id) },
+                        modifier = Modifier.clickable(onClick = withClickSound { onRaceSelected(race.id) }),
                     )
                     HorizontalDivider()
                 }

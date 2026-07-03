@@ -78,7 +78,38 @@ Tracks progress against `/home/dave/.claude/plans/sunny-weaving-planet.md`.
 - [x] Audible beep: `util/Beeper.kt` generates a real 150ms 1kHz sine tone (rapid rise/solid sustain/rapid fall via a 3ms fade, no asset file needed) via `AudioTrack`, played on `AudioAttributes.USAGE_ALARM` and forced to max `STREAM_ALARM` volume every time — exempt from silent/vibrate mode and media-volume limits, and audible over outdoor wind/crowd noise; 1kHz keeps it below where age-related hearing loss usually bites first. Wired into `TimeModeViewModel.recordSplit()` and `BibsModeViewModel.submit()`, released in each ViewModel's `onCleared()`. Went through a few iterations live with the user: `ToneGenerator.TONE_PROP_BEEP` turned out to be a fixed-envelope click that ignores requested duration; `TONE_DTMF_1` is a true continuous tone but is two simultaneous frequencies (that's what DTMF is) and sounded doubled/warbly — a hand-generated single-frequency `AudioTrack` buffer was the fix
 - [x] Tests: 15/15 passing
 
+## Phase 2 — Bibs Mode rework: legal bib range, duplicate flagging, unified Event/Log, editable rows
+
+- [x] `BibEntryType` extended from `{START, FINISH, RETIRE}` to add `IGNORE, SENIORS, JUNIORS, MALE, FEMALE, CLOCK, STOP`; `BIB_REQUIRED_TYPES` constant marks which types carry a real bib number (Start/Finish/Retire only)
+- [x] `BibEntryEntity.bibNumber` now nullable (null for the no-bib types), `splitNumber` now non-nullable (every row gets one, including Retire — a deliberate behavior change from before), added `note`; `RaceEntity` gains `bibsRangeStart`/`bibsRangeCount`/`bibsModeStoppedAtMillis`; Room bumped to v5
+- [x] `BibsModeRepository.createRaceWithClockMarker()` atomically inserts the race row + a fixed "Clock" split #0 (mirrors `TimeModeRepository.startStopwatch`'s pattern) — the only entry point for creating a Bibs race; `recordEntry`/`updateEntry`/`deleteMostRecent` reworked around the new always-has-a-splitNumber model; added `stopBibsMode`/`resetBibsMode`
+- [x] `NewBibsRaceDialog`: prompts for race name + first bib number + runner count (defines the legal range) instead of just a name; `ModeScreenTopBar` reworked to take a dialog **slot** so Time/Mule mode's plain `NewRaceDialog` needed zero changes
+- [x] `BibValidation.kt`: `isBibInLegalRange`, `findDuplicateSplitRefs` (cross-references every entry sharing a bib+type), `countDuplicateExtras` (pair=1, three-of-a-kind=2, two separate pairs=2 — "extra occurrence" semantics, not raw flagged-row count)
+- [x] Bibs Mode screen reworked: single amalgamated Log button (label reflects the pending event, resets to "Finish" after every log) + Event picker (Finish/Start/Retire/Ignore/Seniors/Juniors/Male/Female — Clock and Stop deliberately excluded, they're not operator-selectable) + Stop/Reset (extracted `StopOrResetButton` now shared with Time Mode) + Undo, all on one row; tap any row to edit its bib/event/note, or its offset time for the Clock row
+- [x] Tests: new `BibValidationTest` (JVM, range boundaries + dup cross-refs + extras-counting semantics), rewrote `BibsModeRepositoryTest` for the new counter/undo model (Retire now consumes the counter, Clock/Stop have special undo handling, `createRaceWithClockMarker` atomicity)
+- [x] Manual verification live on-device: range rejection, duplicate cross-referencing and un-flagging on edit, Start+Finish same bib not flagged, Stop/Reset/Undo-resumes-logging all confirmed
+
+## Phase 2.1 — Bibs Mode UX fixes, Time Mode parity, external trigger
+
+- [x] Keyboard no longer covers the row-edit panel: same scrollable-header-with-auto-scroll pattern as Time Mode's label editor, confirmed live (edit panel's Save/Cancel stay visible above the keyboard)
+- [x] Button row wrapping fixed properly: first tried shrinking the Undo Last font, but on the physical phone's display density even "Finish" was wrapping — root cause was Material's default 24dp/side button content padding, not font size; fixed by adding a `contentPadding` override to `StopOrResetButton`/`UndoLastButton` and cutting it to 4dp for the whole Bibs button row instead
+- [x] `DigitKeypad` buttons enlarged 44dp → 52dp (the backspace glyph was being clipped at 44dp)
+- [x] "Next: #N" caption added to Time Mode too, matching Bibs Mode; Bibs Mode's line also gained a right-aligned running duplicate count ("N dups")
+- [x] Clock row edit label reads "Offset time (m:ss or ss)"; `parseMinutesSeconds` now also accepts a single number as seconds (not capped at 59 — "90" → "1:30"), matching the reference web app's offset convention
+- [x] External trigger extended to Bibs Mode (same `MainActivity.onExternalSplitTrigger` mechanism Time Mode already used, registered while Bibs Mode is showing, gated on `canSubmit`). User reported volume-down and their Bluetooth camera trigger not working on the physical phone; captured raw input via `adb shell getevent -lt` and confirmed the trigger genuinely sends `KEY_VOLUMEDOWN`, then added temporary `Log.d` diagnostics to `MainActivity.dispatchKeyEvent` to rule out a code bug — a clean reinstall resolved it (stale app/Bluetooth state, not a bug; the dispatch code was untouched throughout), confirmed working in both modes, diagnostics removed afterward
+
+## Phase 2.2 — Click sound on every button press
+
+- [x] First attempt: centralized `LocalIndication` override (a custom `Indication`/`IndicationNodeFactory` delegating to the real ripple, playing a click sound on `PressInteraction.Release`) wired once in `RacemasterMobileTheme`. Compiled fine but produced zero sound; temporary diagnostic logging confirmed Material3's `Button`/`OutlinedButton`/`TextButton` don't consult `LocalIndication` in this Compose BOM (2026.02.01) — they hardcode their own ripple internally
+- [x] Reverted to a `withClickSound()` composable helper (`util/ClickSound.kt`, wraps `onClick` with `View.playSoundEffect(SoundEffectConstants.CLICK)`) applied explicitly at every `onClick`/`clickable` call site across every screen, dialog, and shared component (~30 sites) — confirmed audible live on-device in all modes; respects the phone's system Touch Sounds setting like any other Android button
+
+## Phase 2.3 — Race History duplicate display, bib number bounds, Help screen
+
+- [x] Race History detail screen now reuses `findDuplicateSplitRefs` and shows the same "dup of #N" flag on archived bib entries as the live Bibs Mode screen (previously read-only display had no dup indication)
+- [x] Bib numbers capped at 1–999 (3 digits): `BibsModeViewModel.MAX_BIB_DIGITS` 4 → 3, edit-panel bib field capped to 3 digits, `NewBibsRaceDialog` validates first-bib-number and the resulting range end both fall within 1–999 before enabling Create
+- [x] Help screen added: `ui/help/HelpScreen.kt`, new `Routes.HELP`, opened via a "Help" button next to "Review past races" on the Mode Picker; covers an app overview (what the two-phone Time+Bibs workflow is for) plus Time Mode, Bibs Mode (starting a race, logging, duplicates, editing rows, stop/reset), external triggers, and general navigation
+
 ## Later phases (not started)
 
-- [ ] Mule mode: Classic Bluetooth (RFCOMM/SPP) transfer — pull data from Time/Bibs phones, hand off to HQ laptop
+- [ ] Mule mode: Must use BLE bluetooth transfer to allow for porting to iOS — pull data from Time/Bibs phones, hand off to HQ laptop
 - [ ] Server sync: push race data to existing backend when internet/mobile signal is available

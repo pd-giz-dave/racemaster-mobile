@@ -12,7 +12,7 @@ import mobile.racemaster.data.db.entity.RaceEntity
 
 @Database(
     entities = [RaceEntity::class, FinishSplitEntity::class, BibEntryEntity::class],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

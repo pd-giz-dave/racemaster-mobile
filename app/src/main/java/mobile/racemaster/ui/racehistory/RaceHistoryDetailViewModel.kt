@@ -9,6 +9,7 @@ import mobile.racemaster.data.db.entity.BibEntryType
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
+import mobile.racemaster.data.repository.findDuplicateSplitRefs
 import mobile.racemaster.di.appContainer
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -16,7 +17,14 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 
 data class ArchivedSplitUi(val id: Long, val splitNumber: Int, val elapsedMillis: Long, val label: String?)
-data class ArchivedBibEntryUi(val id: Long, val bibNumber: Int, val splitNumber: Int?, val type: BibEntryType)
+data class ArchivedBibEntryUi(
+    val id: Long,
+    val bibNumber: Int?,
+    val splitNumber: Int,
+    val type: BibEntryType,
+    val note: String?,
+    val dupSplitRefs: List<Int>,
+)
 
 data class RaceHistoryDetailUiState(
     val raceLabel: String = "",
@@ -37,6 +45,7 @@ class RaceHistoryDetailViewModel(
         bibsModeRepository.observeEntries(raceId),
     ) { race, splits, entries ->
         val startedAt = race?.timeModeStartedAtMillis
+        val dupRefs = findDuplicateSplitRefs(entries)
         RaceHistoryDetailUiState(
             raceLabel = race?.label.orEmpty(),
             splits = splits.map {
@@ -47,7 +56,9 @@ class RaceHistoryDetailViewModel(
                     label = it.label,
                 )
             },
-            bibEntries = entries.map { ArchivedBibEntryUi(it.id, it.bibNumber, it.splitNumber, it.type) },
+            bibEntries = entries.map {
+                ArchivedBibEntryUi(it.id, it.bibNumber, it.splitNumber, it.type, it.note, dupRefs[it.id].orEmpty())
+            },
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RaceHistoryDetailUiState())
 

@@ -3,6 +3,7 @@ package mobile.racemaster.ui.modepicker
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,12 +23,15 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.data.settings.AppMode
+import mobile.racemaster.ui.components.NewBibsRaceDialog
 import mobile.racemaster.ui.components.NewRaceDialog
+import mobile.racemaster.util.withClickSound
 
 @Composable
 fun ModePickerScreen(
     onModeSelected: (AppMode) -> Unit,
     onReviewPastRaces: () -> Unit,
+    onHelp: () -> Unit,
     viewModel: ModePickerViewModel = viewModel(factory = ModePickerViewModel.Factory),
 ) {
     val hasActiveRace by viewModel.hasActiveRace.collectAsStateWithLifecycle()
@@ -55,19 +59,34 @@ fun ModePickerScreen(
         ModeButton("Time Mode") { handleModeTap(AppMode.TIME) }
         ModeButton("Bibs Mode") { handleModeTap(AppMode.BIBS) }
         ModeButton("Mule Mode (coming soon)") { handleModeTap(AppMode.MULE) }
-        TextButton(onClick = onReviewPastRaces, modifier = Modifier.fillMaxWidth()) {
-            Text("Review past races")
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = withClickSound(onReviewPastRaces), modifier = Modifier.weight(1f)) {
+                Text("Review past races")
+            }
+            TextButton(onClick = withClickSound(onHelp), modifier = Modifier.weight(1f)) {
+                Text("Help")
+            }
         }
     }
 
     pendingMode?.let { mode ->
-        NewRaceDialog(
-            onConfirm = { name ->
-                viewModel.selectModeAndCreateRace(mode, name) { onModeSelected(mode) }
-                pendingMode = null
-            },
-            onDismiss = { pendingMode = null },
-        )
+        if (mode == AppMode.BIBS) {
+            NewBibsRaceDialog(
+                onConfirm = { name, start, count ->
+                    viewModel.selectModeAndCreateRace(mode, name, start, count) { onModeSelected(mode) }
+                    pendingMode = null
+                },
+                onDismiss = { pendingMode = null },
+            )
+        } else {
+            NewRaceDialog(
+                onConfirm = { name ->
+                    viewModel.selectModeAndCreateRace(mode, name) { onModeSelected(mode) }
+                    pendingMode = null
+                },
+                onDismiss = { pendingMode = null },
+            )
+        }
     }
 }
 
@@ -103,7 +122,7 @@ private fun ActiveRaceStatusCard(status: ActiveRaceStatus, modifier: Modifier = 
 @Composable
 private fun ModeButton(label: String, onClick: () -> Unit) {
     Button(
-        onClick = onClick,
+        onClick = withClickSound(onClick),
         modifier = Modifier
             .fillMaxWidth()
             .height(96.dp),

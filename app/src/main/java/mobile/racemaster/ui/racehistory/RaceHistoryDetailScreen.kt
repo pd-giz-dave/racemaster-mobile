@@ -22,7 +22,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.ui.timemode.formatElapsed
+import mobile.racemaster.util.withClickSound
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,7 +39,7 @@ fun RaceHistoryDetailScreen(
         topBar = {
             TopAppBar(
                 title = { Text(uiState.raceLabel) },
-                navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
+                navigationIcon = { TextButton(onClick = withClickSound(onBack)) { Text("Back") } },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },
@@ -71,15 +73,27 @@ fun RaceHistoryDetailScreen(
             if (uiState.bibEntries.isEmpty()) {
                 Text("No bib entries recorded", style = MaterialTheme.typography.bodyMedium)
             } else {
-                uiState.bibEntries.sortedBy { it.id }.forEach { entry ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("Bib #${entry.bibNumber}", style = MaterialTheme.typography.bodyLarge)
-                        Text(entry.splitNumber?.let { "#$it" } ?: "–", style = MaterialTheme.typography.bodyLarge)
-                        Text(entry.type.name, style = MaterialTheme.typography.bodyLarge)
+                uiState.bibEntries.sortedBy { it.splitNumber }.forEach { entry ->
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("#${entry.splitNumber}", style = MaterialTheme.typography.bodyLarge)
+                            Text(entry.bibNumber?.toString() ?: "–", style = MaterialTheme.typography.bodyLarge)
+                            Text(entry.type.displayName(), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                            if (!entry.note.isNullOrBlank()) {
+                                Text(entry.note, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        if (entry.dupSplitRefs.isNotEmpty()) {
+                            Text(
+                                "dup of ${entry.dupSplitRefs.joinToString(", ") { "#$it" }}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                     }
                 }
             }

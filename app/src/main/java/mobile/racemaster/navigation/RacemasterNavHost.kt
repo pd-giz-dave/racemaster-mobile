@@ -23,6 +23,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.bibsmode.BibsModeScreen
+import mobile.racemaster.ui.help.HelpScreen
 import mobile.racemaster.ui.modepicker.ModePickerScreen
 import mobile.racemaster.ui.mulemode.MuleModeScreen
 import mobile.racemaster.ui.racehistory.RaceHistoryDetailScreen
@@ -79,7 +80,11 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                             }
                         },
                         onReviewPastRaces = { navController.navigate(Routes.RACE_HISTORY) },
+                        onHelp = { navController.navigate(Routes.HELP) },
                     )
+                }
+                composable(Routes.HELP) {
+                    HelpScreen(onBack = { navController.popBackStack() })
                 }
                 composable(Routes.TIME_MODE) {
                     TimeModeScreen(onChangeMode = { navController.navigateToModePicker() })

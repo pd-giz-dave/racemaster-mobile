@@ -4,8 +4,10 @@ import androidx.room.withTransaction
 import mobile.racemaster.data.db.RacemasterDatabase
 import mobile.racemaster.data.db.dao.BibEntryDao
 import mobile.racemaster.data.db.dao.RaceDao
+import mobile.racemaster.data.db.entity.BIB_REQUIRED_TYPES
 import mobile.racemaster.data.db.entity.BibEntryEntity
 import mobile.racemaster.data.db.entity.BibEntryType
+import mobile.racemaster.data.db.entity.RaceEntity
 import kotlinx.coroutines.flow.Flow
 
 class BibsModeRepository(
@@ -15,37 +17,118 @@ class BibsModeRepository(
 ) {
     fun observeEntries(raceId: Long): Flow<List<BibEntryEntity>> = bibEntryDao.observeForRace(raceId)
 
+    // The only entry point for creating a Bibs race: atomically writes the race row (with its
+    // bib range) and the fixed Clock marker (split #0, doesn't consume the counter) so the two
+    // can never exist independently of each other, e.g. if the process dies mid-creation.
+    suspend fun createRaceWithClockMarker(
+        label: String,
+        bibsRangeStart: Int,
+        bibsRangeCount: Int,
+        createdAtMillis: Long = System.currentTimeMillis(),
+    ): Long = db.withTransaction {
+        val raceId = raceDao.insert(
+            RaceEntity(
+                label = label,
+                createdAtMillis = createdAtMillis,
+                bibsRangeStart = bibsRangeStart,
+                bibsRangeCount = bibsRangeCount,
+            ),
+        )
+        bibEntryDao.insert(
+            BibEntryEntity(
+                raceId = raceId,
+                bibNumber = null,
+                type = BibEntryType.CLOCK,
+                splitNumber = CLOCK_SPLIT_NUMBER,
+                note = null,
+                timestampMillis = createdAtMillis,
+            ),
+        )
+        raceId
+    }
+
     suspend fun recordEntry(
         raceId: Long,
-        bibNumber: Int,
         type: BibEntryType,
+        bibNumber: Int?,
+        note: String?,
         timestampMillis: Long = System.currentTimeMillis(),
     ) {
         db.withTransaction {
-            val splitNumber = if (type == BibEntryType.RETIRE) {
-                null
-            } else {
-                val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
-                raceDao.incrementBibsCounter(raceId)
-                race.bibsModeNextSplit
-            }
+            val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            val splitNumber = race.bibsModeNextSplit
+            raceDao.incrementBibsCounter(raceId)
             bibEntryDao.insert(
                 BibEntryEntity(
                     raceId = raceId,
-                    bibNumber = bibNumber,
+                    bibNumber = if (type in BIB_REQUIRED_TYPES) bibNumber else null,
                     type = type,
                     splitNumber = splitNumber,
+                    note = note,
                     timestampMillis = timestampMillis,
                 ),
             )
         }
     }
 
+    // splitNumber is assigned once at creation and is never touched here — it stays stable
+    // across edits, exactly like Time Mode's split-label editing never touches its number.
+    suspend fun updateEntry(id: Long, bibNumber: Int?, type: BibEntryType, note: String?) {
+        bibEntryDao.update(id, if (type in BIB_REQUIRED_TYPES) bibNumber else null, type, note)
+    }
+
     suspend fun deleteMostRecent(raceId: Long) {
         db.withTransaction {
             val latest = bibEntryDao.getLatest(raceId) ?: return@withTransaction
+            if (latest.type == BibEntryType.CLOCK) return@withTransaction
             bibEntryDao.delete(latest)
-            if (latest.splitNumber != null) raceDao.decrementBibsCounter(raceId)
+            if (latest.type == BibEntryType.STOP) {
+                raceDao.clearBibsModeStoppedAt(raceId)
+            }
+            raceDao.decrementBibsCounter(raceId)
         }
+    }
+
+    suspend fun stopBibsMode(raceId: Long, stoppedAtMillis: Long = System.currentTimeMillis()) {
+        db.withTransaction {
+            val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            val splitNumber = race.bibsModeNextSplit
+            raceDao.incrementBibsCounter(raceId)
+            raceDao.setBibsModeStoppedAt(raceId, stoppedAtMillis)
+            bibEntryDao.insert(
+                BibEntryEntity(
+                    raceId = raceId,
+                    bibNumber = null,
+                    type = BibEntryType.STOP,
+                    splitNumber = splitNumber,
+                    note = null,
+                    timestampMillis = stoppedAtMillis,
+                ),
+            )
+        }
+    }
+
+    // No separate "press Start to begin" screen exists for Bibs mode, so Reset must leave it
+    // immediately ready to log again — re-inserting Clock keeps that invariant true after a
+    // reset, same as it's kept true at creation.
+    suspend fun resetBibsMode(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()) {
+        db.withTransaction {
+            bibEntryDao.deleteAllForRace(raceId)
+            raceDao.resetBibsMode(raceId)
+            bibEntryDao.insert(
+                BibEntryEntity(
+                    raceId = raceId,
+                    bibNumber = null,
+                    type = BibEntryType.CLOCK,
+                    splitNumber = CLOCK_SPLIT_NUMBER,
+                    note = null,
+                    timestampMillis = resetAtMillis,
+                ),
+            )
+        }
+    }
+
+    companion object {
+        const val CLOCK_SPLIT_NUMBER = 0
     }
 }

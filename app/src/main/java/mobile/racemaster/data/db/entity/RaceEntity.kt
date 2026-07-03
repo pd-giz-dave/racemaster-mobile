@@ -12,4 +12,7 @@ data class RaceEntity(
     val bibsModeNextSplit: Int = 1,
     val timeModeStartedAtMillis: Long? = null,
     val timeModeStoppedAtMillis: Long? = null,
+    val bibsRangeStart: Int? = null,
+    val bibsRangeCount: Int? = null,
+    val bibsModeStoppedAtMillis: Long? = null,
 )

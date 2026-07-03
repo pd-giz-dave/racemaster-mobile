@@ -18,10 +18,12 @@ import androidx.compose.ui.text.TextStyle
 import mobile.racemaster.util.withClickSound
 
 @Composable
-fun UndoLastButton(
-    enabled: Boolean,
-    description: String,
-    onConfirm: () -> Unit,
+fun StopOrResetButton(
+    isStopped: Boolean,
+    stopDescription: String,
+    resetDescription: String,
+    onStop: () -> Unit,
+    onReset: () -> Unit,
     modifier: Modifier = Modifier,
     labelStyle: TextStyle = MaterialTheme.typography.labelLarge,
     contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
@@ -30,23 +32,22 @@ fun UndoLastButton(
 
     OutlinedButton(
         onClick = withClickSound { showConfirm = true },
-        enabled = enabled,
         contentPadding = contentPadding,
         modifier = modifier.fillMaxWidth(),
     ) {
-        Text("Undo last", style = labelStyle)
+        Text(if (isStopped) "RESET" else "STOP", style = labelStyle)
     }
 
     if (showConfirm) {
         AlertDialog(
             onDismissRequest = { showConfirm = false },
-            title = { Text("Undo last entry?") },
-            text = { Text(description) },
+            title = { Text(if (isStopped) "Reset?" else "Stop?") },
+            text = { Text(if (isStopped) resetDescription else stopDescription) },
             confirmButton = {
                 TextButton(onClick = withClickSound {
-                    onConfirm()
+                    if (isStopped) onReset() else onStop()
                     showConfirm = false
-                }) { Text("Undo") }
+                }) { Text(if (isStopped) "Reset" else "Stop") }
             },
             dismissButton = {
                 TextButton(onClick = withClickSound { showConfirm = false }) { Text("Cancel") }

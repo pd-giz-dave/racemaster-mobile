@@ -7,6 +7,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
+import mobile.racemaster.data.repository.hasRealEntries
 import mobile.racemaster.data.repository.isRaceInProgress
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
@@ -47,7 +48,12 @@ class AppEntryViewModel(
                     raceRepository.observeRace(raceId),
                     bibsModeRepository.observeEntries(raceId),
                 ) { race, bibEntries ->
-                    isRaceInProgress(race?.timeModeStartedAtMillis, race?.timeModeStoppedAtMillis, bibEntries.isNotEmpty())
+                    isRaceInProgress(
+                        race?.timeModeStartedAtMillis,
+                        race?.timeModeStoppedAtMillis,
+                        bibEntries.hasRealEntries(),
+                        race?.bibsModeStoppedAtMillis,
+                    )
                 }
             }
         }

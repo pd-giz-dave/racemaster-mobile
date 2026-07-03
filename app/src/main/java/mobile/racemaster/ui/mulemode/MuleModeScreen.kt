@@ -13,6 +13,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import mobile.racemaster.util.withClickSound
 
 // Placeholder for now. Future work (not built in this phase): Classic Bluetooth
 // (RFCOMM/SPP) transfer that pulls recorded data from the Time and Bibs mode
@@ -27,7 +28,7 @@ fun MuleModeScreen(onChangeMode: () -> Unit) {
             TopAppBar(
                 title = { Text("Mule Mode") },
                 actions = {
-                    TextButton(onClick = onChangeMode) { Text("Mode") }
+                    TextButton(onClick = withClickSound(onChangeMode)) { Text("Mode") }
                 },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )

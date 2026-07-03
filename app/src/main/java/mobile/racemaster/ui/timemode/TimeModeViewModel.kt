@@ -9,6 +9,7 @@ import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.repository.buildRaceLabel
+import mobile.racemaster.data.repository.hasRealEntries
 import mobile.racemaster.data.repository.isRaceInProgress
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
@@ -31,6 +32,7 @@ data class TimeModeUiState(
     val stopwatchStarted: Boolean = false,
     val stopwatchStopped: Boolean = false,
     val liveElapsedMillis: Long = 0L,
+    val nextSplitNumber: Int = 1,
     val splits: List<FinishSplitUi> = emptyList(),
     val canUndo: Boolean = false,
     val raceInProgress: Boolean = false,
@@ -71,6 +73,7 @@ class TimeModeViewModel(
                         stopwatchStarted = startedAt != null,
                         stopwatchStopped = stoppedAt != null,
                         liveElapsedMillis = liveElapsed,
+                        nextSplitNumber = race?.timeModeNextSplit ?: 1,
                         splits = splits.map {
                             FinishSplitUi(
                                 id = it.id,
@@ -80,7 +83,7 @@ class TimeModeViewModel(
                             )
                         },
                         canUndo = splits.isNotEmpty(),
-                        raceInProgress = isRaceInProgress(startedAt, stoppedAt, bibEntries.isNotEmpty()),
+                        raceInProgress = isRaceInProgress(startedAt, stoppedAt, bibEntries.hasRealEntries(), race?.bibsModeStoppedAtMillis),
                     )
                 }
             }

@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import mobile.racemaster.util.withClickSound
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -19,7 +20,7 @@ fun ModeScreenTopBar(
     title: String,
     raceLabel: String,
     newRaceEnabled: Boolean,
-    onNewRace: (name: String) -> Unit,
+    newRaceDialog: @Composable (onDismiss: () -> Unit) -> Unit,
     onChangeMode: () -> Unit,
 ) {
     var showNewRaceDialog by remember { mutableStateOf(false) }
@@ -34,19 +35,15 @@ fun ModeScreenTopBar(
             }
         },
         actions = {
-            TextButton(onClick = { showNewRaceDialog = true }, enabled = newRaceEnabled) { Text("New Race") }
-            TextButton(onClick = onChangeMode) { Text("Mode") }
+            TextButton(onClick = withClickSound { showNewRaceDialog = true }, enabled = newRaceEnabled) { Text("New Race") }
+            TextButton(onClick = withClickSound(onChangeMode)) { Text("Mode") }
         },
         windowInsets = WindowInsets(0, 0, 0, 0),
     )
 
+    // The top bar just owns whether the dialog is showing — it doesn't need to know what
+    // kind of dialog (plain name vs. Bibs' name+range fields) each mode uses.
     if (showNewRaceDialog) {
-        NewRaceDialog(
-            onConfirm = { name ->
-                onNewRace(name)
-                showNewRaceDialog = false
-            },
-            onDismiss = { showNewRaceDialog = false },
-        )
+        newRaceDialog { showNewRaceDialog = false }
     }
 }

@@ -20,8 +20,9 @@ import androidx.room.PrimaryKey
 data class BibEntryEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val raceId: Long,
-    val bibNumber: Int,
+    val bibNumber: Int?,
     val type: BibEntryType,
-    val splitNumber: Int?,
+    val splitNumber: Int,
+    val note: String? = null,
     val timestampMillis: Long,
 )

@@ -49,4 +49,13 @@ interface RaceDao {
             "timeModeStoppedAtMillis = NULL WHERE id = :raceId",
     )
     suspend fun resetTimeMode(raceId: Long)
+
+    @Query("UPDATE races SET bibsModeStoppedAtMillis = :stoppedAtMillis WHERE id = :raceId")
+    suspend fun setBibsModeStoppedAt(raceId: Long, stoppedAtMillis: Long)
+
+    @Query("UPDATE races SET bibsModeStoppedAtMillis = NULL WHERE id = :raceId")
+    suspend fun clearBibsModeStoppedAt(raceId: Long)
+
+    @Query("UPDATE races SET bibsModeNextSplit = 1, bibsModeStoppedAtMillis = NULL WHERE id = :raceId")
+    suspend fun resetBibsMode(raceId: Long)
 }

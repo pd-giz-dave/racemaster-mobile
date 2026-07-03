@@ -16,11 +16,11 @@ import mobile.racemaster.ui.theme.RacemasterMobileTheme
 
 class MainActivity : ComponentActivity() {
 
-    // Set by the screen that owns split-recording (Time mode) while it's the one showing,
-    // and only while the race is actually running. Lets any USB or Bluetooth HID device that
-    // presents itself as a keyboard — presenter clickers, camera shutter remotes, foot
-    // pedals — fire a split, since Android already delivers those as ordinary KeyEvents with
-    // no pairing/GATT code needed on our end.
+    // Set by whichever mode screen is currently showing (Time mode's split, Bibs mode's Log)
+    // while it's able to accept an entry. Lets any USB or Bluetooth HID device that presents
+    // itself as a keyboard — presenter clickers, camera shutter remotes, foot pedals, volume
+    // buttons — fire the current screen's main action, since Android already delivers those
+    // as ordinary KeyEvents with no pairing/GATT code needed on our end.
     var onExternalSplitTrigger: (() -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {

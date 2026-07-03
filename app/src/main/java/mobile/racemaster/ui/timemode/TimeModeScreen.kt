@@ -14,12 +14,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -41,7 +39,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.MainActivity
 import mobile.racemaster.ui.components.ModeScreenTopBar
+import mobile.racemaster.ui.components.NewRaceDialog
+import mobile.racemaster.ui.components.StopOrResetButton
 import mobile.racemaster.ui.components.UndoLastButton
+import mobile.racemaster.util.withClickSound
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -68,7 +69,15 @@ fun TimeModeScreen(
                 title = "Time Mode",
                 raceLabel = uiState.raceLabel,
                 newRaceEnabled = !uiState.raceInProgress,
-                onNewRace = viewModel::startNewRace,
+                newRaceDialog = { onDismiss ->
+                    NewRaceDialog(
+                        onConfirm = { name ->
+                            viewModel.startNewRace(name)
+                            onDismiss()
+                        },
+                        onDismiss = onDismiss,
+                    )
+                },
                 onChangeMode = onChangeMode,
             )
         },
@@ -124,6 +133,10 @@ private fun TimeModeContent(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
+                text = "Next: #${uiState.nextSplitNumber}",
+                style = MaterialTheme.typography.labelMedium,
+            )
+            Text(
                 text = if (uiState.stopwatchStarted) formatElapsed(uiState.liveElapsedMillis) else "",
                 style = MaterialTheme.typography.displayMedium,
                 modifier = Modifier.fillMaxWidth(),
@@ -135,7 +148,7 @@ private fun TimeModeContent(
             // must both register as splits; any gesture-disambiguation delay would risk
             // swallowing or merging the second one.
             Button(
-                onClick = if (uiState.stopwatchStarted) onSplit else onStart,
+                onClick = withClickSound(if (uiState.stopwatchStarted) onSplit else onStart),
                 enabled = !uiState.stopwatchStopped,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -156,6 +169,8 @@ private fun TimeModeContent(
                 ) {
                     StopOrResetButton(
                         isStopped = uiState.stopwatchStopped,
+                        stopDescription = "The clock will stop and no more splits can be recorded. The clock will resume (with no loss of time) if you undo the Stop split line.",
+                        resetDescription = "This clears every split and resets ready to start again from scratch (under the same race name).",
                         onStop = onStop,
                         onReset = onReset,
                         modifier = Modifier.weight(1f),
@@ -233,8 +248,8 @@ private fun EditSplitLabelPanel(
                 label = { Text("Label") },
                 modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = { onSave(text) }) { Text("Save") }
-            TextButton(onClick = onCancel) { Text("Cancel") }
+            TextButton(onClick = withClickSound { onSave(text) }) { Text("Save") }
+            TextButton(onClick = withClickSound(onCancel)) { Text("Cancel") }
         }
     }
 }
@@ -244,7 +259,7 @@ private fun SplitRow(split: FinishSplitUi, onStartEdit: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onStartEdit)
+            .clickable(onClick = withClickSound(onStartEdit))
             .padding(vertical = 8.dp),
     ) {
         Text(
@@ -254,47 +269,5 @@ private fun SplitRow(split: FinishSplitUi, onStartEdit: () -> Unit) {
         if (!split.label.isNullOrBlank()) {
             Text(split.label, style = MaterialTheme.typography.bodyMedium)
         }
-    }
-}
-
-@Composable
-private fun StopOrResetButton(
-    isStopped: Boolean,
-    onStop: () -> Unit,
-    onReset: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var showConfirm by remember { mutableStateOf(false) }
-
-    OutlinedButton(
-        onClick = { showConfirm = true },
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Text(if (isStopped) "RESET" else "STOP")
-    }
-
-    if (showConfirm) {
-        AlertDialog(
-            onDismissRequest = { showConfirm = false },
-            title = { Text(if (isStopped) "Reset?" else "Stop?") },
-            text = {
-                Text(
-                    if (isStopped) {
-                        "This clears every split and resets ready to start again from scratch (under the same race name)."
-                    } else {
-                        "The clock will stop and no more splits can be recorded. The clock will resume (with no loss of time) if you undo the Stop split line."
-                    },
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (isStopped) onReset() else onStop()
-                    showConfirm = false
-                }) { Text(if (isStopped) "Reset" else "Stop") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showConfirm = false }) { Text("Cancel") }
-            },
-        )
     }
 }
