@@ -1,0 +1,84 @@
+# Racemaster Mobile — Implementation TODO
+
+Tracks progress against `/home/dave/.claude/plans/sunny-weaving-planet.md`.
+
+## Phase 1 — Data layer, Time mode, Bibs mode
+
+- [x] Gradle: add Room, KSP, Navigation Compose, DataStore Preferences, coroutines, bumped lifecycle to version catalog + build files
+- [x] Data layer: `RaceEntity`, `FinishSplitEntity`, `BibEntryEntity`/`BibEntryType`, `Converters`, DAOs, `RacemasterDatabase`
+- [x] Repositories: `TimeModeRepository`, `BibsModeRepository`, `RaceRepository` (transactional counters), `SettingsRepository` (DataStore: `AppMode`, active race id)
+- [x] Manual DI: `AppContainer`/`DefaultAppContainer`, `RacemasterApplication`, registered in `AndroidManifest.xml`
+- [x] Navigation: `Routes`, `RacemasterNavHost` (mode-persistence-driven start destination), `ModePickerScreen`
+- [x] Time mode: `TimeModeViewModel` + `TimeModeScreen` (big FINISH button, undo-last with confirm dialog, newest-first list, auto-scrolls to show new entries)
+- [x] Bibs mode: `BibsModeViewModel` + `BibsModeScreen` (`DigitKeypad`, `UndoLastButton`, Start/Finish/Retire submit buttons, newest-first list, auto-scrolls to show new entries)
+- [x] Mule mode: placeholder `MuleModeScreen` ("coming soon"), wired into nav/mode picker
+- [x] Tests: `TimeModeRepositoryTest`, `BibsModeRepositoryTest`, `SettingsRepositoryTest` (in-memory Room DB, androidTest) — 9/9 passing
+- [x] Build verification: `./gradlew assembleDebug` succeeds
+- [x] Test verification: `./gradlew connectedDebugAndroidTest` passes (verified on a local AVD)
+- [x] Manual smoke test: Time mode finish/undo, Bibs mode Start/Finish/Retire/undo sequencing, mode switching, New Race — all verified on-device
+
+## Phase 1.1 — Stopwatch semantics, race naming, Stop, race history
+
+- [x] Time mode reworked as a real stopwatch: Start screen before the clock begins, live-updating elapsed display, splits recorded relative to start (not wall-clock), FINISH renamed to SPLIT
+- [x] Stop capability: `timeModeStoppedAtMillis` on `RaceEntity`, freezes the display, disables SPLIT and relabels it STOPPED, screen stays for review
+- [x] Race naming: `NewRaceDialog` (text field) used everywhere a race is created (first mode pick and every "New Race" action); stored label is `{name}-{yy-MM-dd}`
+- [x] Review Past Races: new picker action → `RaceHistoryScreen` (list of races) → `RaceHistoryDetailScreen` (read-only Time splits + Bib entries for that race)
+- [x] Room schema bumped to v3 (`timeModeStartedAtMillis`, `timeModeStoppedAtMillis`) with `fallbackToDestructiveMigration` — fine pre-release, no real user data at stake
+- [x] Tests: 9/9 still passing; manually verified naming dialog, live stopwatch, Stop freeze/disable, and race history on-device
+
+## Phase 1.2 — Start/Stop marker splits and per-row label editing
+
+- [x] `startStopwatch()` inserts a fixed split `#0` labeled "Start" (elapsed 0, doesn't consume the counter)
+- [x] `stopStopwatch()` inserts a final split labeled "Stop" (consumes the next counter number, matches the frozen elapsed time)
+- [x] Undoing the Stop marker resumes the race (clears `timeModeStoppedAtMillis`); undoing the Start marker (only reachable once every real split is undone) returns to the Start screen
+- [x] Inline, non-modal label editing on any split row (tap row → in-row text field + Save/Cancel) — verified SPLIT stays usable while a label is being edited
+- [x] Room schema bumped to v4 (`FinishSplitEntity.label`), Race History detail screen shows labels too
+- [x] Editor pinned above the list (not inline in the row): shows "Editing #N <time>" so the original line stays visible, and new splits recorded mid-edit appear underneath as usual instead of disturbing the row being edited
+- [x] Tests: 14/14 passing (5 new repository tests for Start/Stop marker + undo semantics); manually verified live on-device
+
+## Phase 1.3 — Always-visible app banner
+
+- [x] `AppBanner` composable: solid brand green (`#1A6E3C`, matched to the `/home/dave/racemaster` web app's `--accent`), white icon + "RaceMaster Mobile" wordmark, ~48dp tall, extends behind the status bar
+- [x] Icon reused directly from the web app (`icon-192.png` — runner ascending a hill), copied into `res/drawable-nodpi/ic_racemaster_banner.png`
+- [x] Wired as the outer `Scaffold`'s `topBar` in `MainActivity`, so it's always visible above every screen (Mode Picker, Time/Bibs/Mule mode, Race History) rather than per-screen
+- [x] Removed `ModePickerScreen`'s now-redundant "Racemaster Mobile" title bar (the app banner covers that); per-screen bars (race name, New Race/Mode, Back) still render below it for context
+- [x] Tests: 14/14 still passing; verified live on-device across Mode Picker and Time Mode — banner stays put, no double status-bar padding or color mismatch
+
+## Phase 1.4 — Layout fixes, unified stopwatch screen, RESET, launcher icon
+
+- [x] Fixed double status-bar padding: every per-screen `TopAppBar` (Time/Bibs mode, Mule mode, Race History screens) now passes `windowInsets = WindowInsets(0,0,0,0)` since the persistent `AppBanner` already reserves that space
+- [x] Keyboard no longer covers the split label editor: `imePadding()` on the screen content plus a scrollable header that auto-scrolls the editor into view when it opens
+- [x] SPLIT button shrunk (160dp → 96dp); Stop Race + Undo Last merged into one row
+- [x] Dropped the separate Start screen — Time mode is now one unified layout: blank clock + "START" button before starting, ticker + "SPLIT" once running, exactly like before otherwise
+- [x] STOP → RESET: pressing Stop now keeps the secondary button enabled and relabels it "RESET" (was hidden before); pressing Reset wipes all splits for the race and returns to the pristine pre-start state, confirmed via dialog (`TimeModeRepository.resetStopwatch`, new `FinishSplitDao.deleteAllForRace` + `RaceDao.resetTimeMode` queries)
+- [x] Custom launcher icon: generated adaptive icon (foreground PNG + monochrome silhouette + solid brand-green background) and legacy mipmap icons (square + round, all densities) from the web app's `icon-512.png`, replacing the default Android Studio template icon
+- [x] Tests: 15/15 passing (added `resetStopwatchClearsSplitsAndClockState`); manually verified full Start→Split→Stop→Reset flow and the new launcher icon on-device
+
+## Phase 1.5 — Guard against orphaning an in-progress race
+
+- [x] `isRaceInProgress()` helper: a race is "in progress" if Time mode's stopwatch is started-but-not-stopped, or Bibs mode has any recorded entries (Bibs has no stop signal of its own)
+- [x] "New Race" is now disabled (greyed out, not just hidden) on both Time Mode and Bibs Mode while their shared active race is in progress, so it can't be orphaned from either screen
+- [x] Removed the confirm dialog on "Mode" — tapping it now switches back to the Mode Picker immediately
+- [x] Mode Picker shows an in-progress race's status when relevant: race name, split/bib counts recorded, and "You can continue by going back to `<mode>`." (the mode the operator came from)
+- [x] Tests: 15/15 passing; manually verified New Race greyed out mid-race, instant mode switch, and the picker's in-progress summary card on-device
+
+## Phase 1.6 — Keep screen awake, block exit mid-race
+
+- [x] `MainActivity` sets `FLAG_KEEP_SCREEN_ON` on the window at `onCreate`, so the screen never sleeps while the app is in the foreground, on any screen
+- [x] `AppEntryViewModel.raceInProgress`: app-wide version of `isRaceInProgress`, observing the active race regardless of which screen is showing
+- [x] `RacemasterNavHost` registers a `BackHandler(enabled = raceInProgress)` ahead of the `NavHost` (so in-app back navigation, e.g. Race History detail → list, is untouched) that swallows the back press and shows a toast once there's nothing left for the NavHost to pop — exactly the case that would otherwise exit the app
+- [x] Tests: 15/15 passing; manually verified back press is blocked (with toast) while the stopwatch is running, and exits normally once Stop is pressed
+
+## Phase 1.7 — Lock task mode, external trigger, audible beep
+
+- [x] Verified no double-tap/long-press gesture disambiguation exists anywhere near the SPLIT button (grepped for `combinedClickable`/`onLongClick`/`detectTapGestures`/debounce — none found); plain `Button.onClick` plus the already-transactional `recordSplit()` means two fast taps always produce two distinct splits, confirmed live (two `adb input tap`s ~30ms apart → splits #3/#4, each its own timestamp)
+- [x] Home/Overview blocked while a race is in progress: `RacemasterNavHost` calls `Activity.startLockTask()`/`stopLockTask()` off the same `raceInProgress` signal used for the back-press guard (Android's built-in Screen Pinning — no device-owner/MDM enrollment needed); verified via `adb shell input keyevent KEYCODE_HOME`/`KEYCODE_APP_SWITCH` that focus stays on `MainActivity` while pinned, and returns to normal once Stop is pressed
+- [x] Race data already persists with the app not running — confirmed `DefaultAppContainer` uses `Room.databaseBuilder(context, ..., "racemaster.db")` (disk-backed, not in-memory), so splits/bibs survive app restarts, backgrounding, and reboots with no code change needed
+- [x] External trigger support: `MainActivity.onExternalSplitTrigger` + a `dispatchKeyEvent` override recognize a curated set of common HID keycodes (Enter, Space, Page Up/Down, DPad Center, Volume Up/Down); `TimeModeScreen` registers itself as the target while shown, only firing while the race is actually running. This means any USB (via OTG) or Bluetooth clicker/pedal that enumerates as a HID keyboard — presenter remotes, camera shutter remotes, foot switches — works immediately with no pairing code of our own; confirmed live via `adb shell input keyevent KEYCODE_ENTER` recording a real split
+- [x] Audible beep: `util/Beeper.kt` generates a real 150ms 1kHz sine tone (rapid rise/solid sustain/rapid fall via a 3ms fade, no asset file needed) via `AudioTrack`, played on `AudioAttributes.USAGE_ALARM` and forced to max `STREAM_ALARM` volume every time — exempt from silent/vibrate mode and media-volume limits, and audible over outdoor wind/crowd noise; 1kHz keeps it below where age-related hearing loss usually bites first. Wired into `TimeModeViewModel.recordSplit()` and `BibsModeViewModel.submit()`, released in each ViewModel's `onCleared()`. Went through a few iterations live with the user: `ToneGenerator.TONE_PROP_BEEP` turned out to be a fixed-envelope click that ignores requested duration; `TONE_DTMF_1` is a true continuous tone but is two simultaneous frequencies (that's what DTMF is) and sounded doubled/warbly — a hand-generated single-frequency `AudioTrack` buffer was the fix
+- [x] Tests: 15/15 passing
+
+## Later phases (not started)
+
+- [ ] Mule mode: Classic Bluetooth (RFCOMM/SPP) transfer — pull data from Time/Bibs phones, hand off to HQ laptop
+- [ ] Server sync: push race data to existing backend when internet/mobile signal is available
