@@ -14,6 +14,22 @@ class TimeModeRepository(
 ) {
     fun observeSplits(raceId: Long): Flow<List<FinishSplitEntity>> = finishSplitDao.observeForRace(raceId)
 
+    fun observeUnsyncedCount(raceId: Long): Flow<Int> = finishSplitDao.observeUnsyncedCountForRace(raceId)
+
+    fun observeLastSyncedAtMillis(raceId: Long): Flow<Long?> = finishSplitDao.observeLastSyncedAtMillis(raceId)
+
+    // One-shot snapshot for Mule's BLE pull, not a live subscription.
+    suspend fun getUnsyncedSplits(raceId: Long): List<FinishSplitEntity> = finishSplitDao.getUnsyncedForRace(raceId)
+
+    // Every split for the race regardless of sync state — used to resend the full set to the
+    // server rather than just the delta.
+    suspend fun getAllSplits(raceId: Long): List<FinishSplitEntity> = finishSplitDao.getAllForRace(raceId)
+
+    suspend fun markSplitsSyncedByUuid(recordUuids: List<String>, syncedAtMillis: Long = System.currentTimeMillis()) {
+        if (recordUuids.isEmpty()) return
+        finishSplitDao.markSynced(recordUuids, syncedAtMillis)
+    }
+
     // The start marker is a fixed split #0 outside the normal 1,2,3... sequence, so it
     // doesn't consume the counter.
     suspend fun startStopwatch(raceId: Long, startedAtMillis: Long = System.currentTimeMillis()) {
@@ -24,7 +40,7 @@ class TimeModeRepository(
                     raceId = raceId,
                     splitNumber = START_SPLIT_NUMBER,
                     timestampMillis = startedAtMillis,
-                    label = START_LABEL,
+                    note = START_LABEL,
                 ),
             )
         }
@@ -43,7 +59,7 @@ class TimeModeRepository(
                     raceId = raceId,
                     splitNumber = splitNumber,
                     timestampMillis = stoppedAtMillis,
-                    label = STOP_LABEL,
+                    note = STOP_LABEL,
                 ),
             )
         }
@@ -60,8 +76,8 @@ class TimeModeRepository(
         }
     }
 
-    suspend fun updateLabel(splitId: Long, label: String?) {
-        finishSplitDao.updateLabel(splitId, label?.trim()?.ifBlank { null })
+    suspend fun updateNote(splitId: Long, note: String?) {
+        finishSplitDao.updateNote(splitId, note?.trim()?.ifBlank { null })
     }
 
     // Wipes every split (including the Start/Stop markers) and the counter/clock state for
@@ -80,7 +96,7 @@ class TimeModeRepository(
         db.withTransaction {
             val latest = finishSplitDao.getLatest(raceId) ?: return@withTransaction
             finishSplitDao.delete(latest)
-            when (latest.label) {
+            when (latest.note) {
                 START_LABEL -> raceDao.clearTimeModeStartedAt(raceId)
                 STOP_LABEL -> {
                     raceDao.clearTimeModeStoppedAt(raceId)

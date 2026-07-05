@@ -50,6 +50,7 @@ import mobile.racemaster.ui.components.DigitKeypad
 import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.NewBibsRaceDialog
 import mobile.racemaster.ui.components.StopOrResetButton
+import mobile.racemaster.ui.components.SyncStatusLine
 import mobile.racemaster.ui.components.UndoLastButton
 import mobile.racemaster.util.withClickSound
 
@@ -175,6 +176,7 @@ private fun BibsModeContent(
                     )
                 }
             }
+            SyncStatusLine(uiState.unsyncedCount, uiState.lastSyncedAtMillis)
             Text(
                 text = if (uiState.pendingEventType in BIB_REQUIRED_TYPES) {
                     uiState.currentDigits.ifEmpty { "Enter bib" }
@@ -406,6 +408,13 @@ private fun BibEntryRow(entry: BibEntryUi, onClick: () -> Unit) {
                 "dup of ${entry.dupSplitRefs.joinToString(", ") { "#$it" }}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
+            )
+        }
+        if (!entry.synced) {
+            Text(
+                "● unsynced",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
             )
         }
     }

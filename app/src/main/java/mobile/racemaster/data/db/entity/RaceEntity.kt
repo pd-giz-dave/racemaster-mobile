@@ -15,4 +15,7 @@ data class RaceEntity(
     val bibsRangeStart: Int? = null,
     val bibsRangeCount: Int? = null,
     val bibsModeStoppedAtMillis: Long? = null,
+    // Which AppMode (TIME/BIBS/MULE) created this race — carried metadata for the sync
+    // payload, not used for any local query logic.
+    val deviceRole: String? = null,
 )

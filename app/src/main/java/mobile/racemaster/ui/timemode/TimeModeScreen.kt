@@ -41,6 +41,7 @@ import mobile.racemaster.MainActivity
 import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.NewRaceDialog
 import mobile.racemaster.ui.components.StopOrResetButton
+import mobile.racemaster.ui.components.SyncStatusLine
 import mobile.racemaster.ui.components.UndoLastButton
 import mobile.racemaster.util.withClickSound
 
@@ -89,7 +90,7 @@ fun TimeModeScreen(
             onStop = viewModel::stopStopwatch,
             onReset = viewModel::resetStopwatch,
             onUndo = viewModel::undoLast,
-            onUpdateLabel = viewModel::updateSplitLabel,
+            onUpdateNote = viewModel::updateNote,
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
@@ -107,7 +108,7 @@ private fun TimeModeContent(
     onStop: () -> Unit,
     onReset: () -> Unit,
     onUndo: () -> Unit,
-    onUpdateLabel: (Long, String) -> Unit,
+    onUpdateNote: (Long, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -120,7 +121,7 @@ private fun TimeModeContent(
         val editingSplit = uiState.splits.firstOrNull { it.id == editingSplitId }
 
         // This header (ticker/main button/Stop-Reset/Undo/editor) is itself scrollable so
-        // that on a short screen with the keyboard up, it can scroll to keep the label
+        // that on a short screen with the keyboard up, it can scroll to keep the note
         // editor fully visible above the keyboard instead of being clipped — while the main
         // button stays reachable by scrolling back up.
         val headerScrollState = rememberScrollState()
@@ -136,6 +137,7 @@ private fun TimeModeContent(
                 text = "Next: #${uiState.nextSplitNumber}",
                 style = MaterialTheme.typography.labelMedium,
             )
+            SyncStatusLine(uiState.unsyncedCount, uiState.lastSyncedAtMillis)
             Text(
                 text = if (uiState.stopwatchStarted) formatElapsed(uiState.liveElapsedMillis) else "",
                 style = MaterialTheme.typography.displayMedium,
@@ -178,8 +180,8 @@ private fun TimeModeContent(
                     UndoLastButton(
                         enabled = uiState.canUndo,
                         description = uiState.splits.firstOrNull()?.let {
-                            val labelSuffix = it.label?.let { label -> " · $label" }.orEmpty()
-                            "Remove split #${it.splitNumber}$labelSuffix (${formatElapsed(it.elapsedMillis)})"
+                            val noteSuffix = it.note?.let { note -> " · $note" }.orEmpty()
+                            "Remove split #${it.splitNumber}$noteSuffix (${formatElapsed(it.elapsedMillis)})"
                         }.orEmpty(),
                         onConfirm = onUndo,
                         modifier = Modifier.weight(1f),
@@ -188,10 +190,10 @@ private fun TimeModeContent(
 
                 if (editingSplit != null) {
                     HorizontalDivider()
-                    EditSplitLabelPanel(
+                    EditSplitNotePanel(
                         split = editingSplit,
-                        onSave = { label ->
-                            onUpdateLabel(editingSplit.id, label)
+                        onSave = { note ->
+                            onUpdateNote(editingSplit.id, note)
                             editingSplitId = null
                         },
                         onCancel = { editingSplitId = null },
@@ -221,12 +223,12 @@ private fun TimeModeContent(
 }
 
 @Composable
-private fun EditSplitLabelPanel(
+private fun EditSplitNotePanel(
     split: FinishSplitUi,
     onSave: (String) -> Unit,
     onCancel: () -> Unit,
 ) {
-    var text by remember(split.id) { mutableStateOf(split.label.orEmpty()) }
+    var text by remember(split.id) { mutableStateOf(split.note.orEmpty()) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -245,7 +247,7 @@ private fun EditSplitLabelPanel(
                 value = text,
                 onValueChange = { text = it },
                 singleLine = true,
-                label = { Text("Label") },
+                label = { Text("Note") },
                 modifier = Modifier.weight(1f),
             )
             TextButton(onClick = withClickSound { onSave(text) }) { Text("Save") }
@@ -266,8 +268,15 @@ private fun SplitRow(split: FinishSplitUi, onStartEdit: () -> Unit) {
             "#${split.splitNumber}  ${formatElapsed(split.elapsedMillis)}",
             style = MaterialTheme.typography.titleMedium,
         )
-        if (!split.label.isNullOrBlank()) {
-            Text(split.label, style = MaterialTheme.typography.bodyMedium)
+        if (!split.note.isNullOrBlank()) {
+            Text(split.note, style = MaterialTheme.typography.bodyMedium)
+        }
+        if (!split.synced) {
+            Text(
+                "● unsynced",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
         }
     }
 }

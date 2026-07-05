@@ -109,7 +109,72 @@ Tracks progress against `/home/dave/.claude/plans/sunny-weaving-planet.md`.
 - [x] Bib numbers capped at 1–999 (3 digits): `BibsModeViewModel.MAX_BIB_DIGITS` 4 → 3, edit-panel bib field capped to 3 digits, `NewBibsRaceDialog` validates first-bib-number and the resulting range end both fall within 1–999 before enabling Create
 - [x] Help screen added: `ui/help/HelpScreen.kt`, new `Routes.HELP`, opened via a "Help" button next to "Review past races" on the Mode Picker; covers an app overview (what the two-phone Time+Bibs workflow is for) plus Time Mode, Bibs Mode (starting a race, logging, duplicates, editing rows, stop/reset), external triggers, and general navigation
 
+## Phase 3 — Mule Mode Phase 1: BLE pickup from Time/Bibs phones + internet sync
+
+Tracks progress against `/home/dave/.claude/plans/eager-coalescing-quilt.md`. Deliberately
+scoped to Mule ↔ Time/Bibs over BLE + Mule → racemaster server over HTTP; mule-to-mule
+"chain home" relay and a BLE SYNC receiver are follow-up work (see "Later phases" below).
+
+- [x] Terminology rationalization: Time Mode's `FinishSplitEntity.label` renamed to `note`
+  throughout (`TimeModeRepository.updateNote`, `TimeModeViewModel`, `TimeModeScreen`'s
+  editor field, `RaceHistoryDetailViewModel`/`Screen`) to match Bibs Mode's existing `note`
+  field, since both are carried over the same sync wire format
+- [x] Data model: `FinishSplitEntity`/`BibEntryEntity` gain a `recordUuid` (stable
+  cross-device identifier — local Room autoincrement ids collide once records from
+  multiple phones are merged) and `syncedAtMillis`; `RaceEntity` gains `deviceRole`
+  (`"TIME"`/`"BIBS"`/`"MULE"`, threaded through every race-creation call site); a
+  `deviceId` UUID persisted once per phone via `SettingsRepository`; Room bumped to v6
+- [x] New dependencies: **Kable 0.42.0** for BLE central (pinned below the latest 0.43.1,
+  which requires Kotlin 2.4.0 and broke compilation against this project's Kotlin 2.2.10),
+  **Ktor 3.4.3** client + **kotlinx.serialization 1.11.0** for HTTP/JSON (Ktor 3.5.x pulled
+  the same newer-stdlib conflict, so pinned to the last compatible release)
+- [x] `data/mule/` package: `MuleGattProfile` (custom GATT service + 4 characteristics —
+  device-info read, control write, chunked-notify data stream terminated by a single
+  zero-byte marker, ack write), `SyncRecordMapping` (maps `FinishSplitEntity`/`BibEntryEntity`
+  into the wire/server record shape, elapsed-time-relative-to-race-start formatted
+  `HH:MM:SS` to match the racemaster server's existing finisher convention),
+  `PeripheralSyncService` (foreground service every mode runs — GATT server + BLE
+  advertising, answers a pull request by streaming this device's own unsynced
+  splits/entries), `MulePullClient` (Kable-based central: scan/connect/pull/ack),
+  `MuleSyncClient` (Ktor: login/list-datasets/push), `MuleRepository` (orchestrates
+  pull→local inbox→push, exposes unsynced-count/last-synced status Flows),
+  `PulledRecordEntity`/`PulledRecordDao` (Mule's local inbox, dedup-by-`recordUuid` via a
+  unique index + `OnConflictStrategy.IGNORE`)
+- [x] Server (`/home/dave/racemaster/server.js`): new `POST /api/data/:owner/:fullName/finishers`
+  — additive-only (not the whole-blob `PUT`, which would risk clobbering concurrent web-UI
+  edits), idempotent by `recordUuid`, same bearer-token auth as every other route; carries
+  the `note` field through even though the existing web UI doesn't display it yet
+- [x] UI: shared `SyncStatusLine` ("N unsynced · last synced HH:MM") wired into Time, Bibs,
+  and Mule mode; Mule Mode screen now real — nearby-device discovery list with per-device
+  pull, login form, dataset picker, push action
+- [x] Runtime Bluetooth permission request flow in `MainActivity` (none existed anywhere in
+  the app before this), gates `PeripheralSyncService` startup on API 31+ scan/connect/advertise
+  grants (and legacy `ACCESS_FINE_LOCATION` pre-31)
+- [x] Tests: `SyncRecordMappingTest` (JVM, entity→wire mapping + elapsed-time formatting),
+  `PulledRecordDaoTest` (androidTest, dedup-on-insert + unsynced-count + mark-synced)
+- [x] Verification: full unit test suite passing; live on an emulator confirmed the GATT
+  server registers with the exact expected service/characteristic UUIDs and starts
+  advertising with zero errors (via logcat), the foreground service runs without crashing,
+  Room's v6 migration is correct (confirmed via direct `sqlite3` inspection over `run-as`),
+  and the sync status line correctly reflects live database state while creating a race and
+  logging entries through the real UI. **Not verified**: actual BLE communication between
+  two devices, and the end-to-end pull→push flow — attempted a two-emulator cross-instance
+  BLE test (recent Android Emulator versions support this) but the second instance wouldn't
+  finish booting in this environment after ~25 minutes, likely resource contention; cleaned
+  up all emulator/test-server processes afterward. **A real two-phone field test (one Bibs
+  Mode, one Mule Mode, log some entries, pull, log in, push) should be done before relying
+  on this for a real event.**
+
 ## Later phases (not started)
 
-- [ ] Mule mode: Must use BLE bluetooth transfer to allow for porting to iOS — pull data from Time/Bibs phones, hand off to HQ laptop
-- [ ] Server sync: push race data to existing backend when internet/mobile signal is available
+- [ ] Mule-to-mule "chain home" relay: multi-hop store-and-forward between mule devices
+  (stable dedup, loop prevention) so mules can pass data to each other, not just pull from
+  Time/Bibs phones and push to the internet
+- [ ] BLE SYNC receiver: either a Web-Bluetooth page in the racemaster web app (Chrome/Edge
+  only — browsers can't act as a BLE peripheral, so the phone would have to be the
+  peripheral and the browser the central, with an unavoidable manual "Connect" click) or a
+  separate small receiver app writing a file for later import (racemaster's own `ToDo.MD`
+  already lists CSV import as planned separately, so this could piggyback on that)
+- [ ] Add CP mode (checkpoint) like BIBS mode but has a CP name, also logs time as well as bib 
+  (2-in-1), time not so critical at CP but useful for runners to compare, also needs a 
+  Racemaster tweak to show CP times in results

@@ -25,7 +25,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-data class FinishSplitUi(val id: Long, val splitNumber: Int, val elapsedMillis: Long, val label: String?)
+data class FinishSplitUi(val id: Long, val splitNumber: Int, val elapsedMillis: Long, val note: String?, val synced: Boolean)
 
 data class TimeModeUiState(
     val raceLabel: String = "",
@@ -36,6 +36,8 @@ data class TimeModeUiState(
     val splits: List<FinishSplitUi> = emptyList(),
     val canUndo: Boolean = false,
     val raceInProgress: Boolean = false,
+    val unsyncedCount: Int = 0,
+    val lastSyncedAtMillis: Long? = null,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -55,12 +57,18 @@ class TimeModeViewModel(
             if (raceId == null) {
                 flowOf(TimeModeUiState())
             } else {
+                val muleStatusFlow = combine(
+                    timeModeRepository.observeUnsyncedCount(raceId),
+                    timeModeRepository.observeLastSyncedAtMillis(raceId),
+                ) { unsyncedCount, lastSyncedAtMillis -> unsyncedCount to lastSyncedAtMillis }
+
                 combine(
                     raceRepository.observeRace(raceId),
                     timeModeRepository.observeSplits(raceId),
                     bibsModeRepository.observeEntries(raceId),
                     tickerFlow,
-                ) { race, splits, bibEntries, now ->
+                    muleStatusFlow,
+                ) { race, splits, bibEntries, now, (unsyncedCount, lastSyncedAtMillis) ->
                     val startedAt = race?.timeModeStartedAtMillis
                     val stoppedAt = race?.timeModeStoppedAtMillis
                     val liveElapsed = when {
@@ -79,11 +87,14 @@ class TimeModeViewModel(
                                 id = it.id,
                                 splitNumber = it.splitNumber,
                                 elapsedMillis = startedAt?.let { s -> it.timestampMillis - s } ?: 0L,
-                                label = it.label,
+                                note = it.note,
+                                synced = it.syncedAtMillis != null,
                             )
                         },
                         canUndo = splits.isNotEmpty(),
                         raceInProgress = isRaceInProgress(startedAt, stoppedAt, bibEntries.hasRealEntries(), race?.bibsModeStoppedAtMillis),
+                        unsyncedCount = unsyncedCount,
+                        lastSyncedAtMillis = lastSyncedAtMillis,
                     )
                 }
             }
@@ -120,14 +131,14 @@ class TimeModeViewModel(
         viewModelScope.launch { timeModeRepository.deleteMostRecent(raceId) }
     }
 
-    fun updateSplitLabel(splitId: Long, label: String) {
-        viewModelScope.launch { timeModeRepository.updateLabel(splitId, label) }
+    fun updateNote(splitId: Long, note: String) {
+        viewModelScope.launch { timeModeRepository.updateNote(splitId, note) }
     }
 
     fun startNewRace(name: String) {
         if (uiState.value.raceInProgress) return
         viewModelScope.launch {
-            val newRaceId = raceRepository.startNewRace(buildRaceLabel(name))
+            val newRaceId = raceRepository.startNewRace(buildRaceLabel(name), deviceRole = "TIME")
             settingsRepository.setActiveRaceId(newRaceId)
         }
     }

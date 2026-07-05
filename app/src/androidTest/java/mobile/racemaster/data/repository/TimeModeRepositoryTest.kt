@@ -79,7 +79,7 @@ class TimeModeRepositoryTest {
 
         val splits = db.finishSplitDao().observeForRace(raceId).first().sortedBy { it.splitNumber }
         assertEquals(listOf(0, 1), splits.map { it.splitNumber })
-        assertEquals(TimeModeRepository.START_LABEL, splits.first { it.splitNumber == 0 }.label)
+        assertEquals(TimeModeRepository.START_LABEL, splits.first { it.splitNumber == 0 }.note)
         assertEquals(1_000L, splits.first { it.splitNumber == 0 }.timestampMillis)
     }
 
@@ -93,7 +93,7 @@ class TimeModeRepositoryTest {
         val splits = db.finishSplitDao().observeForRace(raceId).first().sortedBy { it.splitNumber }
         assertEquals(listOf(0, 1, 2, 3), splits.map { it.splitNumber })
         val stopSplit = splits.first { it.splitNumber == 3 }
-        assertEquals(TimeModeRepository.STOP_LABEL, stopSplit.label)
+        assertEquals(TimeModeRepository.STOP_LABEL, stopSplit.note)
         assertEquals(5_000L, stopSplit.timestampMillis)
         assertEquals(5_000L, db.raceDao().getById(raceId)?.timeModeStoppedAtMillis)
     }
@@ -146,13 +146,13 @@ class TimeModeRepositoryTest {
     }
 
     @Test
-    fun updateLabelPersistsCustomLabel() = runTest {
+    fun updateNotePersistsCustomNote() = runTest {
         repository.recordSplit(raceId, timestampMillis = 1_000L)
         val splitId = db.finishSplitDao().observeForRace(raceId).first().single().id
 
-        repository.updateLabel(splitId, "Checkpoint 1")
+        repository.updateNote(splitId, "Checkpoint 1")
 
         val updated = db.finishSplitDao().observeForRace(raceId).first().single()
-        assertEquals("Checkpoint 1", updated.label)
+        assertEquals("Checkpoint 1", updated.note)
     }
 }

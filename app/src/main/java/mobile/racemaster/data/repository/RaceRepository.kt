@@ -7,10 +7,16 @@ import kotlinx.coroutines.flow.Flow
 class RaceRepository(
     private val raceDao: RaceDao,
 ) {
-    suspend fun startNewRace(label: String, createdAtMillis: Long = System.currentTimeMillis()): Long =
-        raceDao.insert(RaceEntity(label = label, createdAtMillis = createdAtMillis))
+    suspend fun startNewRace(
+        label: String,
+        createdAtMillis: Long = System.currentTimeMillis(),
+        deviceRole: String? = null,
+    ): Long =
+        raceDao.insert(RaceEntity(label = label, createdAtMillis = createdAtMillis, deviceRole = deviceRole))
 
     fun observeRace(id: Long): Flow<RaceEntity?> = raceDao.observeById(id)
+
+    suspend fun getRace(id: Long): RaceEntity? = raceDao.getById(id)
 
     fun observeAllRaces(): Flow<List<RaceEntity>> = raceDao.observeAll()
 }

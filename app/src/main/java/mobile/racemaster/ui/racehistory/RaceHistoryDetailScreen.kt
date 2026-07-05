@@ -24,6 +24,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.ui.timemode.formatElapsed
+import mobile.racemaster.util.formatWallClock
 import mobile.racemaster.util.withClickSound
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -52,16 +53,31 @@ fun RaceHistoryDetailScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            Text(
+                "Last synced: ${uiState.lastSyncedAtMillis?.let { formatWallClock(it) } ?: "never"}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+
             Text("Time splits", style = MaterialTheme.typography.titleMedium)
             if (uiState.splits.isEmpty()) {
                 Text("No splits recorded", style = MaterialTheme.typography.bodyMedium)
             } else {
                 uiState.splits.sortedBy { it.splitNumber }.forEach { split ->
-                    val labelSuffix = split.label?.let { "  $it" }.orEmpty()
-                    Text(
-                        "#${split.splitNumber}  ${formatElapsed(split.elapsedMillis)}$labelSuffix",
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
+                    val noteSuffix = split.note?.let { "  $it" }.orEmpty()
+                    Column {
+                        Text(
+                            "#${split.splitNumber}  ${formatElapsed(split.elapsedMillis)}$noteSuffix",
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(formatWallClock(split.timestampMillis), style = MaterialTheme.typography.bodySmall)
+                        if (!split.synced) {
+                            Text(
+                                "● unsynced",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.tertiary,
+                            )
+                        }
+                    }
                 }
             }
 
@@ -87,11 +103,19 @@ fun RaceHistoryDetailScreen(
                                 Text(entry.note, style = MaterialTheme.typography.bodySmall)
                             }
                         }
+                        Text(formatWallClock(entry.timestampMillis), style = MaterialTheme.typography.bodySmall)
                         if (entry.dupSplitRefs.isNotEmpty()) {
                             Text(
                                 "dup of ${entry.dupSplitRefs.joinToString(", ") { "#$it" }}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        if (!entry.synced) {
+                            Text(
+                                "● unsynced",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.tertiary,
                             )
                         }
                     }

@@ -37,23 +37,32 @@ class AppEntryViewModel(
         .map { mode -> StartDestinationState.Ready(mode) as StartDestinationState }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StartDestinationState.Loading)
 
-    // Drives the app-wide "block exit" back-press guard: true whenever the active race's
-    // clock is running or it has recorded bib data, regardless of which screen is showing.
-    val raceInProgress: StateFlow<Boolean> = settingsRepository.activeRaceId
-        .flatMapLatest { raceId ->
-            if (raceId == null) {
+    // Drives the app-wide "block exit" back-press guard and screen-pinning: true whenever
+    // the active race's clock is running or it has recorded bib data, regardless of which
+    // screen is showing — except in Mule mode, which needs to run in the background/be
+    // freely switched away from (it's a relay device visiting other phones, not something
+    // that should ever be pinned or block the operator from leaving).
+    val raceInProgress: StateFlow<Boolean> = settingsRepository.appMode
+        .flatMapLatest { mode ->
+            if (mode == AppMode.MULE) {
                 flowOf(false)
             } else {
-                combine(
-                    raceRepository.observeRace(raceId),
-                    bibsModeRepository.observeEntries(raceId),
-                ) { race, bibEntries ->
-                    isRaceInProgress(
-                        race?.timeModeStartedAtMillis,
-                        race?.timeModeStoppedAtMillis,
-                        bibEntries.hasRealEntries(),
-                        race?.bibsModeStoppedAtMillis,
-                    )
+                settingsRepository.activeRaceId.flatMapLatest { raceId ->
+                    if (raceId == null) {
+                        flowOf(false)
+                    } else {
+                        combine(
+                            raceRepository.observeRace(raceId),
+                            bibsModeRepository.observeEntries(raceId),
+                        ) { race, bibEntries ->
+                            isRaceInProgress(
+                                race?.timeModeStartedAtMillis,
+                                race?.timeModeStoppedAtMillis,
+                                bibEntries.hasRealEntries(),
+                                race?.bibsModeStoppedAtMillis,
+                            )
+                        }
+                    }
                 }
             }
         }

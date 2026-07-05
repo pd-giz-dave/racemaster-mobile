@@ -17,6 +17,22 @@ class BibsModeRepository(
 ) {
     fun observeEntries(raceId: Long): Flow<List<BibEntryEntity>> = bibEntryDao.observeForRace(raceId)
 
+    fun observeUnsyncedCount(raceId: Long): Flow<Int> = bibEntryDao.observeUnsyncedCountForRace(raceId)
+
+    fun observeLastSyncedAtMillis(raceId: Long): Flow<Long?> = bibEntryDao.observeLastSyncedAtMillis(raceId)
+
+    // One-shot snapshot for Mule's BLE pull, not a live subscription.
+    suspend fun getUnsyncedEntries(raceId: Long): List<BibEntryEntity> = bibEntryDao.getUnsyncedForRace(raceId)
+
+    // Every entry for the race regardless of sync state — used to resend the full set to the
+    // server rather than just the delta.
+    suspend fun getAllEntries(raceId: Long): List<BibEntryEntity> = bibEntryDao.getAllForRace(raceId)
+
+    suspend fun markEntriesSyncedByUuid(recordUuids: List<String>, syncedAtMillis: Long = System.currentTimeMillis()) {
+        if (recordUuids.isEmpty()) return
+        bibEntryDao.markSynced(recordUuids, syncedAtMillis)
+    }
+
     // The only entry point for creating a Bibs race: atomically writes the race row (with its
     // bib range) and the fixed Clock marker (split #0, doesn't consume the counter) so the two
     // can never exist independently of each other, e.g. if the process dies mid-creation.
@@ -25,6 +41,7 @@ class BibsModeRepository(
         bibsRangeStart: Int,
         bibsRangeCount: Int,
         createdAtMillis: Long = System.currentTimeMillis(),
+        deviceRole: String? = null,
     ): Long = db.withTransaction {
         val raceId = raceDao.insert(
             RaceEntity(
@@ -32,6 +49,7 @@ class BibsModeRepository(
                 createdAtMillis = createdAtMillis,
                 bibsRangeStart = bibsRangeStart,
                 bibsRangeCount = bibsRangeCount,
+                deviceRole = deviceRole,
             ),
         )
         bibEntryDao.insert(

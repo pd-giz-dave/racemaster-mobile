@@ -6,6 +6,9 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.room.Room
 import mobile.racemaster.data.db.RacemasterDatabase
+import mobile.racemaster.data.mule.MulePullClient
+import mobile.racemaster.data.mule.MuleRepository
+import mobile.racemaster.data.mule.MuleSyncClient
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
@@ -18,6 +21,7 @@ interface AppContainer {
     val timeModeRepository: TimeModeRepository
     val bibsModeRepository: BibsModeRepository
     val settingsRepository: SettingsRepository
+    val muleRepository: MuleRepository
 }
 
 class DefaultAppContainer(context: Context) : AppContainer {
@@ -41,5 +45,9 @@ class DefaultAppContainer(context: Context) : AppContainer {
 
     override val settingsRepository: SettingsRepository by lazy {
         SettingsRepository(context.dataStore)
+    }
+
+    override val muleRepository: MuleRepository by lazy {
+        MuleRepository(database.pulledRecordDao(), settingsRepository, MulePullClient(), MuleSyncClient())
     }
 }

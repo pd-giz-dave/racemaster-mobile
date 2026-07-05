@@ -27,9 +27,10 @@ import mobile.racemaster.util.withClickSound
 fun RaceHistoryScreen(
     onBack: () -> Unit,
     onRaceSelected: (Long) -> Unit,
+    onMuleSourceSelected: (deviceRole: String, raceLabel: String) -> Unit,
     viewModel: RaceHistoryViewModel = viewModel(factory = RaceHistoryViewModel.Factory),
 ) {
-    val races by viewModel.races.collectAsStateWithLifecycle()
+    val items by viewModel.historyItems.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
@@ -40,17 +41,34 @@ fun RaceHistoryScreen(
             )
         },
     ) { padding ->
-        if (races.isEmpty()) {
+        if (items.isEmpty()) {
             Box(modifier = Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("No races yet")
             }
         } else {
             LazyColumn(modifier = Modifier.padding(padding).fillMaxSize()) {
-                items(races, key = { it.id }) { race ->
-                    ListItem(
-                        headlineContent = { Text(race.label) },
-                        modifier = Modifier.clickable(onClick = withClickSound { onRaceSelected(race.id) }),
-                    )
+                items(
+                    items,
+                    key = {
+                        when (it) {
+                            is HistoryItemUi.LocalRace -> "race-${it.id}"
+                            is HistoryItemUi.MuleSource -> "mule-${it.deviceRole}-${it.raceLabel}"
+                        }
+                    },
+                ) { item ->
+                    when (item) {
+                        is HistoryItemUi.LocalRace -> ListItem(
+                            headlineContent = { Text(item.label) },
+                            modifier = Modifier.clickable(onClick = withClickSound { onRaceSelected(item.id) }),
+                        )
+                        is HistoryItemUi.MuleSource -> ListItem(
+                            headlineContent = { Text(item.raceLabel.ifEmpty { item.deviceRole }) },
+                            supportingContent = { Text("via Mule (${item.deviceRole}) · ${item.syncedCount}/${item.totalCount} synced") },
+                            modifier = Modifier.clickable(
+                                onClick = withClickSound { onMuleSourceSelected(item.deviceRole, item.raceLabel) },
+                            ),
+                        )
+                    }
                     HorizontalDivider()
                 }
             }

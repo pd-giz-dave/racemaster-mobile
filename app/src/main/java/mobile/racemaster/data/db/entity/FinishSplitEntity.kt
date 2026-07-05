@@ -22,5 +22,10 @@ data class FinishSplitEntity(
     val raceId: Long,
     val splitNumber: Int,
     val timestampMillis: Long,
-    val label: String? = null,
+    val note: String? = null,
+    // Stable cross-device identifier: local `id` is Room-autoincrement and collides once
+    // records from multiple phones are merged by Mule, so this is what travels over
+    // BLE/HTTP and is used for sync dedup instead.
+    val recordUuid: String = java.util.UUID.randomUUID().toString(),
+    val syncedAtMillis: Long? = null,
 )

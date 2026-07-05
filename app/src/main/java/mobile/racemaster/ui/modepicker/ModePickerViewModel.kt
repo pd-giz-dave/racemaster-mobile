@@ -100,9 +100,10 @@ class ModePickerViewModel(
                     label,
                     requireNotNull(bibsRangeStart) { "Bibs races require a bib range start" },
                     requireNotNull(bibsRangeCount) { "Bibs races require a bib range count" },
+                    deviceRole = mode.name,
                 )
             } else {
-                raceRepository.startNewRace(label)
+                raceRepository.startNewRace(label, deviceRole = mode.name)
             }
             settingsRepository.setActiveRaceId(newRaceId)
             onComplete()

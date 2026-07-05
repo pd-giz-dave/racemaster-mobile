@@ -32,6 +32,13 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+private data class RaceContext(
+    val race: RaceEntity?,
+    val entries: List<BibEntryEntity>,
+    val unsyncedCount: Int,
+    val lastSyncedAtMillis: Long?,
+)
+
 data class BibEntryUi(
     val id: Long,
     val bibNumber: Int?,
@@ -39,6 +46,7 @@ data class BibEntryUi(
     val type: BibEntryType,
     val note: String?,
     val dupSplitRefs: List<Int>,
+    val synced: Boolean,
 )
 
 data class BibsModeUiState(
@@ -53,6 +61,8 @@ data class BibsModeUiState(
     val stopped: Boolean = false,
     val raceInProgress: Boolean = false,
     val errorMessage: String? = null,
+    val unsyncedCount: Int = 0,
+    val lastSyncedAtMillis: Long? = null,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -77,12 +87,16 @@ class BibsModeViewModel(
 
     private val raceAndEntriesFlow = raceIdFlow.flatMapLatest { raceId ->
         if (raceId == null) {
-            flowOf(null to emptyList<BibEntryEntity>())
+            flowOf(RaceContext(null, emptyList(), 0, null))
         } else {
             combine(
                 raceRepository.observeRace(raceId),
                 bibsModeRepository.observeEntries(raceId),
-            ) { race, entries -> race to entries }
+                bibsModeRepository.observeUnsyncedCount(raceId),
+                bibsModeRepository.observeLastSyncedAtMillis(raceId),
+            ) { race, entries, unsyncedCount, lastSyncedAtMillis ->
+                RaceContext(race, entries, unsyncedCount, lastSyncedAtMillis)
+            }
         }
     }
 
@@ -91,7 +105,8 @@ class BibsModeViewModel(
         digitsFlow,
         pendingTypeFlow,
         errorFlow,
-    ) { (race, entries), digits, pendingType, error ->
+    ) { context, digits, pendingType, error ->
+        val (race, entries, unsyncedCount, lastSyncedAtMillis) = context
         val dupRefs = findDuplicateSplitRefs(entries)
         val needsBib = pendingType in BIB_REQUIRED_TYPES
         BibsModeUiState(
@@ -108,6 +123,7 @@ class BibsModeViewModel(
                     type = it.type,
                     note = it.note,
                     dupSplitRefs = dupRefs[it.id].orEmpty(),
+                    synced = it.syncedAtMillis != null,
                 )
             },
             canSubmit = race?.bibsModeStoppedAtMillis == null && (if (needsBib) digits.isNotEmpty() else true),
@@ -120,6 +136,8 @@ class BibsModeViewModel(
                 race?.bibsModeStoppedAtMillis,
             ),
             errorMessage = error,
+            unsyncedCount = unsyncedCount,
+            lastSyncedAtMillis = lastSyncedAtMillis,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BibsModeUiState())
 
@@ -198,7 +216,12 @@ class BibsModeViewModel(
     fun startNewRace(name: String, bibsRangeStart: Int, bibsRangeCount: Int) {
         if (uiState.value.raceInProgress) return
         viewModelScope.launch {
-            val newRaceId = bibsModeRepository.createRaceWithClockMarker(buildRaceLabel(name), bibsRangeStart, bibsRangeCount)
+            val newRaceId = bibsModeRepository.createRaceWithClockMarker(
+                buildRaceLabel(name),
+                bibsRangeStart,
+                bibsRangeCount,
+                deviceRole = "BIBS",
+            )
             settingsRepository.setActiveRaceId(newRaceId)
         }
     }

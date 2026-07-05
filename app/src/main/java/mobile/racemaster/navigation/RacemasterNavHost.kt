@@ -1,14 +1,11 @@
 package mobile.racemaster.navigation
 
-import android.app.Activity
-import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -26,9 +23,11 @@ import mobile.racemaster.ui.bibsmode.BibsModeScreen
 import mobile.racemaster.ui.help.HelpScreen
 import mobile.racemaster.ui.modepicker.ModePickerScreen
 import mobile.racemaster.ui.mulemode.MuleModeScreen
+import mobile.racemaster.ui.racehistory.MuleSourceDetailScreen
 import mobile.racemaster.ui.racehistory.RaceHistoryDetailScreen
 import mobile.racemaster.ui.racehistory.RaceHistoryScreen
 import mobile.racemaster.ui.timemode.TimeModeScreen
+import java.net.URLDecoder
 
 @Composable
 fun RacemasterNavHost(modifier: Modifier = Modifier) {
@@ -50,25 +49,20 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
             // Registered before the NavHost below, so the NavHost's own back handling (pop
             // its stack) still takes priority; this only fires once there's nothing left to
             // pop, i.e. exactly the case that would otherwise exit the app.
+            //
+            // Deliberately not using startLockTask()/stopLockTask() (screen pinning) here even
+            // though it would also block Home/Overview: confirmed on real hardware that both
+            // ends of it cause serious disruption — starting it pops a system confirmation
+            // dialog ("Start this app?") interrupting race start, and calling stopLockTask()
+            // programmatically when a race stops causes the OS to kick the user back to the
+            // home/lock screen on at least this Samsung device (screen pinning is designed as
+            // a user-controlled mechanism to exit, not something the app toggles itself, and
+            // exiting it is treated as a security-sensitive event by the OEM). This
+            // BackHandler-only guard avoids both: it blocks the in-app back gesture during a
+            // race with no OS-level side effects, and simply doesn't touch Home/Overview.
             val context = LocalContext.current
             BackHandler(enabled = raceInProgress) {
                 Toast.makeText(context, "Can't exit while a race is in progress.", Toast.LENGTH_SHORT).show()
-            }
-
-            // Screen-pin the app while a race is running so Home/Overview can't back out of
-            // it either (the user needs to have enabled screen pinning once in Android
-            // Settings > Security for this to take effect; it's a no-op otherwise).
-            val activity = context as? Activity
-            LaunchedEffect(raceInProgress) {
-                if (activity == null) return@LaunchedEffect
-                // Whether this succeeds, no-ops, or throws depends on device/OS version and
-                // whether the user has ever enabled screen pinning — none of that is
-                // something we can detect ahead of time, so best-effort try/catch it.
-                try {
-                    if (raceInProgress) activity.startLockTask() else activity.stopLockTask()
-                } catch (e: Exception) {
-                    Log.w("RacemasterNavHost", "Lock task mode unavailable", e)
-                }
             }
 
             NavHost(navController = navController, startDestination = startDestination, modifier = modifier) {
@@ -99,6 +93,9 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                     RaceHistoryScreen(
                         onBack = { navController.popBackStack() },
                         onRaceSelected = { raceId -> navController.navigate(Routes.raceHistoryDetail(raceId)) },
+                        onMuleSourceSelected = { deviceRole, raceLabel ->
+                            navController.navigate(Routes.muleSourceDetail(deviceRole, raceLabel))
+                        },
                     )
                 }
                 composable(
@@ -107,6 +104,21 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                 ) { backStackEntry ->
                     val raceId = backStackEntry.arguments?.getLong("raceId") ?: return@composable
                     RaceHistoryDetailScreen(raceId = raceId, onBack = { navController.popBackStack() })
+                }
+                composable(
+                    route = Routes.MULE_SOURCE_DETAIL,
+                    arguments = listOf(
+                        navArgument("deviceRole") { type = NavType.StringType },
+                        navArgument("raceLabel") { type = NavType.StringType },
+                    ),
+                ) { backStackEntry ->
+                    val deviceRole = backStackEntry.arguments?.getString("deviceRole") ?: return@composable
+                    val encodedRaceLabel = backStackEntry.arguments?.getString("raceLabel") ?: return@composable
+                    MuleSourceDetailScreen(
+                        deviceRole = deviceRole,
+                        raceLabel = URLDecoder.decode(encodedRaceLabel, "UTF-8"),
+                        onBack = { navController.popBackStack() },
+                    )
                 }
             }
         }
