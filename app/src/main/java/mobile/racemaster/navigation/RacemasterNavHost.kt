@@ -1,15 +1,16 @@
 package mobile.racemaster.navigation
 
-import android.widget.Toast
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
@@ -23,6 +24,7 @@ import mobile.racemaster.ui.bibsmode.BibsModeScreen
 import mobile.racemaster.ui.help.HelpScreen
 import mobile.racemaster.ui.modepicker.ModePickerScreen
 import mobile.racemaster.ui.mulemode.MuleModeScreen
+import mobile.racemaster.ui.racedetails.RaceDetailsScreen
 import mobile.racemaster.ui.racehistory.MuleSourceDetailScreen
 import mobile.racemaster.ui.racehistory.RaceHistoryDetailScreen
 import mobile.racemaster.ui.racehistory.RaceHistoryScreen
@@ -33,7 +35,6 @@ import java.net.URLDecoder
 fun RacemasterNavHost(modifier: Modifier = Modifier) {
     val appEntryViewModel: AppEntryViewModel = viewModel(factory = AppEntryViewModel.Factory)
     val startDestinationState by appEntryViewModel.startDestinationState.collectAsStateWithLifecycle()
-    val raceInProgress by appEntryViewModel.raceInProgress.collectAsStateWithLifecycle()
 
     when (val state = startDestinationState) {
         is StartDestinationState.Loading -> {
@@ -44,35 +45,33 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
 
         is StartDestinationState.Ready -> {
             val navController = rememberNavController()
-            val startDestination = state.mode.toRoute()
 
-            // Registered before the NavHost below, so the NavHost's own back handling (pop
-            // its stack) still takes priority; this only fires once there's nothing left to
-            // pop, i.e. exactly the case that would otherwise exit the app.
+            // No back-press guard, no screen pinning: both were tried and both caused real
+            // disruption on actual hardware (a system confirmation dialog interrupting race
+            // start, and the OS kicking the user to the home/lock screen when a race stops).
+            // Exiting mid-race is now just relying on the operator's own discipline.
             //
-            // Deliberately not using startLockTask()/stopLockTask() (screen pinning) here even
-            // though it would also block Home/Overview: confirmed on real hardware that both
-            // ends of it cause serious disruption — starting it pops a system confirmation
-            // dialog ("Start this app?") interrupting race start, and calling stopLockTask()
-            // programmatically when a race stops causes the OS to kick the user back to the
-            // home/lock screen on at least this Samsung device (screen pinning is designed as
-            // a user-controlled mechanism to exit, not something the app toggles itself, and
-            // exiting it is treated as a security-sensitive event by the OEM). This
-            // BackHandler-only guard avoids both: it blocks the in-app back gesture during a
-            // race with no OS-level side effects, and simply doesn't touch Home/Overview.
-            val context = LocalContext.current
-            BackHandler(enabled = raceInProgress) {
-                Toast.makeText(context, "Can't exit while a race is in progress.", Toast.LENGTH_SHORT).show()
-            }
+            // The mode picker is always the actual navigation root (not whichever mode was
+            // last active) so that back-press from any mode screen has somewhere to land —
+            // if a mode is already active, a one-time LaunchedEffect immediately forwards
+            // into it instead, leaving the picker underneath on the back stack.
+            var hasAutoForwarded by rememberSaveable { mutableStateOf(false) }
 
-            NavHost(navController = navController, startDestination = startDestination, modifier = modifier) {
+            NavHost(navController = navController, startDestination = Routes.MODE_PICKER, modifier = modifier) {
                 composable(Routes.MODE_PICKER) {
+                    LaunchedEffect(Unit) {
+                        if (!hasAutoForwarded && state.mode != null) {
+                            hasAutoForwarded = true
+                            navController.navigate(state.mode.toRoute())
+                        }
+                    }
                     ModePickerScreen(
                         onModeSelected = { mode ->
                             navController.navigate(mode.toRoute()) {
-                                popUpTo(Routes.MODE_PICKER) { inclusive = true }
+                                popUpTo(Routes.MODE_PICKER) { inclusive = false }
                             }
                         },
+                        onNewRaceNeeded = { mode -> navController.navigate(Routes.raceDetails(mode, raceId = null)) },
                         onReviewPastRaces = { navController.navigate(Routes.RACE_HISTORY) },
                         onHelp = { navController.navigate(Routes.HELP) },
                     )
@@ -81,13 +80,41 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                     HelpScreen(onBack = { navController.popBackStack() })
                 }
                 composable(Routes.TIME_MODE) {
-                    TimeModeScreen(onChangeMode = { navController.navigateToModePicker() })
+                    TimeModeScreen(
+                        onChangeMode = { navController.navigateToModePicker() },
+                        onNewRace = { navController.navigate(Routes.raceDetails(AppMode.TIME, raceId = null)) },
+                        onEditRace = { raceId -> navController.navigate(Routes.raceDetails(AppMode.TIME, raceId)) },
+                    )
                 }
                 composable(Routes.BIBS_MODE) {
-                    BibsModeScreen(onChangeMode = { navController.navigateToModePicker() })
+                    BibsModeScreen(
+                        onChangeMode = { navController.navigateToModePicker() },
+                        onNewRace = { navController.navigate(Routes.raceDetails(AppMode.BIBS, raceId = null)) },
+                        onEditRace = { raceId -> navController.navigate(Routes.raceDetails(AppMode.BIBS, raceId)) },
+                    )
                 }
                 composable(Routes.MULE_MODE) {
                     MuleModeScreen(onChangeMode = { navController.navigateToModePicker() })
+                }
+                composable(
+                    route = Routes.RACE_DETAILS,
+                    arguments = listOf(
+                        navArgument("mode") { type = NavType.StringType },
+                        navArgument("raceId") { type = NavType.LongType },
+                    ),
+                ) { backStackEntry ->
+                    val mode = AppMode.valueOf(backStackEntry.arguments?.getString("mode") ?: return@composable)
+                    val raceIdArg = backStackEntry.arguments?.getLong("raceId") ?: -1L
+                    RaceDetailsScreen(
+                        mode = mode,
+                        existingRaceId = raceIdArg.takeIf { it >= 0 },
+                        onSaved = {
+                            navController.navigate(mode.toRoute()) {
+                                popUpTo(Routes.MODE_PICKER) { inclusive = false }
+                            }
+                        },
+                        onCancel = { navController.popBackStack() },
+                    )
                 }
                 composable(Routes.RACE_HISTORY) {
                     RaceHistoryScreen(

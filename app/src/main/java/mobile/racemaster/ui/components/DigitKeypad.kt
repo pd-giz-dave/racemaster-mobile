@@ -20,6 +20,7 @@ fun DigitKeypad(
     onBackspace: () -> Unit,
     onClear: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     buttonHeight: Dp = 72.dp,
     spacing: Dp = 8.dp,
 ) {
@@ -36,23 +37,25 @@ fun DigitKeypad(
                         text = digit.toString(),
                         onClick = { onDigit(digit) },
                         height = buttonHeight,
+                        enabled = enabled,
                         modifier = Modifier.weight(1f),
                     )
                 }
             }
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(spacing)) {
-            KeypadButton(text = "C", onClick = onClear, height = buttonHeight, modifier = Modifier.weight(1f))
-            KeypadButton(text = "0", onClick = { onDigit(0) }, height = buttonHeight, modifier = Modifier.weight(1f))
-            KeypadButton(text = "⌫", onClick = onBackspace, height = buttonHeight, modifier = Modifier.weight(1f))
+            KeypadButton(text = "C", onClick = onClear, height = buttonHeight, enabled = enabled, modifier = Modifier.weight(1f))
+            KeypadButton(text = "0", onClick = { onDigit(0) }, height = buttonHeight, enabled = enabled, modifier = Modifier.weight(1f))
+            KeypadButton(text = "⌫", onClick = onBackspace, height = buttonHeight, enabled = enabled, modifier = Modifier.weight(1f))
         }
     }
 }
 
 @Composable
-private fun KeypadButton(text: String, onClick: () -> Unit, height: Dp, modifier: Modifier = Modifier) {
+private fun KeypadButton(text: String, onClick: () -> Unit, height: Dp, enabled: Boolean, modifier: Modifier = Modifier) {
     OutlinedButton(
         onClick = withClickSound(onClick),
+        enabled = enabled,
         modifier = modifier.height(height),
     ) {
         Text(text = text, style = MaterialTheme.typography.headlineMedium)

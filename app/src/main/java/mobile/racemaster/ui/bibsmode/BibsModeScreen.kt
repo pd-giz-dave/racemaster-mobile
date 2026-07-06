@@ -1,5 +1,6 @@
 package mobile.racemaster.ui.bibsmode
 
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -37,9 +38,9 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -48,10 +49,10 @@ import mobile.racemaster.data.db.entity.BIB_REQUIRED_TYPES
 import mobile.racemaster.data.db.entity.BibEntryType
 import mobile.racemaster.ui.components.DigitKeypad
 import mobile.racemaster.ui.components.ModeScreenTopBar
-import mobile.racemaster.ui.components.NewBibsRaceDialog
 import mobile.racemaster.ui.components.StopOrResetButton
 import mobile.racemaster.ui.components.SyncStatusLine
 import mobile.racemaster.ui.components.UndoLastButton
+import mobile.racemaster.util.formatBibsExpectedText
 import mobile.racemaster.util.withClickSound
 
 private const val BUTTON_HEIGHT_DP = 48
@@ -65,6 +66,8 @@ private val BUTTON_ROW_CONTENT_PADDING = PaddingValues(horizontal = 4.dp, vertic
 @Composable
 fun BibsModeScreen(
     onChangeMode: () -> Unit,
+    onNewRace: () -> Unit,
+    onEditRace: (raceId: Long) -> Unit,
     viewModel: BibsModeViewModel = viewModel(factory = BibsModeViewModel.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -72,7 +75,7 @@ fun BibsModeScreen(
     // Same external HID trigger mechanism Time Mode uses (MainActivity.onExternalSplitTrigger),
     // registered here while Bibs Mode is on screen so a volume button (or any other recognized
     // HID key) logs the pending event exactly like tapping the Log button.
-    val activity = LocalContext.current as MainActivity
+    val activity = LocalActivity.current as MainActivity
     val currentOnSubmit by rememberUpdatedState(viewModel::submit)
     val canExternalTrigger by rememberUpdatedState(uiState.canSubmit)
     DisposableEffect(activity) {
@@ -86,15 +89,9 @@ fun BibsModeScreen(
                 title = "Bibs Mode",
                 raceLabel = uiState.raceLabel,
                 newRaceEnabled = !uiState.raceInProgress,
-                newRaceDialog = { onDismiss ->
-                    NewBibsRaceDialog(
-                        onConfirm = { name, start, count ->
-                            viewModel.startNewRace(name, start, count)
-                            onDismiss()
-                        },
-                        onDismiss = onDismiss,
-                    )
-                },
+                thisRaceEnabled = uiState.raceId != null,
+                onNewRace = onNewRace,
+                onThisRace = { uiState.raceId?.let(onEditRace) },
                 onChangeMode = onChangeMode,
             )
         },
@@ -168,15 +165,42 @@ private fun BibsModeContent(
                     text = "Next: #${uiState.nextSplitNumber}",
                     style = MaterialTheme.typography.labelMedium,
                 )
-                if (uiState.dupCount > 0) {
-                    Text(
-                        text = "${uiState.dupCount} dup${if (uiState.dupCount == 1) "" else "s"}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.error,
-                    )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (uiState.dupCount > 0) {
+                        Text(
+                            text = "${uiState.dupCount} dup${if (uiState.dupCount == 1) "" else "s"}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    SyncStatusLine(uiState.unsyncedCount, uiState.lastSyncedAtMillis)
                 }
             }
-            SyncStatusLine(uiState.unsyncedCount, uiState.lastSyncedAtMillis)
+            formatBibsExpectedText(uiState.firstBibNumber, uiState.expectedRunnerCount, uiState.finishedCount)?.let { text ->
+                Text(text = text, style = MaterialTheme.typography.labelMedium)
+            }
+            if (uiState.duplicateBibNumbers.isNotEmpty()) {
+                Text(
+                    text = "Dups: ${uiState.duplicateBibNumbers.joinToString(", ")}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            // Tied to the same raw "more expected" figure shown above (expected minus
+            // accounted-for records), not to how many specific bibs are outstanding — those
+            // two can differ while a duplicate is unresolved, and the raw count is the one
+            // that should decide when the list becomes worth showing.
+            val moreExpected = uiState.expectedRunnerCount?.let { (it - uiState.finishedCount).coerceAtLeast(0) }
+            if (uiState.outstandingBibs.isNotEmpty() && moreExpected != null && moreExpected <= 10) {
+                Text(
+                    text = "Missing: ${uiState.outstandingBibs.joinToString(", ")}",
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Text(
                 text = if (uiState.pendingEventType in BIB_REQUIRED_TYPES) {
                     uiState.currentDigits.ifEmpty { "Enter bib" }
@@ -192,6 +216,7 @@ private fun BibsModeContent(
                 onDigit = onDigit,
                 onBackspace = onBackspace,
                 onClear = onClear,
+                enabled = uiState.raceId != null,
                 buttonHeight = 52.dp,
                 spacing = 4.dp,
             )
@@ -205,7 +230,7 @@ private fun BibsModeContent(
                 ) { Text(uiState.pendingEventType.displayName()) }
                 OutlinedButton(
                     onClick = withClickSound { showEventPicker = true },
-                    enabled = !uiState.stopped,
+                    enabled = uiState.raceId != null && !uiState.stopped,
                     contentPadding = BUTTON_ROW_CONTENT_PADDING,
                     modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
                 ) { Text("Event") }
@@ -215,11 +240,12 @@ private fun BibsModeContent(
                     resetDescription = "This clears every bib entry and resets ready to start again from scratch.",
                     onStop = onStop,
                     onReset = onReset,
+                    enabled = uiState.raceId != null,
                     contentPadding = BUTTON_ROW_CONTENT_PADDING,
                     modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
                 )
                 UndoLastButton(
-                    enabled = uiState.canUndo,
+                    enabled = uiState.raceId != null && uiState.canUndo,
                     description = uiState.entries.firstOrNull()?.let { undoDescription(it) }.orEmpty(),
                     onConfirm = onUndo,
                     contentPadding = BUTTON_ROW_CONTENT_PADDING,

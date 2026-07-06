@@ -8,10 +8,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import mobile.racemaster.util.withClickSound
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -20,11 +16,11 @@ fun ModeScreenTopBar(
     title: String,
     raceLabel: String,
     newRaceEnabled: Boolean,
-    newRaceDialog: @Composable (onDismiss: () -> Unit) -> Unit,
+    thisRaceEnabled: Boolean,
+    onNewRace: () -> Unit,
+    onThisRace: () -> Unit,
     onChangeMode: () -> Unit,
 ) {
-    var showNewRaceDialog by remember { mutableStateOf(false) }
-
     // The persistent AppBanner (above this bar) already reserves space for the status
     // bar, so this bar must not also apply it — otherwise the two stack and leave a gap.
     TopAppBar(
@@ -35,15 +31,12 @@ fun ModeScreenTopBar(
             }
         },
         actions = {
-            TextButton(onClick = withClickSound { showNewRaceDialog = true }, enabled = newRaceEnabled) { Text("New Race") }
+            // This Race stays enabled even once the race has stopped — editing a typo in the
+            // name/course shouldn't require never having finished logging.
+            TextButton(onClick = withClickSound(onThisRace), enabled = thisRaceEnabled) { Text("This Race") }
+            TextButton(onClick = withClickSound(onNewRace), enabled = newRaceEnabled) { Text("New Race") }
             TextButton(onClick = withClickSound(onChangeMode)) { Text("Mode") }
         },
         windowInsets = WindowInsets(0, 0, 0, 0),
     )
-
-    // The top bar just owns whether the dialog is showing — it doesn't need to know what
-    // kind of dialog (plain name vs. Bibs' name+range fields) each mode uses.
-    if (showNewRaceDialog) {
-        newRaceDialog { showNewRaceDialog = false }
-    }
 }

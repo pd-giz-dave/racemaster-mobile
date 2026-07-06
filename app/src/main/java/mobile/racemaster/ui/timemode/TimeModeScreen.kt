@@ -1,5 +1,6 @@
 package mobile.racemaster.ui.timemode
 
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -32,23 +33,24 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.MainActivity
 import mobile.racemaster.ui.components.ModeScreenTopBar
-import mobile.racemaster.ui.components.NewRaceDialog
 import mobile.racemaster.ui.components.StopOrResetButton
 import mobile.racemaster.ui.components.SyncStatusLine
 import mobile.racemaster.ui.components.UndoLastButton
+import mobile.racemaster.util.formatTimeSplitsText
 import mobile.racemaster.util.withClickSound
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TimeModeScreen(
     onChangeMode: () -> Unit,
+    onNewRace: () -> Unit,
+    onEditRace: (raceId: Long) -> Unit,
     viewModel: TimeModeViewModel = viewModel(factory = TimeModeViewModel.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -56,7 +58,7 @@ fun TimeModeScreen(
     // Registers this screen's split action as the target for an external USB/Bluetooth
     // trigger (see MainActivity.onExternalSplitTrigger) while it's on screen, only firing
     // when there's actually a running race to split against.
-    val activity = LocalContext.current as MainActivity
+    val activity = LocalActivity.current as MainActivity
     val currentOnSplit by rememberUpdatedState(viewModel::recordSplit)
     val canExternalSplit by rememberUpdatedState(uiState.stopwatchStarted && !uiState.stopwatchStopped)
     DisposableEffect(activity) {
@@ -70,15 +72,9 @@ fun TimeModeScreen(
                 title = "Time Mode",
                 raceLabel = uiState.raceLabel,
                 newRaceEnabled = !uiState.raceInProgress,
-                newRaceDialog = { onDismiss ->
-                    NewRaceDialog(
-                        onConfirm = { name ->
-                            viewModel.startNewRace(name)
-                            onDismiss()
-                        },
-                        onDismiss = onDismiss,
-                    )
-                },
+                thisRaceEnabled = uiState.raceId != null,
+                onNewRace = onNewRace,
+                onThisRace = { uiState.raceId?.let(onEditRace) },
                 onChangeMode = onChangeMode,
             )
         },
@@ -133,11 +129,16 @@ private fun TimeModeContent(
             modifier = Modifier.verticalScroll(headerScrollState),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                text = "Next: #${uiState.nextSplitNumber}",
-                style = MaterialTheme.typography.labelMedium,
-            )
-            SyncStatusLine(uiState.unsyncedCount, uiState.lastSyncedAtMillis)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(
+                    text = "Next: #${uiState.nextSplitNumber}",
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                SyncStatusLine(uiState.unsyncedCount, uiState.lastSyncedAtMillis)
+            }
+            formatTimeSplitsText(uiState.firstBibNumber, uiState.expectedRunnerCount, uiState.finishedCount)?.let { text ->
+                Text(text = text, style = MaterialTheme.typography.labelMedium)
+            }
             Text(
                 text = if (uiState.stopwatchStarted) formatElapsed(uiState.liveElapsedMillis) else "",
                 style = MaterialTheme.typography.displayMedium,
@@ -151,7 +152,7 @@ private fun TimeModeContent(
             // swallowing or merging the second one.
             Button(
                 onClick = withClickSound(if (uiState.stopwatchStarted) onSplit else onStart),
-                enabled = !uiState.stopwatchStopped,
+                enabled = uiState.raceId != null && !uiState.stopwatchStopped,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(96.dp),

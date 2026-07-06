@@ -97,7 +97,7 @@ class BibsModeRepositoryTest {
 
     @Test
     fun createRaceWithClockMarkerIsAtomicAndDoesNotConsumeCounter() = runTest {
-        val newRaceId = repository.createRaceWithClockMarker("New Race", bibsRangeStart = 100, bibsRangeCount = 20)
+        val newRaceId = repository.createRaceWithClockMarker("New Race", "Seniors", bibsRangeStart = 100, bibsRangeCount = 20)
 
         val race = db.raceDao().getById(newRaceId)
         assertNotNull(race)
@@ -118,7 +118,7 @@ class BibsModeRepositoryTest {
 
     @Test
     fun deleteMostRecentIsNoOpWhenClockIsTheOnlyRow() = runTest {
-        val newRaceId = repository.createRaceWithClockMarker("New Race", bibsRangeStart = 1, bibsRangeCount = 10)
+        val newRaceId = repository.createRaceWithClockMarker("New Race", "Seniors", bibsRangeStart = 1, bibsRangeCount = 10)
 
         repository.deleteMostRecent(newRaceId)
 

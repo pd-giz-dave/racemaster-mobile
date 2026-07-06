@@ -25,6 +25,7 @@ fun StopOrResetButton(
     onStop: () -> Unit,
     onReset: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     labelStyle: TextStyle = MaterialTheme.typography.labelLarge,
     contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
 ) {
@@ -32,6 +33,7 @@ fun StopOrResetButton(
 
     OutlinedButton(
         onClick = withClickSound { showConfirm = true },
+        enabled = enabled,
         contentPadding = contentPadding,
         modifier = modifier.fillMaxWidth(),
     ) {

@@ -9,7 +9,6 @@ import mobile.racemaster.data.db.entity.BibEntryType
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
-import mobile.racemaster.data.repository.buildRaceLabel
 import mobile.racemaster.data.repository.hasRealEntries
 import mobile.racemaster.data.repository.isRaceInProgress
 import mobile.racemaster.data.settings.AppMode
@@ -80,32 +79,6 @@ class ModePickerViewModel(
     fun selectModeForExistingRace(mode: AppMode, onComplete: () -> Unit) {
         viewModelScope.launch {
             settingsRepository.setAppMode(mode)
-            onComplete()
-        }
-    }
-
-    /** First-time mode pick — creates the initial race under the given name. */
-    fun selectModeAndCreateRace(
-        mode: AppMode,
-        raceName: String,
-        bibsRangeStart: Int? = null,
-        bibsRangeCount: Int? = null,
-        onComplete: () -> Unit,
-    ) {
-        viewModelScope.launch {
-            settingsRepository.setAppMode(mode)
-            val label = buildRaceLabel(raceName)
-            val newRaceId = if (mode == AppMode.BIBS) {
-                bibsModeRepository.createRaceWithClockMarker(
-                    label,
-                    requireNotNull(bibsRangeStart) { "Bibs races require a bib range start" },
-                    requireNotNull(bibsRangeCount) { "Bibs races require a bib range count" },
-                    deviceRole = mode.name,
-                )
-            } else {
-                raceRepository.startNewRace(label, deviceRole = mode.name)
-            }
-            settingsRepository.setActiveRaceId(newRaceId)
             onComplete()
         }
     }

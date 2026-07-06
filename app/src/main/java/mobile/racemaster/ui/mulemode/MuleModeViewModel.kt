@@ -378,7 +378,7 @@ class MuleModeViewModel(private val muleRepository: MuleRepository) : ViewModel(
     }
 
     companion object {
-        private val AUTO_SYNC_INTERVAL = 15_000.milliseconds
+        private val AUTO_SYNC_INTERVAL = 10_000.milliseconds
 
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {

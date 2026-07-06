@@ -11,12 +11,14 @@ import mobile.racemaster.data.db.entity.BibEntryType
 import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
-import mobile.racemaster.data.repository.buildRaceLabel
+import mobile.racemaster.data.repository.accountedForRecordCount
 import mobile.racemaster.data.repository.countDuplicateExtras
+import mobile.racemaster.data.repository.duplicateBibNumbers
 import mobile.racemaster.data.repository.findDuplicateSplitRefs
 import mobile.racemaster.data.repository.hasRealEntries
 import mobile.racemaster.data.repository.isBibInLegalRange
 import mobile.racemaster.data.repository.isRaceInProgress
+import mobile.racemaster.data.repository.outstandingBibs
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.di.applicationContext
@@ -50,6 +52,7 @@ data class BibEntryUi(
 )
 
 data class BibsModeUiState(
+    val raceId: Long? = null,
     val raceLabel: String = "",
     val currentDigits: String = "",
     val pendingEventType: BibEntryType = BibEntryType.FINISH,
@@ -63,13 +66,23 @@ data class BibsModeUiState(
     val errorMessage: String? = null,
     val unsyncedCount: Int = 0,
     val lastSyncedAtMillis: Long? = null,
+    // Set from the race details screen — so the operator knows what to expect, and how many
+    // are still outstanding.
+    val firstBibNumber: Int? = null,
+    val expectedRunnerCount: Int? = null,
+    val finishedCount: Int = 0,
+    // Only populated (and only meaningful) once few enough are left that listing them is
+    // more useful than just the count — see BibsModeScreen.
+    val outstandingBibs: List<Int> = emptyList(),
+    // Distinct bib numbers involved in a duplicate log — empty (and hidden) when there are none.
+    val duplicateBibNumbers: List<Int> = emptyList(),
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class BibsModeViewModel(
     private val bibsModeRepository: BibsModeRepository,
     private val raceRepository: RaceRepository,
-    private val settingsRepository: SettingsRepository,
+    settingsRepository: SettingsRepository,
     private val beeper: Beeper,
 ) : ViewModel() {
 
@@ -109,7 +122,9 @@ class BibsModeViewModel(
         val (race, entries, unsyncedCount, lastSyncedAtMillis) = context
         val dupRefs = findDuplicateSplitRefs(entries)
         val needsBib = pendingType in BIB_REQUIRED_TYPES
+        val outstanding = outstandingBibs(entries, race?.bibsRangeStart, race?.bibsRangeCount)
         BibsModeUiState(
+            raceId = race?.id,
             raceLabel = race?.label.orEmpty(),
             currentDigits = digits,
             pendingEventType = pendingType,
@@ -126,7 +141,7 @@ class BibsModeViewModel(
                     synced = it.syncedAtMillis != null,
                 )
             },
-            canSubmit = race?.bibsModeStoppedAtMillis == null && (if (needsBib) digits.isNotEmpty() else true),
+            canSubmit = race != null && race.bibsModeStoppedAtMillis == null && (if (needsBib) digits.isNotEmpty() else true),
             canUndo = entries.hasRealEntries(),
             stopped = race?.bibsModeStoppedAtMillis != null,
             raceInProgress = isRaceInProgress(
@@ -138,6 +153,11 @@ class BibsModeViewModel(
             errorMessage = error,
             unsyncedCount = unsyncedCount,
             lastSyncedAtMillis = lastSyncedAtMillis,
+            firstBibNumber = race?.bibsRangeStart,
+            expectedRunnerCount = race?.bibsRangeCount,
+            finishedCount = accountedForRecordCount(entries),
+            outstandingBibs = outstanding,
+            duplicateBibNumbers = duplicateBibNumbers(entries),
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BibsModeUiState())
 
@@ -211,19 +231,6 @@ class BibsModeViewModel(
     fun undoLast() {
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch { bibsModeRepository.deleteMostRecent(raceId) }
-    }
-
-    fun startNewRace(name: String, bibsRangeStart: Int, bibsRangeCount: Int) {
-        if (uiState.value.raceInProgress) return
-        viewModelScope.launch {
-            val newRaceId = bibsModeRepository.createRaceWithClockMarker(
-                buildRaceLabel(name),
-                bibsRangeStart,
-                bibsRangeCount,
-                deviceRole = "BIBS",
-            )
-            settingsRepository.setActiveRaceId(newRaceId)
-        }
     }
 
     fun stopBibsMode() {

@@ -39,6 +39,25 @@ class SettingsRepository(
         dataStore.edit { prefs -> prefs[Keys.ACTIVE_RACE_ID] = id }
     }
 
+    // A destructive Room migration (schema version bump with no explicit Migration, see
+    // RacemasterDatabase) wipes every race — and every Mule-pulled record — but leaves all of
+    // this DataStore-backed state untouched, since it's an entirely separate storage
+    // mechanism. Without this, the app would silently resume into a mode screen referencing a
+    // race that no longer exists (crashing the moment any action button hits it), or Mule
+    // Mode would silently re-arm auto-sync against a locked device from before the wipe as if
+    // nothing happened. Called once at startup after validating the referenced race is
+    // actually gone (see AppEntryViewModel). Login/dataset selection (server URL, auth token,
+    // selected dataset) are deliberately left alone — a local data wipe doesn't invalidate
+    // who you're logged in as or which server-side dataset you'd push to.
+    suspend fun clearStaleSessionState() {
+        dataStore.edit { prefs ->
+            prefs.remove(Keys.ACTIVE_RACE_ID)
+            prefs.remove(Keys.APP_MODE)
+            prefs.remove(Keys.LOCKED_BIBS_DEVICE_ID)
+            prefs.remove(Keys.LOCKED_TIME_DEVICE_ID)
+        }
+    }
+
     // Identifies this phone (not any particular race) to Mule/sync — generated once on first
     // access and persisted, since Room's local autoincrement ids collide once records from
     // multiple phones are merged.

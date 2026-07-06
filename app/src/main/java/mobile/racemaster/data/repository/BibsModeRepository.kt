@@ -37,19 +37,24 @@ class BibsModeRepository(
     // bib range) and the fixed Clock marker (split #0, doesn't consume the counter) so the two
     // can never exist independently of each other, e.g. if the process dies mid-creation.
     suspend fun createRaceWithClockMarker(
-        label: String,
+        name: String,
+        course: String,
         bibsRangeStart: Int,
         bibsRangeCount: Int,
         createdAtMillis: Long = System.currentTimeMillis(),
         deviceRole: String? = null,
+        serverUrl: String? = null,
     ): Long = db.withTransaction {
         val raceId = raceDao.insert(
             RaceEntity(
-                label = label,
+                name = name,
+                course = course,
+                label = buildRaceLabel(name, course, createdAtMillis),
                 createdAtMillis = createdAtMillis,
                 bibsRangeStart = bibsRangeStart,
                 bibsRangeCount = bibsRangeCount,
                 deviceRole = deviceRole,
+                serverUrl = serverUrl,
             ),
         )
         bibEntryDao.insert(

@@ -117,9 +117,10 @@ fun HelpScreen(onBack: () -> Unit) {
                 title = "General",
                 body = "New Race starts a fresh race under the current mode (disabled while a race is " +
                     "in progress, to avoid losing it). Mode switches between Time/Bibs/Mule for the " +
-                    "same active race. Review past races on the mode picker shows every previously " +
-                    "recorded race, read-only. Button presses play a short click sound — this follows " +
-                    "the phone's system Touch sounds setting (Settings > Sounds and vibration).",
+                    "same active race. History on the mode picker shows every previously recorded " +
+                    "race, read-only. Button presses play a short click sound at full volume, " +
+                    "regardless of the phone's own volume/Touch sounds setting, so it's audible at " +
+                    "a noisy finish line.",
             )
         }
     }

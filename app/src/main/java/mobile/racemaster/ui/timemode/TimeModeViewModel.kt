@@ -8,7 +8,6 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
-import mobile.racemaster.data.repository.buildRaceLabel
 import mobile.racemaster.data.repository.hasRealEntries
 import mobile.racemaster.data.repository.isRaceInProgress
 import mobile.racemaster.data.settings.SettingsRepository
@@ -28,6 +27,7 @@ import kotlinx.coroutines.launch
 data class FinishSplitUi(val id: Long, val splitNumber: Int, val elapsedMillis: Long, val note: String?, val synced: Boolean)
 
 data class TimeModeUiState(
+    val raceId: Long? = null,
     val raceLabel: String = "",
     val stopwatchStarted: Boolean = false,
     val stopwatchStopped: Boolean = false,
@@ -38,6 +38,12 @@ data class TimeModeUiState(
     val raceInProgress: Boolean = false,
     val unsyncedCount: Int = 0,
     val lastSyncedAtMillis: Long? = null,
+    // Set from the race details screen — mirrors BibsModeUiState's fields exactly (form and
+    // feedback wording are meant to be identical between the two modes), even though Time
+    // Mode itself never actually reads firstBibNumber for anything.
+    val firstBibNumber: Int? = null,
+    val expectedRunnerCount: Int? = null,
+    val finishedCount: Int = 0,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -45,7 +51,7 @@ class TimeModeViewModel(
     private val timeModeRepository: TimeModeRepository,
     private val bibsModeRepository: BibsModeRepository,
     private val raceRepository: RaceRepository,
-    private val settingsRepository: SettingsRepository,
+    settingsRepository: SettingsRepository,
     private val beeper: Beeper,
 ) : ViewModel() {
 
@@ -77,6 +83,7 @@ class TimeModeViewModel(
                         else -> now - startedAt
                     }
                     TimeModeUiState(
+                        raceId = raceId,
                         raceLabel = race?.label.orEmpty(),
                         stopwatchStarted = startedAt != null,
                         stopwatchStopped = stoppedAt != null,
@@ -95,6 +102,9 @@ class TimeModeViewModel(
                         raceInProgress = isRaceInProgress(startedAt, stoppedAt, bibEntries.hasRealEntries(), race?.bibsModeStoppedAtMillis),
                         unsyncedCount = unsyncedCount,
                         lastSyncedAtMillis = lastSyncedAtMillis,
+                        firstBibNumber = race?.bibsRangeStart,
+                        expectedRunnerCount = race?.bibsRangeCount,
+                        finishedCount = splits.count { it.splitNumber != 0 },
                     )
                 }
             }
@@ -133,14 +143,6 @@ class TimeModeViewModel(
 
     fun updateNote(splitId: Long, note: String) {
         viewModelScope.launch { timeModeRepository.updateNote(splitId, note) }
-    }
-
-    fun startNewRace(name: String) {
-        if (uiState.value.raceInProgress) return
-        viewModelScope.launch {
-            val newRaceId = raceRepository.startNewRace(buildRaceLabel(name), deviceRole = "TIME")
-            settingsRepository.setActiveRaceId(newRaceId)
-        }
     }
 
     override fun onCleared() {
