@@ -30,8 +30,8 @@ fun SplitRow(
     elapsedMillis: Long,
     note: String?,
     synced: Boolean,
-    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
 ) {
     val rowColor = if (synced) SyncedGreen else UnsyncedRed
     Column(

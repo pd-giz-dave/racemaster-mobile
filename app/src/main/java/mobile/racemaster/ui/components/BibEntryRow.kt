@@ -31,8 +31,8 @@ fun BibEntryRow(
     note: String?,
     dupSplitRefs: List<Int>,
     synced: Boolean,
-    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
 ) {
     val rowColor = if (synced) SyncedGreen else UnsyncedRed
     Column(

@@ -86,7 +86,7 @@ class MuleSyncClient {
             val statusCode = response.status.value
             val okField = if (statusCode == 200) runCatching { response.body<PingResponseBody>().ok }.getOrNull() else null
             PingOutcome.Responded(statusCode, okField)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             PingOutcome.Unreachable
         }
 

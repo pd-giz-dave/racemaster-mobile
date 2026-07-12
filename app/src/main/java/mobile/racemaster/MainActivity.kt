@@ -3,7 +3,6 @@ package mobile.racemaster
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
@@ -19,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import mobile.racemaster.data.mule.PeripheralSyncService
 import mobile.racemaster.navigation.RacemasterNavHost
 import mobile.racemaster.ui.components.AppBanner
@@ -107,7 +107,7 @@ class MainActivity : ComponentActivity() {
     private fun requestIgnoreBatteryOptimizationsIfNeeded() {
         val powerManager = getSystemService(PowerManager::class.java) ?: return
         if (powerManager.isIgnoringBatteryOptimizations(packageName)) return
-        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))
+        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:$packageName".toUri())
         runCatching { startActivity(intent) }
     }
 

@@ -280,7 +280,7 @@ class MuleModeViewModel(
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 // Defensive backstop for the proactive check above — covers the radio being
                 // switched off in the brief window between that check and actually starting
                 // the scan, and any other way Kable's scanner can fail. The Bluetooth-state
