@@ -31,6 +31,9 @@ fun HelpScreen(onBack: () -> Unit) {
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },
+        // MainActivity's outer Scaffold already reserves the nav bar's bottom inset for
+        // every screen — without this, this inner Scaffold reserves it a second time.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->
         Column(
             modifier = Modifier

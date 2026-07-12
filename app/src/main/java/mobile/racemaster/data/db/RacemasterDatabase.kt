@@ -19,7 +19,7 @@ import mobile.racemaster.data.db.entity.RaceEntity
         BibEntryEntity::class,
         PulledRecordEntity::class,
     ],
-    version = 7,
+    version = 9,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

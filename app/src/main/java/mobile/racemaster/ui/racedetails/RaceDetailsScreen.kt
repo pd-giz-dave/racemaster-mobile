@@ -45,11 +45,11 @@ fun RaceDetailsScreen(
     viewModel: RaceDetailsViewModel = viewModel(factory = RaceDetailsViewModel.factory(mode, existingRaceId)),
 ) {
     val existingRace by viewModel.existingRace.collectAsStateWithLifecycle()
+    val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     var name by remember { mutableStateOf("") }
     var course by remember { mutableStateOf("") }
-    var serverUrl by remember { mutableStateOf("") }
     var startText by remember { mutableStateOf("") }
     var countText by remember { mutableStateOf("") }
     // Pre-fill exactly once from the loaded race, when editing — later emissions (e.g. a
@@ -62,7 +62,6 @@ fun RaceDetailsScreen(
         if (prefilled) return@LaunchedEffect
         name = race.name
         course = race.course
-        serverUrl = race.serverUrl.orEmpty()
         race.bibsRangeStart?.let { startText = it.toString() }
         race.bibsRangeCount?.let { countText = it.toString() }
         prefilled = true
@@ -98,6 +97,9 @@ fun RaceDetailsScreen(
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },
+        // MainActivity's outer Scaffold already reserves the nav bar's bottom inset for
+        // every screen — without this, this inner Scaffold reserves it a second time.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->
         Column(
             modifier = Modifier
@@ -107,6 +109,9 @@ fun RaceDetailsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (!deviceName.isNullOrBlank()) {
+                Text("Device name: $deviceName", style = MaterialTheme.typography.labelMedium)
+            }
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
@@ -119,13 +124,6 @@ fun RaceDetailsScreen(
                 onValueChange = { course = it },
                 singleLine = true,
                 label = { Text("Course (e.g. Seniors, Juniors)") },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = serverUrl,
-                onValueChange = { serverUrl = it },
-                singleLine = true,
-                label = { Text("Racemaster server URL (optional)") },
                 modifier = Modifier.fillMaxWidth(),
             )
             if (showRunnerFields) {
@@ -149,7 +147,8 @@ fun RaceDetailsScreen(
                 )
                 if (!countFieldsEnabled) {
                     Text(
-                        "Fixed once the race has real splits/entries recorded — Reset to change it.",
+                        "First bib number and number of runners are fixed once the race has " +
+                            "real splits/entries recorded — Reset to change them.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -158,7 +157,7 @@ fun RaceDetailsScreen(
                 onClick = withClickSound {
                     isSaving = true
                     scope.launch {
-                        val raceId = viewModel.save(name, course, serverUrl, start, count)
+                        val raceId = viewModel.save(name, course, start, count)
                         onSaved(raceId)
                     }
                 },

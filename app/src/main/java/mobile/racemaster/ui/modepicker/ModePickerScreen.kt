@@ -35,13 +35,19 @@ fun ModePickerScreen(
     onNewRaceNeeded: (AppMode) -> Unit,
     onReviewPastRaces: () -> Unit,
     onHelp: () -> Unit,
+    onNameDevice: () -> Unit,
     viewModel: ModePickerViewModel = viewModel(factory = ModePickerViewModel.Factory),
 ) {
     val hasActiveRace by viewModel.hasActiveRace.collectAsStateWithLifecycle()
     val activeRaceStatus by viewModel.activeRaceStatus.collectAsStateWithLifecycle()
+    val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
 
     fun handleModeTap(mode: AppMode) {
-        if (hasActiveRace) {
+        // Mule Mode never creates a race of its own (it pulls/pushes other devices' race
+        // data) — routing it through the New Race form on a fresh install was leftover
+        // behavior from before Mule Mode was simplified, and asked for fields (race
+        // name/course) it has no use for.
+        if (mode == AppMode.MULE || hasActiveRace) {
             viewModel.selectModeForExistingRace(mode) { onModeSelected(mode) }
         } else {
             onNewRaceNeeded(mode)
@@ -60,10 +66,18 @@ fun ModePickerScreen(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
+        verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.Top),
     ) {
-        activeRaceStatus?.let { status ->
-            ActiveRaceStatusCard(status)
+        Text("Set device name", style = MaterialTheme.typography.titleMedium)
+        Button(
+            onClick = withClickSound(onNameDevice),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.secondary,
+                contentColor = MaterialTheme.colorScheme.onSecondary,
+            ),
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+        ) {
+            Text(deviceName ?: "Name Device", style = MaterialTheme.typography.titleMedium)
         }
         Text("Select device mode", style = MaterialTheme.typography.titleMedium)
         ModeButton("Time Mode") { handleModeTap(AppMode.TIME) }
@@ -91,6 +105,9 @@ fun ModePickerScreen(
             ) {
                 Text("Help", style = MaterialTheme.typography.titleMedium)
             }
+        }
+        activeRaceStatus?.let { status ->
+            ActiveRaceStatusCard(status)
         }
     }
 

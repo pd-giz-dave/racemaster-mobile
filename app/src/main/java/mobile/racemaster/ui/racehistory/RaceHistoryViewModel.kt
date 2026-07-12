@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import mobile.racemaster.data.mule.DEVICE_ROLE_BIBS
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.di.appContainer
@@ -14,7 +15,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 
 sealed interface HistoryItemUi {
-    data class LocalRace(val id: Long, val label: String) : HistoryItemUi
+    data class LocalRace(val id: Long, val label: String, val createdByDeviceName: String) : HistoryItemUi
     data class MuleSource(
         val deviceRole: String,
         val raceLabel: String,
@@ -32,10 +33,12 @@ class RaceHistoryViewModel(
         raceRepository.observeAllRaces(),
         muleRepository.sourceSummaries,
     ) { races, sourceSummaries ->
-        races.map { HistoryItemUi.LocalRace(it.id, it.label) } +
-            sourceSummaries.map {
-                HistoryItemUi.MuleSource(it.sourceDeviceRole, it.sourceRaceLabel, it.syncedCount, it.totalCount)
-            }
+        races.map { HistoryItemUi.LocalRace(it.id, it.label, it.createdByDeviceName) } +
+            // Bibs before Time, matching the ordering used everywhere else a race's two
+            // record types are listed together (see RaceHistoryDetailScreen).
+            sourceSummaries
+                .sortedBy { if (it.sourceDeviceRole == DEVICE_ROLE_BIBS) 0 else 1 }
+                .map { HistoryItemUi.MuleSource(it.sourceDeviceRole, it.sourceRaceLabel, it.syncedCount, it.totalCount) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     companion object {

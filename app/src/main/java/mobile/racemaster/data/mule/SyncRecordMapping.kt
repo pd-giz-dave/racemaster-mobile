@@ -22,6 +22,7 @@ fun FinishSplitEntity.toSyncRecord(raceStartedAtMillis: Long?): SyncRecord {
         splitNumber = splitNumber,
         note = note,
         timestampMillis = timestampMillis,
+        deviceName = deviceName,
     )
 }
 
@@ -41,6 +42,7 @@ fun BibEntryEntity.toSyncRecord(): SyncRecord {
         splitNumber = splitNumber,
         note = note,
         timestampMillis = timestampMillis,
+        deviceName = deviceName,
     )
 }
 

@@ -36,10 +36,9 @@ class MuleRepository(
     val lastPulledAtMillis: Flow<Long?> = pulledRecordDao.observeLastPulledAtMillis()
     val selectedDataset: Flow<Pair<String, String>?> = settingsRepository.selectedDataset
     val isLoggedIn: Flow<Boolean> = settingsRepository.authToken.map { it != null }
-    val lockedBibsDeviceId: Flow<String?> = settingsRepository.lockedBibsDeviceId
-    val lockedTimeDeviceId: Flow<String?> = settingsRepository.lockedTimeDeviceId
     val autoSyncStopped: Flow<Boolean> = settingsRepository.autoSyncStopped
     val sourceSummaries: Flow<List<PulledSourceSummary>> = pulledRecordDao.observeSourceSummaries()
+    val deviceName: Flow<String?> = settingsRepository.deviceName
 
     fun observeRecordsForSource(sourceDeviceRole: String, sourceRaceLabel: String): Flow<List<PulledRecordDisplay>> =
         pulledRecordDao.observeForSource(sourceDeviceRole, sourceRaceLabel).map { entities ->
@@ -50,22 +49,23 @@ class MuleRepository(
 
     suspend fun readDeviceInfo(advertisement: Advertisement): DeviceInfo = pullClient.readDeviceInfo(advertisement)
 
-    /** Locks Mule onto this device (by its stable `deviceId`, not BLE address) for
-     *  auto-pull, replacing any previous lock for the *same* role only — a Bibs lock and a
-     *  Time lock coexist independently. */
-    suspend fun lockOntoDevice(deviceRole: String, deviceId: String) {
-        when (deviceRole) {
-            DEVICE_ROLE_BIBS -> settingsRepository.setLockedBibsDeviceId(deviceId)
-            DEVICE_ROLE_TIME -> settingsRepository.setLockedTimeDeviceId(deviceId)
-        }
-    }
-
     suspend fun setAutoSyncStopped(stopped: Boolean) {
         settingsRepository.setAutoSyncStopped(stopped)
     }
 
-    suspend fun pullFrom(advertisement: Advertisement, sourceDeviceRole: String, sourceRaceLabel: String): Int {
-        val records = pullClient.pull(advertisement)
+    suspend fun pullFrom(advertisement: Advertisement, sourceDeviceRole: String, sourceRaceLabel: String): Int =
+        storePulledRecords(sourceDeviceRole, sourceRaceLabel, pullClient.pull(advertisement))
+
+    /** Same destination as [pullFrom] (the Mule inbox, pushed on to the server the same way
+     *  as anything pulled over BLE) but for this device's *own* records — there's no radio
+     *  involved, [records] is read straight from the local database by the caller (see
+     *  MuleModeViewModel.pullSelf). Lets "self" be treated as a sync candidate the same as
+     *  any other discovered device, rather than relying solely on PeripheralSyncService's own
+     *  separate, invisible self-push loop. */
+    suspend fun pullFromSelf(sourceDeviceRole: String, sourceRaceLabel: String, records: List<SyncRecord>): Int =
+        storePulledRecords(sourceDeviceRole, sourceRaceLabel, records)
+
+    private suspend fun storePulledRecords(sourceDeviceRole: String, sourceRaceLabel: String, records: List<SyncRecord>): Int {
         if (records.isEmpty()) return 0
         val now = System.currentTimeMillis()
         pulledRecordDao.insertAll(

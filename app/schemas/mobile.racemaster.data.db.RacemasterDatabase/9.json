@@ -1,0 +1,347 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 9,
+    "identityHash": "b5a92d2fe105b11bce5a26b54e97048b",
+    "entities": [
+      {
+        "tableName": "races",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `course` TEXT NOT NULL, `label` TEXT NOT NULL, `createdAtMillis` INTEGER NOT NULL, `timeModeNextSplit` INTEGER NOT NULL, `bibsModeNextSplit` INTEGER NOT NULL, `timeModeStartedAtMillis` INTEGER, `timeModeStoppedAtMillis` INTEGER, `bibsRangeStart` INTEGER, `bibsRangeCount` INTEGER, `bibsModeStoppedAtMillis` INTEGER, `deviceRole` TEXT, `serverUrl` TEXT, `createdByDeviceName` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "course",
+            "columnName": "course",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "label",
+            "columnName": "label",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMillis",
+            "columnName": "createdAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timeModeNextSplit",
+            "columnName": "timeModeNextSplit",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bibsModeNextSplit",
+            "columnName": "bibsModeNextSplit",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timeModeStartedAtMillis",
+            "columnName": "timeModeStartedAtMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "timeModeStoppedAtMillis",
+            "columnName": "timeModeStoppedAtMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "bibsRangeStart",
+            "columnName": "bibsRangeStart",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "bibsRangeCount",
+            "columnName": "bibsRangeCount",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "bibsModeStoppedAtMillis",
+            "columnName": "bibsModeStoppedAtMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "deviceRole",
+            "columnName": "deviceRole",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "serverUrl",
+            "columnName": "serverUrl",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdByDeviceName",
+            "columnName": "createdByDeviceName",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "finish_splits",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `raceId` INTEGER NOT NULL, `splitNumber` INTEGER NOT NULL, `timestampMillis` INTEGER NOT NULL, `note` TEXT, `recordUuid` TEXT NOT NULL, `syncedAtMillis` INTEGER, `deviceName` TEXT NOT NULL, FOREIGN KEY(`raceId`) REFERENCES `races`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "raceId",
+            "columnName": "raceId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "splitNumber",
+            "columnName": "splitNumber",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestampMillis",
+            "columnName": "timestampMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "recordUuid",
+            "columnName": "recordUuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncedAtMillis",
+            "columnName": "syncedAtMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "deviceName",
+            "columnName": "deviceName",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_finish_splits_raceId",
+            "unique": false,
+            "columnNames": [
+              "raceId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_finish_splits_raceId` ON `${TABLE_NAME}` (`raceId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "races",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "raceId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "bib_entries",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `raceId` INTEGER NOT NULL, `bibNumber` INTEGER, `type` TEXT NOT NULL, `splitNumber` INTEGER NOT NULL, `note` TEXT, `timestampMillis` INTEGER NOT NULL, `recordUuid` TEXT NOT NULL, `syncedAtMillis` INTEGER, `deviceName` TEXT NOT NULL, FOREIGN KEY(`raceId`) REFERENCES `races`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "raceId",
+            "columnName": "raceId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bibNumber",
+            "columnName": "bibNumber",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "splitNumber",
+            "columnName": "splitNumber",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "timestampMillis",
+            "columnName": "timestampMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recordUuid",
+            "columnName": "recordUuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncedAtMillis",
+            "columnName": "syncedAtMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "deviceName",
+            "columnName": "deviceName",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_bib_entries_raceId",
+            "unique": false,
+            "columnNames": [
+              "raceId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_bib_entries_raceId` ON `${TABLE_NAME}` (`raceId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "races",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "raceId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "pulled_records",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `recordUuid` TEXT NOT NULL, `sourceDeviceRole` TEXT NOT NULL, `sourceRaceLabel` TEXT NOT NULL, `payloadJson` TEXT NOT NULL, `pulledAtMillis` INTEGER NOT NULL, `syncedAtMillis` INTEGER)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recordUuid",
+            "columnName": "recordUuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceDeviceRole",
+            "columnName": "sourceDeviceRole",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceRaceLabel",
+            "columnName": "sourceRaceLabel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payloadJson",
+            "columnName": "payloadJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pulledAtMillis",
+            "columnName": "pulledAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncedAtMillis",
+            "columnName": "syncedAtMillis",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_pulled_records_recordUuid",
+            "unique": true,
+            "columnNames": [
+              "recordUuid"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_pulled_records_recordUuid` ON `${TABLE_NAME}` (`recordUuid`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'b5a92d2fe105b11bce5a26b54e97048b')"
+    ]
+  }
+}

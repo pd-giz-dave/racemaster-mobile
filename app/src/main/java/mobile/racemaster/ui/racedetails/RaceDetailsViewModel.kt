@@ -18,12 +18,13 @@ import kotlinx.coroutines.flow.stateIn
 
 /**
  * Backs the race details screen used both for creating a new race ([existingRaceId] null) and
- * editing an existing one's name/course/server URL/runner count/first bib number — same
- * screen, same fields, for every mode (Time Mode never actually uses the bib number for
- * anything, but collects it anyway so both forms stay identical). These fields stay editable
- * after creation too, but only while the race is still "fresh" (no real splits/entries
- * recorded yet — see RaceDetailsScreen's `isFresh`); this ViewModel just writes back whatever
- * the screen passes in either way.
+ * editing an existing one's name/course/runner count/first bib number — same screen, same
+ * fields, for every mode (Time Mode never actually uses the bib number for anything, but
+ * collects it anyway so both forms stay identical). These fields stay editable after creation
+ * too, but only while the race is still "fresh" (no real splits/entries recorded yet — see
+ * RaceDetailsScreen's `isFresh`); this ViewModel just writes back whatever the screen passes
+ * in either way. Server URL is deliberately not part of this screen — it'll live under Mule
+ * Mode setup eventually, device-wide rather than per-race.
  */
 class RaceDetailsViewModel(
     val mode: AppMode,
@@ -40,17 +41,19 @@ class RaceDetailsViewModel(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     }
 
+    val deviceName: StateFlow<String?> = settingsRepository.deviceName
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     /** Creates a new race (bibsRangeStart/Count required when [mode] is BIBS) or updates the
      *  existing one's details, then arms it as the active race for new ones. Returns the
      *  resulting race id. */
-    suspend fun save(name: String, course: String, serverUrl: String, bibsRangeStart: Int?, bibsRangeCount: Int?): Long {
+    suspend fun save(name: String, course: String, bibsRangeStart: Int?, bibsRangeCount: Int?): Long {
         val trimmedName = name.trim()
         val trimmedCourse = course.trim()
-        val trimmedUrl = serverUrl.trim().ifBlank { null }
 
         val raceId = existingRaceId
         return if (raceId != null) {
-            raceRepository.updateRaceDetails(raceId, trimmedName, trimmedCourse, trimmedUrl, bibsRangeStart, bibsRangeCount)
+            raceRepository.updateRaceDetails(raceId, trimmedName, trimmedCourse, bibsRangeStart, bibsRangeCount)
             raceId
         } else {
             val newRaceId = if (mode == AppMode.BIBS) {
@@ -60,14 +63,12 @@ class RaceDetailsViewModel(
                     bibsRangeStart = requireNotNull(bibsRangeStart) { "Bibs races require a bib range start" },
                     bibsRangeCount = requireNotNull(bibsRangeCount) { "Bibs races require a bib range count" },
                     deviceRole = mode.name,
-                    serverUrl = trimmedUrl,
                 )
             } else {
                 raceRepository.startNewRace(
                     trimmedName,
                     trimmedCourse,
                     deviceRole = mode.name,
-                    serverUrl = trimmedUrl,
                     bibsRangeStart = bibsRangeStart,
                     bibsRangeCount = bibsRangeCount,
                 )

@@ -89,6 +89,9 @@ class BibsModeViewModel(
     private val raceIdFlow: StateFlow<Long?> = settingsRepository.activeRaceId
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    val deviceName: StateFlow<String?> = settingsRepository.deviceName
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     // Eagerly held so submit()/updateEntry() can read the current bib range synchronously.
     private val raceFlow: StateFlow<RaceEntity?> = raceIdFlow
         .flatMapLatest { raceId -> if (raceId == null) flowOf(null) else raceRepository.observeRace(raceId) }

@@ -1,9 +1,13 @@
 package mobile.racemaster
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -45,6 +49,7 @@ class MainActivity : ComponentActivity() {
         // Operators rely on the screen throughout a race; don't let it sleep on them.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         requestBluetoothPermissionsIfNeeded()
+        requestIgnoreBatteryOptimizationsIfNeeded()
         setContent {
             RacemasterMobileTheme {
                 Scaffold(
@@ -55,6 +60,26 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    // A process spawned in the background (e.g. the OS waking the app to service an
+    // incoming BLE connection, or right after a reinstall) can miss the one retry attempt
+    // in onCreate(): Android throws ForegroundServiceStartNotAllowedException for a
+    // foreground-service start attempted before the app has ever actually become visible —
+    // and once that happens, nothing else would ever ask again for the rest of this
+    // process's life, silently leaving this device permanently un-advertised until the
+    // whole process restarts. onResume() fires every time the app genuinely becomes
+    // visible (including unlocking into it, or switching back from another app), so
+    // retrying here is what actually recovers from that — and it's a safe no-op once the
+    // service is already running (just another START_STICKY onStartCommand, no re-init).
+    override fun onResume() {
+        super.onResume()
+        PeripheralSyncService.startIfPermitted(this)
+        // Cheap and idempotent — re-asserted on every resume (not just onCreate) as a
+        // defensive measure against any OS/OEM quirk that clears window flags across a
+        // background/foreground cycle, matching the same "don't trust a single one-shot
+        // attempt" reasoning as the service-start retry above.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     // dispatchKeyEvent is a public, ordinary-to-override Activity API — lint's RestrictedApi
@@ -69,6 +94,21 @@ class MainActivity : ComponentActivity() {
             return true
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    // FLAG_KEEP_SCREEN_ON stops the standard display-timeout from firing, but several OEM
+    // skins (seen in the field on budget devices in particular) run their own
+    // battery-optimization/Doze-style policy that dims or locks the screen on an app it's
+    // decided is "inactive" regardless of that flag. Excluding the app from battery
+    // optimization is the standard fix — this shows the system's one-tap permission dialog
+    // for it, once; if the operator declines, this just no-ops on every later launch rather
+    // than nagging (checked fresh each time in case they grant it later via system Settings
+    // instead).
+    private fun requestIgnoreBatteryOptimizationsIfNeeded() {
+        val powerManager = getSystemService(PowerManager::class.java) ?: return
+        if (powerManager.isIgnoringBatteryOptimizations(packageName)) return
+        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))
+        runCatching { startActivity(intent) }
     }
 
     private fun requestBluetoothPermissionsIfNeeded() {

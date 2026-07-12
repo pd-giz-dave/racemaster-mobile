@@ -8,12 +8,14 @@ import mobile.racemaster.data.db.entity.BIB_REQUIRED_TYPES
 import mobile.racemaster.data.db.entity.BibEntryEntity
 import mobile.racemaster.data.db.entity.BibEntryType
 import mobile.racemaster.data.db.entity.RaceEntity
+import mobile.racemaster.data.settings.SettingsRepository
 import kotlinx.coroutines.flow.Flow
 
 class BibsModeRepository(
     private val db: RacemasterDatabase,
     private val raceDao: RaceDao,
     private val bibEntryDao: BibEntryDao,
+    private val settingsRepository: SettingsRepository,
 ) {
     fun observeEntries(raceId: Long): Flow<List<BibEntryEntity>> = bibEntryDao.observeForRace(raceId)
 
@@ -44,30 +46,35 @@ class BibsModeRepository(
         createdAtMillis: Long = System.currentTimeMillis(),
         deviceRole: String? = null,
         serverUrl: String? = null,
-    ): Long = db.withTransaction {
-        val raceId = raceDao.insert(
-            RaceEntity(
-                name = name,
-                course = course,
-                label = buildRaceLabel(name, course, createdAtMillis),
-                createdAtMillis = createdAtMillis,
-                bibsRangeStart = bibsRangeStart,
-                bibsRangeCount = bibsRangeCount,
-                deviceRole = deviceRole,
-                serverUrl = serverUrl,
-            ),
-        )
-        bibEntryDao.insert(
-            BibEntryEntity(
-                raceId = raceId,
-                bibNumber = null,
-                type = BibEntryType.CLOCK,
-                splitNumber = CLOCK_SPLIT_NUMBER,
-                note = null,
-                timestampMillis = createdAtMillis,
-            ),
-        )
-        raceId
+    ): Long {
+        val deviceName = settingsRepository.getOrCreateDeviceName()
+        return db.withTransaction {
+            val raceId = raceDao.insert(
+                RaceEntity(
+                    name = name,
+                    course = course,
+                    label = buildRaceLabel(name, course, createdAtMillis),
+                    createdAtMillis = createdAtMillis,
+                    bibsRangeStart = bibsRangeStart,
+                    bibsRangeCount = bibsRangeCount,
+                    deviceRole = deviceRole,
+                    serverUrl = serverUrl,
+                    createdByDeviceName = deviceName,
+                ),
+            )
+            bibEntryDao.insert(
+                BibEntryEntity(
+                    raceId = raceId,
+                    bibNumber = null,
+                    type = BibEntryType.CLOCK,
+                    splitNumber = CLOCK_SPLIT_NUMBER,
+                    note = null,
+                    timestampMillis = createdAtMillis,
+                    deviceName = deviceName,
+                ),
+            )
+            raceId
+        }
     }
 
     suspend fun recordEntry(
@@ -77,6 +84,7 @@ class BibsModeRepository(
         note: String?,
         timestampMillis: Long = System.currentTimeMillis(),
     ) {
+        val deviceName = settingsRepository.getOrCreateDeviceName()
         db.withTransaction {
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
             val splitNumber = race.bibsModeNextSplit
@@ -89,6 +97,7 @@ class BibsModeRepository(
                     splitNumber = splitNumber,
                     note = note,
                     timestampMillis = timestampMillis,
+                    deviceName = deviceName,
                 ),
             )
         }
@@ -113,6 +122,7 @@ class BibsModeRepository(
     }
 
     suspend fun stopBibsMode(raceId: Long, stoppedAtMillis: Long = System.currentTimeMillis()) {
+        val deviceName = settingsRepository.getOrCreateDeviceName()
         db.withTransaction {
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
             val splitNumber = race.bibsModeNextSplit
@@ -126,6 +136,7 @@ class BibsModeRepository(
                     splitNumber = splitNumber,
                     note = null,
                     timestampMillis = stoppedAtMillis,
+                    deviceName = deviceName,
                 ),
             )
         }
@@ -135,6 +146,7 @@ class BibsModeRepository(
     // immediately ready to log again — re-inserting Clock keeps that invariant true after a
     // reset, same as it's kept true at creation.
     suspend fun resetBibsMode(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()) {
+        val deviceName = settingsRepository.getOrCreateDeviceName()
         db.withTransaction {
             bibEntryDao.deleteAllForRace(raceId)
             raceDao.resetBibsMode(raceId)
@@ -146,6 +158,7 @@ class BibsModeRepository(
                     splitNumber = CLOCK_SPLIT_NUMBER,
                     note = null,
                     timestampMillis = resetAtMillis,
+                    deviceName = deviceName,
                 ),
             )
         }

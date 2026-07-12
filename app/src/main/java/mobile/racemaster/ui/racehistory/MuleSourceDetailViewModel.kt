@@ -16,9 +16,10 @@ data class MulePulledRecordUi(
     val recordUuid: String,
     val action: String,
     val number: Int?,
-    val time: String?,
+    val splitNumber: Int,
+    val elapsedMillis: Long,
     val note: String?,
-    val timestampMillis: Long,
+    val deviceName: String,
     val synced: Boolean,
 )
 
@@ -44,9 +45,10 @@ class MuleSourceDetailViewModel(
                         recordUuid = it.record.recordUuid,
                         action = it.record.action,
                         number = it.record.number,
-                        time = it.record.time,
+                        splitNumber = it.record.splitNumber ?: 0,
+                        elapsedMillis = parseElapsedClock(it.record.time),
                         note = it.record.note,
-                        timestampMillis = it.record.timestampMillis,
+                        deviceName = it.record.deviceName,
                         synced = it.syncedAtMillis != null,
                     )
                 },
@@ -61,4 +63,15 @@ class MuleSourceDetailViewModel(
             }
         }
     }
+}
+
+// Inverse of SyncRecordMapping's formatElapsedAsClock — the wire format only carries elapsed
+// time as an "HH:MM:SS" string (matching the server's finisher-time convention), so a pulled
+// Time Mode record's centiseconds aren't recoverable here; this reuses the same SplitRow the
+// live screen and local race history use, at whatever precision the wire actually carried.
+private fun parseElapsedClock(time: String?): Long {
+    val parts = time?.split(":")?.mapNotNull { it.toIntOrNull() } ?: return 0L
+    if (parts.size != 3) return 0L
+    val (hours, minutes, seconds) = parts
+    return ((hours * 3600L) + (minutes * 60L) + seconds) * 1000L
 }

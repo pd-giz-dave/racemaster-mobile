@@ -1,35 +1,52 @@
 package mobile.racemaster.data.repository
 
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import mobile.racemaster.data.db.RacemasterDatabase
 import mobile.racemaster.data.db.entity.RaceEntity
+import mobile.racemaster.data.settings.SettingsRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class TimeModeRepositoryTest {
 
+    @get:Rule
+    val tempFolder = TemporaryFolder()
+
     private lateinit var db: RacemasterDatabase
     private lateinit var repository: TimeModeRepository
     private var raceId: Long = 0
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Before
     fun setUp() = runTest {
         db = Room.inMemoryDatabaseBuilder(
             ApplicationProvider.getApplicationContext(),
             RacemasterDatabase::class.java,
         ).build()
-        repository = TimeModeRepository(db, db.raceDao(), db.finishSplitDao())
+        val settingsRepository = SettingsRepository(
+            PreferenceDataStoreFactory.create(
+                scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob()),
+                produceFile = { tempFolder.newFile("test.preferences_pb") },
+            ),
+        )
+        repository = TimeModeRepository(db, db.raceDao(), db.finishSplitDao(), settingsRepository)
         raceId = db.raceDao().insert(RaceEntity(label = "Test Race", createdAtMillis = 0L))
     }
 

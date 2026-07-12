@@ -40,6 +40,9 @@ fun RaceHistoryScreen(
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },
+        // MainActivity's outer Scaffold already reserves the nav bar's bottom inset for
+        // every screen — without this, this inner Scaffold reserves it a second time.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->
         if (items.isEmpty()) {
             Box(modifier = Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -59,6 +62,9 @@ fun RaceHistoryScreen(
                     when (item) {
                         is HistoryItemUi.LocalRace -> ListItem(
                             headlineContent = { Text(item.label) },
+                            supportingContent = {
+                                if (item.createdByDeviceName.isNotBlank()) Text("Created by ${item.createdByDeviceName}")
+                            },
                             modifier = Modifier.clickable(onClick = withClickSound { onRaceSelected(item.id) }),
                         )
                         is HistoryItemUi.MuleSource -> ListItem(

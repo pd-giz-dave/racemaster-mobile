@@ -28,4 +28,8 @@ data class FinishSplitEntity(
     // BLE/HTTP and is used for sync dedup instead.
     val recordUuid: String = java.util.UUID.randomUUID().toString(),
     val syncedAtMillis: Long? = null,
+    // The recording device's memorable name (SettingsRepository.getOrCreateDeviceName()) at
+    // the moment this split was captured — baked in at creation, not just reconstructed
+    // later from a Mule pull's transient DeviceInfo read.
+    val deviceName: String = "",
 )

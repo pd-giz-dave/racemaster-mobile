@@ -31,6 +31,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
+    <!-- FLAG_KEEP_SCREEN_ON (set on MainActivity's window) stops the *display timeout* from
+         firing, but several OEM skins (seen on budget devices in particular) run their own
+         battery-optimization/Doze-style policy that can still dim or lock the screen on an
+         app they've decided is "inactive," ignoring that flag. Excluding this app from
+         battery optimization (requested once at startup, see MainActivity) is the standard
+         fix for that gap — required to even show that system prompt. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <application
         android:name=".RacemasterApplication"
         android:allowBackup="true"
@@ -44,8 +52,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.RacemasterMobile"
-            android:windowSoftInputMode="adjustResize">
+            android:theme="@style/Theme.RacemasterMobile">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 

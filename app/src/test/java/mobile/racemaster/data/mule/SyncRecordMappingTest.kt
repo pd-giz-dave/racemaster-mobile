@@ -9,13 +9,14 @@ import org.junit.Test
 
 class SyncRecordMappingTest {
 
-    private fun split(splitNumber: Int, timestampMillis: Long, note: String? = null) = FinishSplitEntity(
+    private fun split(splitNumber: Int, timestampMillis: Long, note: String? = null, deviceName: String = "") = FinishSplitEntity(
         id = 1L,
         raceId = 1L,
         splitNumber = splitNumber,
         timestampMillis = timestampMillis,
         note = note,
         recordUuid = "split-uuid",
+        deviceName = deviceName,
     )
 
     private fun bibEntry(
@@ -24,6 +25,7 @@ class SyncRecordMappingTest {
         splitNumber: Int,
         timestampMillis: Long,
         note: String? = null,
+        deviceName: String = "",
     ) = BibEntryEntity(
         id = 1L,
         raceId = 1L,
@@ -33,6 +35,7 @@ class SyncRecordMappingTest {
         note = note,
         timestampMillis = timestampMillis,
         recordUuid = "bib-uuid",
+        deviceName = deviceName,
     )
 
     // FinishSplitEntity.toSyncRecord
@@ -110,5 +113,13 @@ class SyncRecordMappingTest {
     fun bibEntryCarriesRawWallClockTimestampThrough() {
         val record = bibEntry(101, BibEntryType.FINISH, splitNumber = 1, timestampMillis = 1_700_000_000_000L).toSyncRecord()
         assertEquals(1_700_000_000_000L, record.timestampMillis)
+    }
+
+    @Test
+    fun deviceNameCarriesThroughForBothRecordTypes() {
+        val splitRecord = split(splitNumber = 1, timestampMillis = 0L, deviceName = "clever-cricket").toSyncRecord(0L)
+        assertEquals("clever-cricket", splitRecord.deviceName)
+        val bibRecord = bibEntry(101, BibEntryType.FINISH, splitNumber = 1, timestampMillis = 0L, deviceName = "clever-cricket").toSyncRecord()
+        assertEquals("clever-cricket", bibRecord.deviceName)
     }
 }

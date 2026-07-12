@@ -60,14 +60,15 @@ interface RaceDao {
     suspend fun resetBibsMode(raceId: Long)
 
     // Editable at any time via the race details screen, including after the race has
-    // stopped — name/course typos or the server URL shouldn't be permanently locked in once
-    // logging is done. The date portion of the label is deliberately not touched here, since
-    // it stays fixed to when the race was originally created. bibsRangeStart/bibsRangeCount
-    // are included here too, but the screen only actually lets them change while the race is
-    // still "fresh" (no real splits/entries recorded) — otherwise it just writes back the
-    // same values it read.
+    // stopped — name/course typos shouldn't be permanently locked in once logging is done.
+    // The date portion of the label is deliberately not touched here, since it stays fixed to
+    // when the race was originally created. bibsRangeStart/bibsRangeCount are included here
+    // too, but the screen only actually lets them change while the race is still "fresh" (no
+    // real splits/entries recorded) — otherwise it just writes back the same values it read.
+    // serverUrl is deliberately NOT touched here — it's not exposed on this screen (it'll
+    // live under Mule Mode setup eventually), so an edit here must never clobber it.
     @Query(
-        "UPDATE races SET name = :name, course = :course, label = :label, serverUrl = :serverUrl, " +
+        "UPDATE races SET name = :name, course = :course, label = :label, " +
             "bibsRangeStart = :bibsRangeStart, bibsRangeCount = :bibsRangeCount WHERE id = :raceId",
     )
     suspend fun updateDetails(
@@ -75,7 +76,6 @@ interface RaceDao {
         name: String,
         course: String,
         label: String,
-        serverUrl: String?,
         bibsRangeStart: Int?,
         bibsRangeCount: Int?,
     )

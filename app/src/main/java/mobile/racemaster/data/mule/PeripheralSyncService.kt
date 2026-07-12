@@ -81,6 +81,7 @@ class PeripheralSyncService : Service() {
     private var dataCharacteristic: BluetoothGattCharacteristic? = null
 
     private var deviceId: String = ""
+    private var deviceName: String = ""
 
     @Volatile
     private var servingState = ServingState()
@@ -105,12 +106,48 @@ class PeripheralSyncService : Service() {
     override fun onCreate() {
         super.onCreate()
         startForegroundWithNotification()
-        serviceScope.launch {
-            deviceId = container.settingsRepository.getOrCreateDeviceId()
-        }
         observeServingState()
-        startGattServerAndAdvertising()
         startSelfSyncLoop()
+        startAdvertisingRetryLoop()
+    }
+
+    // Advertising (and the GATT server backing it) used to start once, at service creation,
+    // gated on a one-shot Bluetooth-enabled check — meaning a device that had Bluetooth off
+    // at that exact moment (or toggled it off and back on at any later point) would silently
+    // never advertise itself again for the rest of the process's life, with no way to
+    // recover short of killing the whole app. This instead re-checks periodically and
+    // (re)establishes the server/advertiser fresh on every transition from disabled to
+    // enabled, so every device stays discoverable whenever Bluetooth genuinely is available
+    // — in every mode (Time/Bibs/Mule), matching the same requirement the scanning side
+    // already got (see BluetoothStateRepository / MuleModeViewModel's own retry loop).
+    private fun startAdvertisingRetryLoop() {
+        serviceScope.launch {
+            // Advertising must wait for deviceName to actually resolve first — attempting it
+            // immediately would race the DataStore read and could advertise a blank name for
+            // the brief window before it completes. getOrCreateDeviceName() always ends up
+            // with a real generated name, so this is purely an ordering fix, not a "wait
+            // indefinitely" concern.
+            deviceId = container.settingsRepository.getOrCreateDeviceId()
+            deviceName = container.settingsRepository.getOrCreateDeviceName()
+            var wasEnabled = false
+            while (isActive) {
+                val enabled = container.bluetoothStateRepository.isEnabled()
+                if (enabled) {
+                    if (!wasEnabled) {
+                        // Just came on (or this is the first tick) — any earlier
+                        // server/advertiser reference is stale once the radio's cycled, so
+                        // tear down before rebuilding fresh rather than trusting it's still
+                        // good.
+                        closeGattServerIfPossible()
+                        stopAdvertisingIfPossible()
+                        gattServer = null
+                    }
+                    if (gattServer == null) startGattServerAndAdvertising()
+                }
+                wasEnabled = enabled
+                delay(BLUETOOTH_RECHECK_INTERVAL)
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
@@ -216,6 +253,10 @@ class PeripheralSyncService : Service() {
 
     @SuppressLint("MissingPermission")
     private fun startGattServerAndAdvertising() {
+        // Belt-and-braces alongside the call-site ordering in onCreate() — a nameless
+        // device has nothing meaningful to identify itself with in the nearby-devices list
+        // (see MuleModeScreen), so it shouldn't be discoverable at all until it has one.
+        if (deviceName.isBlank()) return
         if (!hasConnectPermission() || !hasAdvertisePermission()) return
         val bluetoothManager = getSystemService(BluetoothManager::class.java) ?: return
         val adapter = bluetoothManager.adapter ?: return
@@ -320,6 +361,7 @@ class PeripheralSyncService : Service() {
                 deviceRole = servingState.mode?.name.orEmpty(),
                 raceLabel = servingState.raceLabel,
                 unsyncedCount = servingState.unsyncedCount,
+                deviceName = deviceName,
             )
             val bytes = json.encodeToString(info).toByteArray(Charsets.UTF_8)
             val value = bytes.drop(offset).toByteArray()
@@ -513,6 +555,7 @@ class PeripheralSyncService : Service() {
         private const val CHANNEL_ID = "mule_sync"
         private const val NOTIFICATION_ID = 1
         private val SELF_SYNC_INTERVAL = 20_000.milliseconds
+        private val BLUETOOTH_RECHECK_INTERVAL = 3_000.milliseconds
         val CLIENT_CHARACTERISTIC_CONFIG_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         /** No-ops quietly if Bluetooth runtime permissions haven't been granted yet — the

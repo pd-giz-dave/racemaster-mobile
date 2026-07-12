@@ -26,4 +26,8 @@ data class RaceEntity(
     // the device-wide server URL Mule Mode logs in with — not yet wired into any sync
     // behavior (a broader Mule Mode revamp is planned separately).
     val serverUrl: String? = null,
+    // This phone's memorable name (SettingsRepository.getOrCreateDeviceName()) at the moment
+    // the race was created — fixed at creation, not updated if the device is later renamed,
+    // so history always shows who actually created a given race.
+    val createdByDeviceName: String = "",
 )

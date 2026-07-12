@@ -19,7 +19,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import mobile.racemaster.util.formatWallClock
+import mobile.racemaster.data.mule.DEVICE_ROLE_BIBS
+import mobile.racemaster.ui.components.BibEntryRow
+import mobile.racemaster.ui.components.SplitRow
 import mobile.racemaster.util.withClickSound
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -40,6 +42,9 @@ fun MuleSourceDetailScreen(
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },
+        // MainActivity's outer Scaffold already reserves the nav bar's bottom inset for
+        // every screen — without this, this inner Scaffold reserves it a second time.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->
         Column(
             modifier = Modifier
@@ -47,7 +52,7 @@ fun MuleSourceDetailScreen(
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text("Pulled via Mule (${uiState.deviceRole})", style = MaterialTheme.typography.titleMedium)
             if (uiState.records.isEmpty()) {
@@ -55,19 +60,30 @@ fun MuleSourceDetailScreen(
             } else {
                 uiState.records.forEach { record ->
                     Column {
-                        val numberSuffix = record.number?.let { "  #$it" }.orEmpty()
-                        val noteSuffix = record.note?.let { "  $it" }.orEmpty()
-                        Text(
-                            "${record.action}$numberSuffix$noteSuffix",
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(formatWallClock(record.timestampMillis), style = MaterialTheme.typography.bodySmall)
-                        if (!record.synced) {
-                            Text(
-                                "● unsynced",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.tertiary,
+                        // A Mule source can hold records pulled from more than one physical
+                        // phone under the same race label, unlike a local race's own history
+                        // (always one device) — so, unlike SplitRow/BibEntryRow's live usage,
+                        // the device name is shown per record here rather than once for the
+                        // whole screen.
+                        if (uiState.deviceRole == DEVICE_ROLE_BIBS) {
+                            BibEntryRow(
+                                splitNumber = record.splitNumber,
+                                bibNumber = record.number,
+                                typeLabel = record.action,
+                                note = record.note,
+                                dupSplitRefs = emptyList(),
+                                synced = record.synced,
                             )
+                        } else {
+                            SplitRow(
+                                splitNumber = record.splitNumber,
+                                elapsedMillis = record.elapsedMillis,
+                                note = record.note,
+                                synced = record.synced,
+                            )
+                        }
+                        if (record.deviceName.isNotBlank()) {
+                            Text(record.deviceName, style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }

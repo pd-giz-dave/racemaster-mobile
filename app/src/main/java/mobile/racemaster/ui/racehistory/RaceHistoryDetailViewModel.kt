@@ -37,6 +37,7 @@ data class ArchivedBibEntryUi(
 
 data class RaceHistoryDetailUiState(
     val raceLabel: String = "",
+    val deviceName: String = "",
     val splits: List<ArchivedSplitUi> = emptyList(),
     val bibEntries: List<ArchivedBibEntryUi> = emptyList(),
     val lastSyncedAtMillis: Long? = null,
@@ -64,6 +65,7 @@ class RaceHistoryDetailViewModel(
         val dupRefs = findDuplicateSplitRefs(entries)
         RaceHistoryDetailUiState(
             raceLabel = race?.label.orEmpty(),
+            deviceName = race?.createdByDeviceName.orEmpty(),
             splits = splits.map {
                 ArchivedSplitUi(
                     id = it.id,

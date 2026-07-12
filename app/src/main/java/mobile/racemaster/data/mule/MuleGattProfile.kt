@@ -56,6 +56,11 @@ data class DeviceInfo(
     val deviceRole: String,
     val raceLabel: String,
     val unsyncedCount: Int,
+    // The serving phone's memorable name (SettingsRepository.getOrCreateDeviceName()) — lets
+    // Mule Mode's nearby-devices list show a human-readable identity rather than just a race
+    // label (which may not even be set yet). Defaulted for backward compatibility with an
+    // older-app peer whose DeviceInfo predates this field.
+    val deviceName: String = "",
 )
 
 /**
@@ -75,4 +80,9 @@ data class SyncRecord(
     val splitNumber: Int?,
     val note: String?,
     val timestampMillis: Long,
+    // The recording phone's memorable name (see FinishSplitEntity/BibEntryEntity's own
+    // deviceName column) — carried over BLE so Mule's pulled-record history can show who
+    // recorded what. Defaulted for backward compatibility with any already-pulled record
+    // (or older-app peer) whose payload predates this field.
+    val deviceName: String = "",
 )

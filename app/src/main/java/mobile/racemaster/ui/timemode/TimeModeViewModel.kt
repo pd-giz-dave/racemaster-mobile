@@ -58,6 +58,9 @@ class TimeModeViewModel(
     private val raceIdFlow: StateFlow<Long?> = settingsRepository.activeRaceId
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    val deviceName: StateFlow<String?> = settingsRepository.deviceName
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     val uiState: StateFlow<TimeModeUiState> = raceIdFlow
         .flatMapLatest { raceId ->
             if (raceId == null) {

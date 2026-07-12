@@ -23,7 +23,9 @@ import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.bibsmode.BibsModeScreen
 import mobile.racemaster.ui.help.HelpScreen
 import mobile.racemaster.ui.modepicker.ModePickerScreen
+import mobile.racemaster.ui.modepicker.NameDeviceScreen
 import mobile.racemaster.ui.mulemode.MuleModeScreen
+import mobile.racemaster.ui.mulemode.MuleServerSetupScreen
 import mobile.racemaster.ui.racedetails.RaceDetailsScreen
 import mobile.racemaster.ui.racehistory.MuleSourceDetailScreen
 import mobile.racemaster.ui.racehistory.RaceHistoryDetailScreen
@@ -74,10 +76,14 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                         onNewRaceNeeded = { mode -> navController.navigate(Routes.raceDetails(mode, raceId = null)) },
                         onReviewPastRaces = { navController.navigate(Routes.RACE_HISTORY) },
                         onHelp = { navController.navigate(Routes.HELP) },
+                        onNameDevice = { navController.navigate(Routes.NAME_DEVICE) },
                     )
                 }
                 composable(Routes.HELP) {
                     HelpScreen(onBack = { navController.popBackStack() })
+                }
+                composable(Routes.NAME_DEVICE) {
+                    NameDeviceScreen(onDone = { navController.popBackStack() })
                 }
                 composable(Routes.TIME_MODE) {
                     TimeModeScreen(
@@ -94,7 +100,13 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                     )
                 }
                 composable(Routes.MULE_MODE) {
-                    MuleModeScreen(onChangeMode = { navController.navigateToModePicker() })
+                    MuleModeScreen(
+                        onChangeMode = { navController.navigateToModePicker() },
+                        onSetupServer = { navController.navigate(Routes.MULE_SERVER_SETUP) },
+                    )
+                }
+                composable(Routes.MULE_SERVER_SETUP) {
+                    MuleServerSetupScreen(onDone = { navController.popBackStack() })
                 }
                 composable(
                     route = Routes.RACE_DETAILS,

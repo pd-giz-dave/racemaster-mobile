@@ -43,6 +43,9 @@ class ModePickerViewModel(
         .map { it != null }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    val deviceName: StateFlow<String?> = settingsRepository.deviceName
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     // Surfaces the in-progress race (if any) so the picker can tell the operator what's
     // still open and which mode to return to, rather than letting them lose track of it.
     val activeRaceStatus: StateFlow<ActiveRaceStatus?> = settingsRepository.activeRaceId

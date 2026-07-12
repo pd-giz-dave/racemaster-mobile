@@ -2,10 +2,8 @@ package mobile.racemaster.ui.racehistory
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -17,13 +15,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.ui.bibsmode.displayName
-import mobile.racemaster.ui.timemode.formatElapsed
+import mobile.racemaster.ui.components.BibEntryRow
+import mobile.racemaster.ui.components.SplitRow
 import mobile.racemaster.util.formatWallClock
 import mobile.racemaster.util.withClickSound
 
@@ -44,6 +42,9 @@ fun RaceHistoryDetailScreen(
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },
+        // MainActivity's outer Scaffold already reserves the nav bar's bottom inset for
+        // every screen — without this, this inner Scaffold reserves it a second time.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->
         Column(
             modifier = Modifier
@@ -51,74 +52,45 @@ fun RaceHistoryDetailScreen(
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            if (uiState.deviceName.isNotBlank()) {
+                Text("Recorded by ${uiState.deviceName}", style = MaterialTheme.typography.labelSmall)
+            }
             Text(
                 "Last synced: ${uiState.lastSyncedAtMillis?.let { formatWallClock(it) } ?: "never"}",
                 style = MaterialTheme.typography.bodyMedium,
             )
 
-            Text("Time splits", style = MaterialTheme.typography.titleMedium)
-            if (uiState.splits.isEmpty()) {
-                Text("No splits recorded", style = MaterialTheme.typography.bodyMedium)
-            } else {
-                uiState.splits.sortedBy { it.splitNumber }.forEach { split ->
-                    val noteSuffix = split.note?.let { "  $it" }.orEmpty()
-                    Column {
-                        Text(
-                            "#${split.splitNumber}  ${formatElapsed(split.elapsedMillis)}$noteSuffix",
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(formatWallClock(split.timestampMillis), style = MaterialTheme.typography.bodySmall)
-                        if (!split.synced) {
-                            Text(
-                                "● unsynced",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.tertiary,
-                            )
-                        }
-                    }
-                }
-            }
-
-            Text(
-                "Bib entries",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(top = 16.dp),
-            )
+            // Bibs before Time, matching the same ordering used everywhere else a race's two
+            // record types are listed together (see RaceHistoryViewModel's Mule-source list).
+            Text("Bib entries", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
             if (uiState.bibEntries.isEmpty()) {
                 Text("No bib entries recorded", style = MaterialTheme.typography.bodyMedium)
             } else {
                 uiState.bibEntries.sortedBy { it.splitNumber }.forEach { entry ->
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("#${entry.splitNumber}", style = MaterialTheme.typography.bodyLarge)
-                            Text(entry.bibNumber?.toString() ?: "–", style = MaterialTheme.typography.bodyLarge)
-                            Text(entry.type.displayName(), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                            if (!entry.note.isNullOrBlank()) {
-                                Text(entry.note, style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                        Text(formatWallClock(entry.timestampMillis), style = MaterialTheme.typography.bodySmall)
-                        if (entry.dupSplitRefs.isNotEmpty()) {
-                            Text(
-                                "dup of ${entry.dupSplitRefs.joinToString(", ") { "#$it" }}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                        if (!entry.synced) {
-                            Text(
-                                "● unsynced",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.tertiary,
-                            )
-                        }
-                    }
+                    BibEntryRow(
+                        splitNumber = entry.splitNumber,
+                        bibNumber = entry.bibNumber,
+                        typeLabel = entry.type.displayName(),
+                        note = entry.note,
+                        dupSplitRefs = entry.dupSplitRefs,
+                        synced = entry.synced,
+                    )
+                }
+            }
+
+            Text("Time splits", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
+            if (uiState.splits.isEmpty()) {
+                Text("No splits recorded", style = MaterialTheme.typography.bodyMedium)
+            } else {
+                uiState.splits.sortedBy { it.splitNumber }.forEach { split ->
+                    SplitRow(
+                        splitNumber = split.splitNumber,
+                        elapsedMillis = split.elapsedMillis,
+                        note = split.note,
+                        synced = split.synced,
+                    )
                 }
             }
         }

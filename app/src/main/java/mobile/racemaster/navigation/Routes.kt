@@ -12,6 +12,8 @@ object Routes {
     const val MULE_SOURCE_DETAIL = "mule_source_detail/{deviceRole}/{raceLabel}"
     const val RACE_DETAILS = "race_details/{mode}/{raceId}"
     const val HELP = "help"
+    const val NAME_DEVICE = "name_device"
+    const val MULE_SERVER_SETUP = "mule_server_setup"
 
     fun raceHistoryDetail(raceId: Long) = "race_history_detail/$raceId"
 

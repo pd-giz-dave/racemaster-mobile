@@ -8,6 +8,9 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import mobile.racemaster.util.generateDeviceName
+
+data class ServerSetupDraft(val url: String, val username: String, val password: String)
 
 class SettingsRepository(
     private val dataStore: DataStore<Preferences>,
@@ -16,13 +19,15 @@ class SettingsRepository(
         val APP_MODE = stringPreferencesKey("app_mode")
         val ACTIVE_RACE_ID = longPreferencesKey("active_race_id")
         val DEVICE_ID = stringPreferencesKey("device_id")
+        val DEVICE_NAME = stringPreferencesKey("device_name")
         val SERVER_BASE_URL = stringPreferencesKey("server_base_url")
         val AUTH_TOKEN = stringPreferencesKey("auth_token")
         val SELECTED_DATASET_OWNER = stringPreferencesKey("selected_dataset_owner")
         val SELECTED_DATASET_FULL_NAME = stringPreferencesKey("selected_dataset_full_name")
-        val LOCKED_BIBS_DEVICE_ID = stringPreferencesKey("locked_bibs_device_id")
-        val LOCKED_TIME_DEVICE_ID = stringPreferencesKey("locked_time_device_id")
         val AUTO_SYNC_STOPPED = booleanPreferencesKey("auto_sync_stopped")
+        val DRAFT_SERVER_URL = stringPreferencesKey("draft_server_url")
+        val DRAFT_USERNAME = stringPreferencesKey("draft_username")
+        val DRAFT_PASSWORD = stringPreferencesKey("draft_password")
     }
 
     val appMode: Flow<AppMode?> = dataStore.data.map { prefs ->
@@ -43,18 +48,15 @@ class SettingsRepository(
     // RacemasterDatabase) wipes every race — and every Mule-pulled record — but leaves all of
     // this DataStore-backed state untouched, since it's an entirely separate storage
     // mechanism. Without this, the app would silently resume into a mode screen referencing a
-    // race that no longer exists (crashing the moment any action button hits it), or Mule
-    // Mode would silently re-arm auto-sync against a locked device from before the wipe as if
-    // nothing happened. Called once at startup after validating the referenced race is
-    // actually gone (see AppEntryViewModel). Login/dataset selection (server URL, auth token,
-    // selected dataset) are deliberately left alone — a local data wipe doesn't invalidate
-    // who you're logged in as or which server-side dataset you'd push to.
+    // race that no longer exists (crashing the moment any action button hits it). Called once
+    // at startup after validating the referenced race is actually gone (see
+    // AppEntryViewModel). Login/dataset selection (server URL, auth token, selected dataset)
+    // are deliberately left alone — a local data wipe doesn't invalidate who you're logged in
+    // as or which server-side dataset you'd push to.
     suspend fun clearStaleSessionState() {
         dataStore.edit { prefs ->
             prefs.remove(Keys.ACTIVE_RACE_ID)
             prefs.remove(Keys.APP_MODE)
-            prefs.remove(Keys.LOCKED_BIBS_DEVICE_ID)
-            prefs.remove(Keys.LOCKED_TIME_DEVICE_ID)
         }
     }
 
@@ -69,6 +71,26 @@ class SettingsRepository(
             }
         }
         return requireNotNull(deviceId)
+    }
+
+    // The human-facing counterpart to deviceId — memorable ("clever-cricket") rather than a
+    // UUID, since this is what an operator reads out loud or picks out of a list of nearby
+    // phones. Generated once on first access (same get-or-create pattern as deviceId above),
+    // then freely renamable by the operator via setDeviceName.
+    val deviceName: Flow<String?> = dataStore.data.map { prefs -> prefs[Keys.DEVICE_NAME] }
+
+    suspend fun getOrCreateDeviceName(): String {
+        var deviceName: String? = null
+        dataStore.edit { prefs ->
+            deviceName = prefs[Keys.DEVICE_NAME] ?: generateDeviceName().also {
+                prefs[Keys.DEVICE_NAME] = it
+            }
+        }
+        return requireNotNull(deviceName)
+    }
+
+    suspend fun setDeviceName(name: String) {
+        dataStore.edit { prefs -> prefs[Keys.DEVICE_NAME] = name }
     }
 
     val serverBaseUrl: Flow<String?> = dataStore.data.map { prefs -> prefs[Keys.SERVER_BASE_URL] }
@@ -87,6 +109,29 @@ class SettingsRepository(
         }
     }
 
+    // What the operator last typed into the Setup Server form — kept separate from the
+    // confirmed session above (serverBaseUrl/authToken, only updated on a *successful*
+    // login) so the form stays sticky even after a failed attempt (e.g. a password typo),
+    // letting the operator just fix the one field rather than retyping everything. Persisted
+    // the same way the auth token already is; this app has no encrypted-storage story yet,
+    // and a saved password here is no more sensitive than the long-lived bearer token it
+    // sits next to.
+    val serverSetupDraft: Flow<ServerSetupDraft> = dataStore.data.map { prefs ->
+        ServerSetupDraft(
+            url = prefs[Keys.DRAFT_SERVER_URL].orEmpty(),
+            username = prefs[Keys.DRAFT_USERNAME].orEmpty(),
+            password = prefs[Keys.DRAFT_PASSWORD].orEmpty(),
+        )
+    }
+
+    suspend fun saveServerSetupDraft(url: String, username: String, password: String) {
+        dataStore.edit { prefs ->
+            prefs[Keys.DRAFT_SERVER_URL] = url
+            prefs[Keys.DRAFT_USERNAME] = username
+            prefs[Keys.DRAFT_PASSWORD] = password
+        }
+    }
+
     // Picking a *different* dataset than the one currently selected stops auto-sync — a
     // stray tap shouldn't silently redirect an already-running auto-sync's data to a new
     // target; the operator has to consciously confirm via Force Sync Now (which also
@@ -98,23 +143,6 @@ class SettingsRepository(
             prefs[Keys.SELECTED_DATASET_FULL_NAME] = fullName
             if (changed) prefs[Keys.AUTO_SYNC_STOPPED] = true
         }
-    }
-
-    // The Bibs/Time device Mule is currently "locked" onto for auto-pull — one of each role
-    // at most, so Mule can attach to a Bibs phone and a Time phone at the same time (or just
-    // one of either). Identified by that device's own persisted deviceId (stable across
-    // reconnects/app restarts), not its BLE address (which can rotate). Set whenever the
-    // operator manually pulls from a device of that role, replacing any previous lock for
-    // that same role.
-    val lockedBibsDeviceId: Flow<String?> = dataStore.data.map { prefs -> prefs[Keys.LOCKED_BIBS_DEVICE_ID] }
-    val lockedTimeDeviceId: Flow<String?> = dataStore.data.map { prefs -> prefs[Keys.LOCKED_TIME_DEVICE_ID] }
-
-    suspend fun setLockedBibsDeviceId(deviceId: String) {
-        dataStore.edit { prefs -> prefs[Keys.LOCKED_BIBS_DEVICE_ID] = deviceId }
-    }
-
-    suspend fun setLockedTimeDeviceId(deviceId: String) {
-        dataStore.edit { prefs -> prefs[Keys.LOCKED_TIME_DEVICE_ID] = deviceId }
     }
 
     // Explicit operator on/off switch for the background auto-sync loop, independent of

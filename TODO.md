@@ -165,16 +165,37 @@ scoped to Mule ↔ Time/Bibs over BLE + Mule → racemaster server over HTTP; mu
   Mode, one Mule Mode, log some entries, pull, log in, push) should be done before relying
   on this for a real event.**
 
+## Random ToDo's
+
+- [x] do not advertise self on bluetooth until a device name has been set
+- [x] show unsync'd lines in red
+- [x] new race form not showing device name in canonical form
+- [x] on cubot the time mode list is truncated at bottom of screen
+- [x] on cubot bibs mode does not fit any list to due excess space used by something at bottom of screen
+- [x] add more adjectives and nouns for device name suggestions
+- [x] xperia crashes on opening the mule mode screen when bluetooth not on
+- [x] allow mule mode to connect to whatever others it can see, no limits
+- [x] fractional seconds are not getting to the mule
+- [ ] on the mule history put source device name on the same line as the data
+- [x] detect if bluetooth is off and warn user
+- [ ] use grid for bibs mode digit keypad, not buttons, like the built-in numeric keyboard
+- [x] treat 'self' as a discovered device and list just like the others but with "(self)" suffix
+- [ ] treat 404 as an expected response when ping'ing or post/put a server that is not a race master server
+      and just invalidate the server (with app header feedback), put keep re-trying
+- [x] in mule mode list discovered devices as just device-name race-id, show in red if unsync'd or green if sync'd,
+      ie. 1 line per device, no pull button, its auto and assumed, if it can see it it pulls from it
+- [x] verify screen blank/lock is disabled when Racemaster running
+
 ## Mule Mode changes
 
 - [ ] is agnostic to context, it just transfers whatever it can see, including self
-- [ ] the Racemaster server needs a new folder alongside data - mobile - that just receives whatever it is sent
+- [x] the Racemaster server needs a new folder alongside data - mobile - that just receives whatever it is sent
 - [ ] the mule mode no longer needs to see the races/datasets on the server, that association will be made
       by the Racemaster web app by user selection (ToDo)
 - [ ] the mobile folder contains files that represent what was grabbed from the various phones identified
       by race-course-date, within that are sections for each phone+mode, the phone needs an memorable id (see below)
 - [ ] the sections are updated/replaced in their entirety for each sync, so no record uuid required
-- [ ] must be able to identify dup phones and de-select them, the id mechanism must be such that
+- [x] must be able to identify dup phones and de-select them, the id mechanism must be such that
       a user can just ask whoever is holding the phone "who are you" so they need to be able to see their ID,
       the ID should be auto allocated but short and memorable (i.e. not a uuid), may be the user allocates it as part
       of the race setup

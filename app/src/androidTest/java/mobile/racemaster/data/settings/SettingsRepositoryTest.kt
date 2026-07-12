@@ -54,4 +54,34 @@ class SettingsRepositoryTest {
         assertEquals(42L, secondInstance.activeRaceId.first())
         secondScope.cancel()
     }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun getOrCreateDeviceNameGeneratesOnceThenPersists() = runTest {
+        val file = tempFolder.newFile("test.preferences_pb")
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = SettingsRepository(dataStoreOverFile(file, scope))
+
+        assertNull(repository.deviceName.first())
+        val generated = repository.getOrCreateDeviceName()
+        assertEquals(generated, repository.deviceName.first())
+        // A second call must not regenerate a different name.
+        assertEquals(generated, repository.getOrCreateDeviceName())
+        scope.cancel()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun setDeviceNameOverridesTheGeneratedOne() = runTest {
+        val file = tempFolder.newFile("test.preferences_pb")
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = SettingsRepository(dataStoreOverFile(file, scope))
+
+        repository.getOrCreateDeviceName()
+        repository.setDeviceName("custom-name")
+        assertEquals("custom-name", repository.deviceName.first())
+        // A rename must stick, not be overwritten by another get-or-create call.
+        assertEquals("custom-name", repository.getOrCreateDeviceName())
+        scope.cancel()
+    }
 }
