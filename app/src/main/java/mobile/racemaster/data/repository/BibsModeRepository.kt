@@ -26,10 +26,6 @@ class BibsModeRepository(
     // One-shot snapshot for Mule's BLE pull, not a live subscription.
     suspend fun getUnsyncedEntries(raceId: Long): List<BibEntryEntity> = bibEntryDao.getUnsyncedForRace(raceId)
 
-    // Every entry for the race regardless of sync state — used to resend the full set to the
-    // server rather than just the delta.
-    suspend fun getAllEntries(raceId: Long): List<BibEntryEntity> = bibEntryDao.getAllForRace(raceId)
-
     suspend fun markEntriesSyncedByUuid(recordUuids: List<String>, syncedAtMillis: Long = System.currentTimeMillis()) {
         if (recordUuids.isEmpty()) return
         bibEntryDao.markSynced(recordUuids, syncedAtMillis)

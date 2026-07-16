@@ -10,6 +10,7 @@ import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.MulePullClient
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.MuleSyncClient
+import mobile.racemaster.data.mule.MuleSyncEngine
 import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
@@ -24,6 +25,7 @@ interface AppContainer {
     val bibsModeRepository: BibsModeRepository
     val settingsRepository: SettingsRepository
     val muleRepository: MuleRepository
+    val muleSyncEngine: MuleSyncEngine
     val serverStatusRepository: ServerStatusRepository
     val bluetoothStateRepository: BluetoothStateRepository
 }
@@ -55,6 +57,10 @@ class DefaultAppContainer(context: Context) : AppContainer {
 
     override val muleRepository: MuleRepository by lazy {
         MuleRepository(database.pulledRecordDao(), settingsRepository, MulePullClient(), muleSyncClient)
+    }
+
+    override val muleSyncEngine: MuleSyncEngine by lazy {
+        MuleSyncEngine(muleRepository, bluetoothStateRepository, raceRepository, timeModeRepository, bibsModeRepository, settingsRepository)
     }
 
     override val serverStatusRepository: ServerStatusRepository by lazy {

@@ -23,10 +23,6 @@ class TimeModeRepository(
     // One-shot snapshot for Mule's BLE pull, not a live subscription.
     suspend fun getUnsyncedSplits(raceId: Long): List<FinishSplitEntity> = finishSplitDao.getUnsyncedForRace(raceId)
 
-    // Every split for the race regardless of sync state — used to resend the full set to the
-    // server rather than just the delta.
-    suspend fun getAllSplits(raceId: Long): List<FinishSplitEntity> = finishSplitDao.getAllForRace(raceId)
-
     suspend fun markSplitsSyncedByUuid(recordUuids: List<String>, syncedAtMillis: Long = System.currentTimeMillis()) {
         if (recordUuids.isEmpty()) return
         finishSplitDao.markSynced(recordUuids, syncedAtMillis)

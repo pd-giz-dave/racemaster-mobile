@@ -38,7 +38,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.isActive
@@ -55,7 +54,11 @@ import mobile.racemaster.data.settings.AppMode
  * Mule can discover and pull from a Time/Bibs phone without its operator doing anything.
  * Advertises [MuleGattProfile.SERVICE_UUID] and answers a pull request by streaming this
  * device's own unsynced splits/entries (there's nothing to serve while in Mule Mode itself —
- * Mule-to-mule relay is a follow-up, not part of this pass).
+ * Mule-to-mule relay is a follow-up, not part of this pass). Also starts [MuleSyncEngine]
+ * unconditionally — so every phone, regardless of its own current mode, is simultaneously
+ * scanning for and pulling from every *other* nearby device and pushing to the server, not
+ * just serving/self-pushing its own data. This is what lets a single phone record Time or
+ * Bibs mode and act as a Mule at the same time.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class PeripheralSyncService : Service() {
@@ -107,8 +110,8 @@ class PeripheralSyncService : Service() {
         super.onCreate()
         startForegroundWithNotification()
         observeServingState()
-        startSelfSyncLoop()
         startAdvertisingRetryLoop()
+        container.muleSyncEngine.start()
     }
 
     // Advertising (and the GATT server backing it) used to start once, at service creation,
@@ -187,63 +190,6 @@ class PeripheralSyncService : Service() {
                 }
                 .distinctUntilChanged()
                 .collect { servingState = it }
-        }
-    }
-
-    // --- Self-push: a plain Time/Bibs phone pushing its own data straight to the server,
-    // with no separate physical Mule involved. Uses the same login/dataset/stop settings
-    // the operator configures via this same phone's Mule Mode screen (they're just shared
-    // settings, not something exclusive to being in Mule Mode) — and running here, in the
-    // always-on service rather than tied to a screen, means it keeps working regardless of
-    // which screen is showing. This never disables the GATT server above, so a separate
-    // physical Mule can still discover and pull from this device independently at any time
-    // — the two paths just race harmlessly to mark the same records synced first.
-    // --------------------------------------------------------------------------------------
-
-    private fun startSelfSyncLoop() {
-        serviceScope.launch {
-            while (isActive) {
-                delay(SELF_SYNC_INTERVAL)
-                runCatching { selfPushIfConfigured() }
-                    .onFailure { Log.w(TAG, "Self-push tick failed", it) }
-            }
-        }
-    }
-
-    private suspend fun selfPushIfConfigured() {
-        val snapshot = servingState
-        val role = when (snapshot.mode) {
-            AppMode.TIME -> DEVICE_ROLE_TIME
-            AppMode.BIBS -> DEVICE_ROLE_BIBS
-            // Mule mode has its own auto-sync loop (pulling from other devices), driven by
-            // MuleModeViewModel while that screen is open — nothing to self-push here.
-            else -> return
-        }
-        if (container.settingsRepository.autoSyncStopped.first()) return
-        if (container.settingsRepository.authToken.first() == null) return
-
-        val raceId = snapshot.raceId ?: return
-        // Only bother pushing if something's actually new — but once triggered, send the
-        // *full* current set below (not just the delta), so a deleted/corrupted server-side
-        // file gets fully reconstructed on the next push rather than only receiving whatever
-        // changed since.
-        if (snapshot.unsyncedCount <= 0) return
-        val race = container.raceRepository.getRace(raceId)
-        val raceLabel = race?.label ?: return
-        val records: List<SyncRecord> = when (snapshot.mode) {
-            AppMode.TIME -> container.timeModeRepository.getAllSplits(raceId).map { it.toSyncRecord(race.timeModeStartedAtMillis) }
-            AppMode.BIBS -> container.bibsModeRepository.getAllEntries(raceId).map { it.toSyncRecord() }
-            else -> emptyList()
-        }
-        if (records.isEmpty()) return
-
-        val pushed = container.muleRepository.pushOwnRecords(role, raceLabel, records)
-        if (!pushed) return
-        val uuids = records.map { it.recordUuid }
-        when (snapshot.mode) {
-            AppMode.TIME -> container.timeModeRepository.markSplitsSyncedByUuid(uuids)
-            AppMode.BIBS -> container.bibsModeRepository.markEntriesSyncedByUuid(uuids)
-            else -> {}
         }
     }
 
@@ -552,7 +498,6 @@ class PeripheralSyncService : Service() {
         private const val TAG = "PeripheralSyncService"
         private const val CHANNEL_ID = "mule_sync"
         private const val NOTIFICATION_ID = 1
-        private val SELF_SYNC_INTERVAL = 20_000.milliseconds
         private val BLUETOOTH_RECHECK_INTERVAL = 3_000.milliseconds
         val CLIENT_CHARACTERISTIC_CONFIG_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 

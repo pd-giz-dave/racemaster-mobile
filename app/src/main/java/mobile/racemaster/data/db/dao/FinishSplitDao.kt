@@ -32,12 +32,6 @@ interface FinishSplitDao {
     @Query("SELECT * FROM finish_splits WHERE raceId = :raceId AND syncedAtMillis IS NULL ORDER BY id")
     suspend fun getUnsyncedForRace(raceId: Long): List<FinishSplitEntity>
 
-    // Every split for the race, synced or not — used when (re-)sending the *full* set to the
-    // server rather than just the delta, so a deleted/corrupted server-side file gets fully
-    // reconstructed on the next push instead of only receiving whatever's changed since.
-    @Query("SELECT * FROM finish_splits WHERE raceId = :raceId ORDER BY id")
-    suspend fun getAllForRace(raceId: Long): List<FinishSplitEntity>
-
     @Query("SELECT COUNT(*) FROM finish_splits WHERE raceId = :raceId AND syncedAtMillis IS NULL")
     fun observeUnsyncedCountForRace(raceId: Long): Flow<Int>
 

@@ -65,9 +65,8 @@ class MuleRepository(
     /** Same destination as [pullFrom] (the Mule inbox, pushed on to the server the same way
      *  as anything pulled over BLE) but for this device's *own* records — there's no radio
      *  involved, [records] is read straight from the local database by the caller (see
-     *  MuleModeViewModel.pullSelf). Lets "self" be treated as a sync candidate the same as
-     *  any other discovered device, rather than relying solely on PeripheralSyncService's own
-     *  separate, invisible self-push loop. */
+     *  [MuleSyncEngine]'s `pullSelfRecords`). Lets "self" be treated as a sync candidate the
+     *  same as any other discovered device. */
     suspend fun pullFromSelf(sourceDeviceRole: String, sourceRaceLabel: String, records: List<SyncRecord>): Int =
         storePulledRecords(sourceDeviceRole, sourceRaceLabel, records)
 
@@ -137,27 +136,5 @@ class MuleRepository(
             added += response.added
         }
         return added
-    }
-
-    /** Lets a plain Time/Bibs phone push its *own* records straight to the server, bypassing
-     *  the need for a physical Mule entirely — reuses whatever login the operator already set
-     *  up via the Mule Mode screen (these are just shared settings, not something exclusive to
-     *  being in Mule Mode). [raceLabel] is this phone's own active race's name — see
-     *  [pushToServer]'s doc for how that scopes the server-side path. The caller passes the
-     *  *full* current record set (not just unsynced ones) so a deleted/corrupted server-side
-     *  file is fully reconstructed on the next push. Returns false (a no-op, not an error) if
-     *  not logged in yet; that's the expected state for anyone not using server sync at all. */
-    suspend fun pushOwnRecords(deviceRole: String, raceLabel: String, records: List<SyncRecord>): Boolean {
-        if (records.isEmpty()) return true
-        val baseUrl = settingsRepository.serverBaseUrl.first() ?: return false
-        val token = settingsRepository.authToken.first() ?: return false
-        syncClient.pushRecords(
-            baseUrl,
-            token,
-            raceLabel,
-            times = if (deviceRole == DEVICE_ROLE_TIME) records else emptyList(),
-            bibs = if (deviceRole == DEVICE_ROLE_BIBS) records else emptyList(),
-        )
-        return true
     }
 }

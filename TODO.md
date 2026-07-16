@@ -214,9 +214,20 @@ scoped to Mule ↔ Time/Bibs over BLE + Mule → racemaster server over HTTP; mu
       if the server is reachable there needs to be an 'online' feedback (may be in the app title header), 
       if not reachable it should re-try periodically, 
       if the server is reachable but not a Racemaster server the url should be ignored and the user informed
-- [ ] mule mode must stay active even its screen or the app is backgrounded, with some sort of indication to
-      the user that it is running in the background
-- [ ] a phone can be running all modes at once 
+- [x] mule mode must stay active even its screen or the app is backgrounded, with some sort of indication to
+      the user that it is running in the background: `MuleSyncEngine` (extracted from
+      `MuleModeViewModel`, which is now a thin presentation-layer wrapper over it) runs
+      Mule's scan/pull/push loop from `PeripheralSyncService.onCreate()` — the same
+      always-on foreground service (with its existing persistent "RaceMaster sync" ongoing
+      notification) that already served Time/Bibs GATT reads regardless of screen — so it's
+      unaffected by the Mule Mode screen or ViewModel going away
+- [x] a phone can be running all modes at once: since the engine above runs unconditionally
+      (not gated on `AppMode`), a phone actively recording Time or Bibs mode simultaneously
+      scans for and pulls from every other nearby device and pushes everything to the server,
+      with no separate physical Mule needed — this also let the old direct
+      `PeripheralSyncService` self-push path (a second, redundant mechanism for the same "sync
+      my own data" need, prone to racing the same records against the engine's self-pull) be
+      deleted outright in favour of the engine's own always-running self-pull-into-inbox path
 
 ## Later phases (not started)
 
