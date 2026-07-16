@@ -62,9 +62,16 @@ class MulePullClient {
         }
     }
 
-    /** Connects, requests a pull, reassembles the chunked/notified record stream, and acks
-     *  back the received `recordUuid`s so the peripheral can mark them synced. */
-    suspend fun pull(advertisement: Advertisement): List<SyncRecord> = coroutineScope {
+    /** Connects, requests a pull, reassembles the chunked/notified record stream, hands the
+     *  records to [onReceived] to persist, and — only once that returns successfully — acks
+     *  back the received `recordUuid`s so the peripheral can mark them synced. Acking is
+     *  deliberately gated on [onReceived] completing without throwing: if it throws (a failed
+     *  local insert, a mid-write disconnect, cancellation, ...), the peripheral never hears
+     *  about these records and will still offer them again on the next pull — the safe
+     *  failure mode is a harmless redundant re-pull (records are deduped by `recordUuid` on
+     *  the way in), not the source silently marking data synced that the mule never actually
+     *  captured. */
+    suspend fun pull(advertisement: Advertisement, onReceived: suspend (List<SyncRecord>) -> Unit): Unit = coroutineScope {
         val peripheral = peripheralFor(advertisement)
         peripheral.connect()
         try {
@@ -103,10 +110,10 @@ class MulePullClient {
             val records = if (payload.isBlank()) emptyList() else json.decodeFromString<List<SyncRecord>>(payload)
 
             if (records.isNotEmpty()) {
+                onReceived(records)
                 val ackPayload = json.encodeToString(records.map { it.recordUuid })
                 peripheral.write(ackCharacteristic, ackPayload.toByteArray(Charsets.UTF_8), WriteType.WithResponse)
             }
-            records
         } finally {
             peripheral.disconnect()
         }

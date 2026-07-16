@@ -18,10 +18,11 @@ data class PulledRecordDisplay(val record: SyncRecord, val syncedAtMillis: Long?
 /**
  * Orchestrates Mule Mode: pulling unsynced records from nearby Time/Bibs phones over BLE
  * (via [MulePullClient]) into a local inbox, and pushing that inbox on to the racemaster
- * server over HTTP (via [MuleSyncClient]) once logged in and a target dataset is picked.
- * Mule can lock onto one Bibs device and one Time device at once — either independently, or
- * both together (the caller is responsible for checking their race labels match; see
- * [mobile.racemaster.ui.mulemode.MuleModeViewModel]).
+ * server over HTTP (via [MuleSyncClient]) once logged in — each race label's records land
+ * under that race's own folder server-side (`mobile/<user>/<race label>/`), no target
+ * dataset needs picking. Mule can lock onto one Bibs device and one Time device at once —
+ * either independently, or both together (the caller is responsible for checking their race
+ * labels match; see [mobile.racemaster.ui.mulemode.MuleModeViewModel]).
  */
 class MuleRepository(
     private val pulledRecordDao: PulledRecordDao,
@@ -34,7 +35,6 @@ class MuleRepository(
     val unsyncedCount: Flow<Int> = pulledRecordDao.observeUnsyncedCount()
     val lastSyncedAtMillis: Flow<Long?> = pulledRecordDao.observeLastSyncedAtMillis()
     val lastPulledAtMillis: Flow<Long?> = pulledRecordDao.observeLastPulledAtMillis()
-    val selectedDataset: Flow<Pair<String, String>?> = settingsRepository.selectedDataset
     val isLoggedIn: Flow<Boolean> = settingsRepository.authToken.map { it != null }
     val autoSyncStopped: Flow<Boolean> = settingsRepository.autoSyncStopped
     val sourceSummaries: Flow<List<PulledSourceSummary>> = pulledRecordDao.observeSourceSummaries()
@@ -53,8 +53,14 @@ class MuleRepository(
         settingsRepository.setAutoSyncStopped(stopped)
     }
 
-    suspend fun pullFrom(advertisement: Advertisement, sourceDeviceRole: String, sourceRaceLabel: String): Int =
-        storePulledRecords(sourceDeviceRole, sourceRaceLabel, pullClient.pull(advertisement))
+    // count starts at 0 and is only ever set from inside pullClient.pull()'s onReceived
+    // callback — which runs (and must complete, storing the records) strictly before pull()
+    // acks the peripheral. See MulePullClient.pull()'s doc for why that ordering matters.
+    suspend fun pullFrom(advertisement: Advertisement, sourceDeviceRole: String, sourceRaceLabel: String): Int {
+        var count = 0
+        pullClient.pull(advertisement) { records -> count = storePulledRecords(sourceDeviceRole, sourceRaceLabel, records) }
+        return count
+    }
 
     /** Same destination as [pullFrom] (the Mule inbox, pushed on to the server the same way
      *  as anything pulled over BLE) but for this device's *own* records — there's no radio
@@ -98,63 +104,57 @@ class MuleRepository(
         return if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed else "https://$trimmed"
     }
 
-    suspend fun listDatasets(): List<DatasetSummary> {
-        val baseUrl = requireNotNull(settingsRepository.serverBaseUrl.first()) { "Not logged in" }
-        val token = requireNotNull(settingsRepository.authToken.first()) { "Not logged in" }
-        return syncClient.listDatasets(baseUrl, token)
-    }
-
-    suspend fun selectDataset(owner: String, fullName: String) {
-        settingsRepository.setSelectedDataset(owner, fullName)
-    }
-
-    /** Pushes every record Mule holds — not just what's unsynced — to the selected dataset,
-     *  split into the server's separate `times`/`bibs` tables by each record's source device
-     *  role. Resending the full set every time (rather than only the delta) means a
+    /** Pushes every record Mule holds — not just what's unsynced — grouped by each record's
+     *  own [PulledRecordEntity.sourceRaceLabel] (the race's own name, as recorded on the
+     *  originating phone — one push call per distinct race label, since a mule can hold
+     *  records from more than one), and within each group split into the server's separate
+     *  `times`/`bibs` tables by source device role. This lands under `mobile/<user>/<race
+     *  label>/` on the server — no target dataset to pick, just the pushing user's own
+     *  folder. Resending the full set every time (rather than only the delta) means a
      *  server-side file that's been deleted or corrupted gets fully reconstructed on the
-     *  very next push; it's safe to do unconditionally since the server dedups by
-     *  `recordUuid`. Returns how many were genuinely new on the server (the response's
-     *  `added` count), which is what's meaningful to show the operator — not the full send
-     *  size. */
+     *  very next push; safe to do unconditionally since the server wholly replaces each
+     *  device's section rather than merging by `recordUuid`. Returns how many were genuinely
+     *  new on the server (summed `added` across every race-label group), which is what's
+     *  meaningful to show the operator — not the full send size. */
     suspend fun pushToServer(): Int {
         val baseUrl = requireNotNull(settingsRepository.serverBaseUrl.first()) { "Not logged in" }
         val token = requireNotNull(settingsRepository.authToken.first()) { "Not logged in" }
-        val (owner, fullName) = requireNotNull(settingsRepository.selectedDataset.first()) { "No dataset selected" }
 
         val all = pulledRecordDao.getAll()
         if (all.isEmpty()) return 0
 
-        val (timeRows, bibRows) = all.partition { it.sourceDeviceRole == DEVICE_ROLE_TIME }
-        val response = syncClient.pushRecords(
-            baseUrl,
-            token,
-            owner,
-            fullName,
-            times = timeRows.map { json.decodeFromString<SyncRecord>(it.payloadJson) },
-            bibs = bibRows.map { json.decodeFromString<SyncRecord>(it.payloadJson) },
-        )
-
-        pulledRecordDao.markSynced(all.map { it.recordUuid }, System.currentTimeMillis())
-        return response.added
+        var added = 0
+        for ((raceLabel, rowsForRace) in all.groupBy { it.sourceRaceLabel }) {
+            val (timeRows, bibRows) = rowsForRace.partition { it.sourceDeviceRole == DEVICE_ROLE_TIME }
+            val response = syncClient.pushRecords(
+                baseUrl,
+                token,
+                raceLabel,
+                times = timeRows.map { json.decodeFromString<SyncRecord>(it.payloadJson) },
+                bibs = bibRows.map { json.decodeFromString<SyncRecord>(it.payloadJson) },
+            )
+            pulledRecordDao.markSynced(rowsForRace.map { it.recordUuid }, System.currentTimeMillis())
+            added += response.added
+        }
+        return added
     }
 
     /** Lets a plain Time/Bibs phone push its *own* records straight to the server, bypassing
-     *  the need for a physical Mule entirely — reuses whatever login/dataset the operator
-     *  already set up via the Mule Mode screen (these are just shared settings, not something
-     *  exclusive to being in Mule Mode). The caller passes the *full* current record set (not
-     *  just unsynced ones) so a deleted/corrupted server-side file is fully reconstructed on
-     *  the next push. Returns false (a no-op, not an error) if login/dataset aren't
-     *  configured yet; that's the expected state for anyone not using server sync at all. */
-    suspend fun pushOwnRecords(deviceRole: String, records: List<SyncRecord>): Boolean {
+     *  the need for a physical Mule entirely — reuses whatever login the operator already set
+     *  up via the Mule Mode screen (these are just shared settings, not something exclusive to
+     *  being in Mule Mode). [raceLabel] is this phone's own active race's name — see
+     *  [pushToServer]'s doc for how that scopes the server-side path. The caller passes the
+     *  *full* current record set (not just unsynced ones) so a deleted/corrupted server-side
+     *  file is fully reconstructed on the next push. Returns false (a no-op, not an error) if
+     *  not logged in yet; that's the expected state for anyone not using server sync at all. */
+    suspend fun pushOwnRecords(deviceRole: String, raceLabel: String, records: List<SyncRecord>): Boolean {
         if (records.isEmpty()) return true
         val baseUrl = settingsRepository.serverBaseUrl.first() ?: return false
         val token = settingsRepository.authToken.first() ?: return false
-        val (owner, fullName) = settingsRepository.selectedDataset.first() ?: return false
         syncClient.pushRecords(
             baseUrl,
             token,
-            owner,
-            fullName,
+            raceLabel,
             times = if (deviceRole == DEVICE_ROLE_TIME) records else emptyList(),
             bibs = if (deviceRole == DEVICE_ROLE_BIBS) records else emptyList(),
         )

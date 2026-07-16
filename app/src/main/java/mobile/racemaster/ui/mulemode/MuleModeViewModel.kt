@@ -26,7 +26,6 @@ import kotlin.time.Duration.Companion.minutes
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.DEVICE_ROLE_BIBS
 import mobile.racemaster.data.mule.DEVICE_ROLE_TIME
-import mobile.racemaster.data.mule.DatasetSummary
 import mobile.racemaster.data.mule.DeviceInfo
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.toSyncRecord
@@ -89,8 +88,6 @@ data class MuleModeUiState(
     val lastSyncedAtMillis: Long? = null,
     val lastPulledAtMillis: Long? = null,
     val isLoggedIn: Boolean = false,
-    val datasets: List<DatasetSummary> = emptyList(),
-    val selectedDataset: Pair<String, String>? = null,
     val statusMessage: String? = null,
     val autoWarning: String? = null,
     val bluetoothWarning: String? = null,
@@ -101,10 +98,9 @@ data class MuleModeUiState(
 
 /**
  * Mule has no explicit "attach" step and no limit on how many other phones it syncs from —
- * once logged in with a dataset selected (no manual push required first: successfully
- * fetching the dataset list already proves the connection works), a background loop pulls
- * from every currently-visible device (plus this phone's own unsynced data) and pushes to
- * the server automatically, without the operator tapping anything on every lap.
+ * once logged in (no dataset to pick, no manual push required first), a background loop
+ * pulls from every currently-visible device (plus this phone's own unsynced data) and pushes
+ * to the server automatically, without the operator tapping anything on every lap.
  */
 // discoveredFlow (see below) only ever holds devices that came from a live BLE scan result
 // (see startScan()) — the self entry is added separately, purely at uiState's final merge
@@ -125,7 +121,6 @@ class MuleModeViewModel(
 ) : ViewModel() {
 
     private val discoveredFlow = MutableStateFlow<Map<String, DiscoveredDevice>>(emptyMap())
-    private val datasetsFlow = MutableStateFlow<List<DatasetSummary>>(emptyList())
     private val statusMessageFlow = MutableStateFlow<String?>(null)
     // Distinct from statusMessageFlow (user-triggered action results): set when the
     // background auto-sync loop itself hits a failure, and cleared automatically as soon as
@@ -152,14 +147,6 @@ class MuleModeViewModel(
 
     init {
         startScan()
-        viewModelScope.launch {
-            // Reacts to every transition to logged-in, not just a one-shot check at
-            // creation time — covers both a fresh ViewModel finding an already-logged-in
-            // session, and (now that login lives on a separate Setup Server screen) this
-            // same ViewModel surviving the round trip there and back, where a one-shot
-            // check at init would already have run before the login happened.
-            muleRepository.isLoggedIn.collect { loggedIn -> if (loggedIn) loadDatasets() }
-        }
         startAutoSyncLoop()
         startBluetoothStateLoop()
     }
@@ -220,8 +207,6 @@ class MuleModeViewModel(
         muleRepository.lastSyncedAtMillis,
         muleRepository.lastPulledAtMillis,
         muleRepository.isLoggedIn,
-        datasetsFlow,
-        muleRepository.selectedDataset,
         statusMessageFlow,
         autoWarningFlow,
         busyFlow,
@@ -230,9 +215,8 @@ class MuleModeViewModel(
         selfDeviceFlow,
     ) { values ->
         val isLoggedIn = values[4] as Boolean
-        val selectedDataset = values[6] as Pair<String, String>?
-        val autoSyncStopped = values[10] as Boolean
-        val selfDevice = values[12] as DiscoveredDevice?
+        val autoSyncStopped = values[8] as Boolean
+        val selfDevice = values[10] as DiscoveredDevice?
         MuleModeUiState(
             discoveredDevices = ((values[0] as Map<String, DiscoveredDevice>).values + listOfNotNull(selfDevice))
                 .sortedBy { it.raceLabel.ifEmpty { it.deviceKey } },
@@ -240,17 +224,15 @@ class MuleModeViewModel(
             lastSyncedAtMillis = values[2] as Long?,
             lastPulledAtMillis = values[3] as Long?,
             isLoggedIn = isLoggedIn,
-            datasets = values[5] as List<DatasetSummary>,
-            selectedDataset = selectedDataset,
-            statusMessage = values[7] as String?,
-            autoWarning = values[8] as String?,
-            bluetoothWarning = values[11] as String?,
-            isBusy = values[9] as Boolean,
+            statusMessage = values[5] as String?,
+            autoWarning = values[6] as String?,
+            bluetoothWarning = values[9] as String?,
+            isBusy = values[7] as Boolean,
             autoSyncStopped = autoSyncStopped,
-            // Armed once logged in, a dataset is picked, and auto-sync hasn't been
-            // explicitly stopped — no longer gated on any particular device being visible,
-            // since every device seen (plus self) is synced automatically each tick anyway.
-            autoSyncArmed = isLoggedIn && selectedDataset != null && !autoSyncStopped,
+            // Armed once logged in and auto-sync hasn't been explicitly stopped — no longer
+            // gated on any particular device being visible, since every device seen (plus
+            // self) is synced automatically each tick anyway.
+            autoSyncArmed = isLoggedIn && !autoSyncStopped,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MuleModeUiState())
 
@@ -466,24 +448,12 @@ class MuleModeViewModel(
         return total
     }
 
-    fun loadDatasets() {
-        viewModelScope.launch {
-            val result = runCatching { muleRepository.listDatasets() }
-            result.onSuccess { datasetsFlow.value = it }
-            result.onFailure { statusMessageFlow.value = "Couldn't load datasets: ${it.message}" }
-        }
-    }
-
-    fun selectDataset(owner: String, fullName: String) {
-        viewModelScope.launch { muleRepository.selectDataset(owner, fullName) }
-    }
-
-    fun pushToServer() {
-        viewModelScope.launch { pushIfNeeded(auto = false) }
-    }
-
     /** Immediate one-off pull-from-everything-visible + push, regardless of the stopped
-     *  flag — doesn't itself resume auto-sync, it's just "do it right now". */
+     *  flag — doesn't itself resume auto-sync, it's just "do it right now". `pushIfNeeded`
+     *  (called with auto=false below) always sets `statusMessageFlow` itself to the real
+     *  outcome ("Pushed N records", "Push failed: ...", "Nothing to push", etc.) — don't
+     *  stomp on that with a blanket "success" message afterwards, or a genuine push failure
+     *  becomes invisible to the operator. */
     fun forceSyncNow() {
         viewModelScope.launch {
             busyFlow.value = true
@@ -491,7 +461,6 @@ class MuleModeViewModel(
             busyFlow.value = false
             pushIfNeeded(auto = false)
             autoWarningFlow.value = null
-            statusMessageFlow.value = "Force sync complete"
         }
     }
 
@@ -506,10 +475,6 @@ class MuleModeViewModel(
     private suspend fun pushIfNeeded(auto: Boolean) {
         if (!muleRepository.isLoggedIn.first()) {
             if (!auto) statusMessageFlow.value = "Push failed: not logged in"
-            return
-        }
-        if (muleRepository.selectedDataset.first() == null) {
-            if (!auto) statusMessageFlow.value = "Push failed: no dataset selected"
             return
         }
         if (muleRepository.unsyncedCount.first() <= 0) {

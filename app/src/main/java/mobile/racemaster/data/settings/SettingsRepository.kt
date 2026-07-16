@@ -22,8 +22,6 @@ class SettingsRepository(
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val SERVER_BASE_URL = stringPreferencesKey("server_base_url")
         val AUTH_TOKEN = stringPreferencesKey("auth_token")
-        val SELECTED_DATASET_OWNER = stringPreferencesKey("selected_dataset_owner")
-        val SELECTED_DATASET_FULL_NAME = stringPreferencesKey("selected_dataset_full_name")
         val AUTO_SYNC_STOPPED = booleanPreferencesKey("auto_sync_stopped")
         val DRAFT_SERVER_URL = stringPreferencesKey("draft_server_url")
         val DRAFT_USERNAME = stringPreferencesKey("draft_username")
@@ -50,9 +48,8 @@ class SettingsRepository(
     // mechanism. Without this, the app would silently resume into a mode screen referencing a
     // race that no longer exists (crashing the moment any action button hits it). Called once
     // at startup after validating the referenced race is actually gone (see
-    // AppEntryViewModel). Login/dataset selection (server URL, auth token, selected dataset)
-    // are deliberately left alone — a local data wipe doesn't invalidate who you're logged in
-    // as or which server-side dataset you'd push to.
+    // AppEntryViewModel). Login state (server URL, auth token) is deliberately left alone —
+    // a local data wipe doesn't invalidate who you're logged in as.
     suspend fun clearStaleSessionState() {
         dataStore.edit { prefs ->
             prefs.remove(Keys.ACTIVE_RACE_ID)
@@ -96,12 +93,6 @@ class SettingsRepository(
     val serverBaseUrl: Flow<String?> = dataStore.data.map { prefs -> prefs[Keys.SERVER_BASE_URL] }
     val authToken: Flow<String?> = dataStore.data.map { prefs -> prefs[Keys.AUTH_TOKEN] }
 
-    val selectedDataset: Flow<Pair<String, String>?> = dataStore.data.map { prefs ->
-        val owner = prefs[Keys.SELECTED_DATASET_OWNER]
-        val fullName = prefs[Keys.SELECTED_DATASET_FULL_NAME]
-        if (owner != null && fullName != null) owner to fullName else null
-    }
-
     suspend fun setServerSession(baseUrl: String, token: String) {
         dataStore.edit { prefs ->
             prefs[Keys.SERVER_BASE_URL] = baseUrl
@@ -132,21 +123,8 @@ class SettingsRepository(
         }
     }
 
-    // Picking a *different* dataset than the one currently selected stops auto-sync — a
-    // stray tap shouldn't silently redirect an already-running auto-sync's data to a new
-    // target; the operator has to consciously confirm via Force Sync Now (which also
-    // resumes auto-sync) once they're sure.
-    suspend fun setSelectedDataset(owner: String, fullName: String) {
-        dataStore.edit { prefs ->
-            val changed = prefs[Keys.SELECTED_DATASET_OWNER] != owner || prefs[Keys.SELECTED_DATASET_FULL_NAME] != fullName
-            prefs[Keys.SELECTED_DATASET_OWNER] = owner
-            prefs[Keys.SELECTED_DATASET_FULL_NAME] = fullName
-            if (changed) prefs[Keys.AUTO_SYNC_STOPPED] = true
-        }
-    }
-
     // Explicit operator on/off switch for the background auto-sync loop, independent of
-    // whether it's otherwise "armed" (logged in + dataset selected).
+    // whether it's otherwise "armed" (logged in).
     val autoSyncStopped: Flow<Boolean> = dataStore.data.map { prefs -> prefs[Keys.AUTO_SYNC_STOPPED] ?: false }
 
     suspend fun setAutoSyncStopped(stopped: Boolean) {

@@ -221,7 +221,6 @@ class PeripheralSyncService : Service() {
         }
         if (container.settingsRepository.autoSyncStopped.first()) return
         if (container.settingsRepository.authToken.first() == null) return
-        if (container.settingsRepository.selectedDataset.first() == null) return
 
         val raceId = snapshot.raceId ?: return
         // Only bother pushing if something's actually new — but once triggered, send the
@@ -229,17 +228,16 @@ class PeripheralSyncService : Service() {
         // file gets fully reconstructed on the next push rather than only receiving whatever
         // changed since.
         if (snapshot.unsyncedCount <= 0) return
+        val race = container.raceRepository.getRace(raceId)
+        val raceLabel = race?.label ?: return
         val records: List<SyncRecord> = when (snapshot.mode) {
-            AppMode.TIME -> {
-                val race = container.raceRepository.getRace(raceId)
-                container.timeModeRepository.getAllSplits(raceId).map { it.toSyncRecord(race?.timeModeStartedAtMillis) }
-            }
+            AppMode.TIME -> container.timeModeRepository.getAllSplits(raceId).map { it.toSyncRecord(race.timeModeStartedAtMillis) }
             AppMode.BIBS -> container.bibsModeRepository.getAllEntries(raceId).map { it.toSyncRecord() }
             else -> emptyList()
         }
         if (records.isEmpty()) return
 
-        val pushed = container.muleRepository.pushOwnRecords(role, records)
+        val pushed = container.muleRepository.pushOwnRecords(role, raceLabel, records)
         if (!pushed) return
         val uuids = records.map { it.recordUuid }
         when (snapshot.mode) {

@@ -12,6 +12,7 @@ import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
+import java.net.URLEncoder
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -20,18 +21,6 @@ data class LoginRequest(val username: String, val password: String)
 
 @Serializable
 data class LoginResponse(val token: String, val username: String, val isAdmin: Boolean)
-
-// Exact shape confirmed against racemaster/server.js's getDatasetsForUser().
-@Serializable
-data class DatasetSummary(
-    val owner: String,
-    val name: String,
-    val fullName: String,
-    val visibility: String,
-    val eventName: String = "",
-    val eventDate: String = "",
-    val orphaned: Boolean = false,
-)
 
 // Body for POST .../mobile — two separate tables server-side ("-mobile.json"'s `times` and
 // `bibs` arrays), not one mixed array, so a race's Time splits and Bib entries stay distinct.
@@ -90,25 +79,21 @@ class MuleSyncClient {
             PingOutcome.Unreachable
         }
 
-    suspend fun listDatasets(baseUrl: String, token: String): List<DatasetSummary> =
-        client.get("${baseUrl.trimEnd('/')}/api/datasets") {
-            bearerAuth(token)
-        }.body()
-
     // Always sends the *full* record set the caller currently holds, not just what's changed
-    // — the server dedups by recordUuid, so this is idempotent, and it means a server-side
-    // file that's been deleted or corrupted gets fully reconstructed on the very next push
-    // rather than only receiving whatever's new since. The response's `added` count (genuinely
-    // new rows, not the full send size) is what should be shown to the operator.
+    // — the server wholly replaces each device's section, so this is idempotent, and it means
+    // a server-side file that's been deleted or corrupted gets fully reconstructed on the very
+    // next push rather than only receiving whatever's new since. The response's `added` count
+    // (genuinely new rows, not the full send size) is what should be shown to the operator.
+    // [raceLabel] scopes the push to `mobile/<user>/<raceLabel>/` on the server — the race's
+    // own name as recorded on the phone.
     suspend fun pushRecords(
         baseUrl: String,
         token: String,
-        owner: String,
-        fullName: String,
+        raceLabel: String,
         times: List<SyncRecord>,
         bibs: List<SyncRecord>,
     ): MobileSyncResponse =
-        client.post("${baseUrl.trimEnd('/')}/api/data/$owner/$fullName/mobile") {
+        client.post("${baseUrl.trimEnd('/')}/api/mobile/${encodePathSegment(raceLabel)}") {
             bearerAuth(token)
             contentType(ContentType.Application.Json)
             setBody(MobileSyncPayload(times, bibs))
@@ -118,3 +103,8 @@ class MuleSyncClient {
         client.close()
     }
 }
+
+// Plain CPU-bound string encoding, not I/O — pulled out of the suspend functions above since
+// IntelliJ's coroutines inspection otherwise flags any java.net.* call written directly
+// inside a `suspend fun` as a possibly-blocking call, regardless of what it actually does.
+private fun encodePathSegment(value: String): String = URLEncoder.encode(value, "UTF-8")

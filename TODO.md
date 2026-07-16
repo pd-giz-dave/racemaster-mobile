@@ -185,26 +185,36 @@ scoped to Mule ↔ Time/Bibs over BLE + Mule → racemaster server over HTTP; mu
 - [x] in mule mode list discovered devices as just device-name race-id, show in red if unsync'd or green if sync'd,
       ie. 1 line per device, no pull button, its auto and assumed, if it can see it it pulls from it
 - [x] verify screen blank/lock is disabled when Racemaster running
+- [x] new server structure /mobile/user/race/device then a JSON file of whatever that device holds
+- [ ] when user does a 'reset' do not clear history, instead insert a 'reset' line,
+      the mode screens clear as now, history just carries on,
+      every history line is uniquely numbered, devices broadcast race name + last history line #,
+      recipient devices know last line# they received and ask for any new ones,
+- [ ] provide a means of extracting the last line# in the server files so that only deltas need be sent
 
 ## Mule Mode changes
 
-- [ ] is agnostic to context, it just transfers whatever it can see, including self
+- [x] is agnostic to context, it just transfers whatever it can see, including self
 - [x] the Racemaster server needs a new folder alongside data - mobile - that just receives whatever it is sent
-- [ ] the mule mode no longer needs to see the races/datasets on the server, that association will be made
+- [x] the mule mode no longer needs to see the races/datasets on the server, that association will be made
       by the Racemaster web app by user selection (ToDo)
-- [ ] the mobile folder contains files that represent what was grabbed from the various phones identified
-      by race-course-date, within that are sections for each phone+mode, the phone needs an memorable id (see below)
-- [ ] the sections are updated/replaced in their entirety for each sync, so no record uuid required
+- [x] the mobile folder contains files that represent what was grabbed from the various phones identified
+      by race-course-date: `mobile/<user>/<race-label>/<device-name>.json`, one file per phone holding
+      that phone's own `time`/`bibs` sections (not one shared file per race with phone+mode sections
+      nested inside it, as originally sketched here)
+- [x] the sections are updated/replaced in their entirety for each sync, so no record uuid required
+      (recordUuid is still carried per-record and used server-side only to report a meaningful
+      `added` count in the response, not to merge/dedup — the section itself is always wholly replaced)
 - [x] must be able to identify dup phones and de-select them, the id mechanism must be such that
       a user can just ask whoever is holding the phone "who are you" so they need to be able to see their ID,
       the ID should be auto allocated but short and memorable (i.e. not a uuid), may be the user allocates it as part
       of the race setup
-- [ ] mule mode makes use of the server URL setup for the race, it validates the server by doing a 'ping',
+- [x] mule mode makes use of the server URL setup for the race, it validates the server by doing a 'ping',
       see /home/dave/webmaster/server.js, 
       if the server is reachable there needs to be an 'online' feedback (may be in the app title header), 
       if not reachable it should re-try periodically, 
       if the server is reachable but not a Racemaster server the url should be ignored and the user informed
-- [ ] mule mode must stay active even its screen or the app is closed, with some sort of indication to
+- [ ] mule mode must stay active even its screen or the app is backgrounded, with some sort of indication to
       the user that it is running in the background
 - [ ] a phone can be running all modes at once 
 
