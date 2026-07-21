@@ -17,13 +17,13 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +37,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
+import mobile.racemaster.BuildConfig
+import mobile.racemaster.ui.components.HistoryTextField
 import mobile.racemaster.util.withClickSound
 
 /** Device-wide Racemaster server URL + login — reached via "Setup Server" in Mule Mode's
@@ -50,7 +52,17 @@ fun MuleServerSetupScreen(
     val draft by viewModel.draft.collectAsStateWithLifecycle()
     val currentServerUrl by viewModel.currentServerUrl.collectAsStateWithLifecycle()
     val isLoggedIn by viewModel.isLoggedIn.collectAsStateWithLifecycle()
+    val credentialHistory by viewModel.credentialHistory.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+
+    // credentialHistory is already most-recent-first (see SettingsRepository's own doc), so
+    // distinctBy keeps each url/username's most recently submitted full combination — that's
+    // what picking one auto-fills the related field(s) from below.
+    val urlHistory by remember { derivedStateOf { credentialHistory.filter { it.url.isNotBlank() }.distinctBy { it.url } } }
+    val usernameHistory by remember { derivedStateOf { credentialHistory.filter { it.username.isNotBlank() }.distinctBy { it.username } } }
+    val passwordHistory by remember {
+        derivedStateOf { credentialHistory.map { it.password }.filter { it.isNotBlank() }.distinct() }
+    }
 
     var url by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
@@ -71,9 +83,13 @@ fun MuleServerSetupScreen(
         // Falls back to the confirmed session's URL only when there's no draft URL yet — an
         // install that logged in before this sticky-form feature existed has a real
         // currentServerUrl but no draft, and shouldn't show a blank URL field.
-        url = loadedDraft.url.ifBlank { currentServerUrl.orEmpty() }
-        username = loadedDraft.username
-        password = loadedDraft.password
+        // BuildConfig.DEV_SERVER_* is the last resort, only reachable when there's neither —
+        // i.e. a genuinely fresh debug install — so a real saved login (of any kind, local or
+        // production) is never overwritten by the local dev default. Empty in release builds,
+        // so this is a no-op there (ifBlank falls through to the existing blank string).
+        url = loadedDraft.url.ifBlank { currentServerUrl.orEmpty().ifBlank { BuildConfig.DEV_SERVER_URL } }
+        username = loadedDraft.username.ifBlank { BuildConfig.DEV_SERVER_USERNAME }
+        password = loadedDraft.password.ifBlank { BuildConfig.DEV_SERVER_PASSWORD }
         prefilled = true
     }
 
@@ -103,28 +119,43 @@ fun MuleServerSetupScreen(
                 if (isLoggedIn) "Currently logged in to: ${currentServerUrl.orEmpty()}" else "Not logged in",
                 style = MaterialTheme.typography.bodyMedium,
             )
-            OutlinedTextField(
+            HistoryTextField(
                 value = url,
                 onValueChange = { url = it },
-                singleLine = true,
-                label = { Text("Racemaster server URL") },
+                onPick = { picked ->
+                    url = picked
+                    // Also fills in that URL's own last-used username/password — the operator
+                    // picked "which server", so the credentials that go with it come along too.
+                    urlHistory.firstOrNull { it.url == picked }?.let {
+                        username = it.username
+                        password = it.password
+                    }
+                },
+                label = "Racemaster server URL",
+                history = urlHistory.map { it.url },
                 modifier = Modifier.fillMaxWidth(),
             )
-            OutlinedTextField(
+            HistoryTextField(
                 value = username,
                 onValueChange = { username = it },
-                singleLine = true,
-                label = { Text("Username") },
+                onPick = { picked ->
+                    username = picked
+                    // Only the password comes along — the operator is naming "which login",
+                    // not "which server", so the URL field is left exactly as it was.
+                    usernameHistory.firstOrNull { it.username == picked }?.let { password = it.password }
+                },
+                label = "Username",
+                history = usernameHistory.map { it.username },
                 modifier = Modifier.fillMaxWidth(),
             )
-            OutlinedTextField(
+            HistoryTextField(
                 value = password,
                 onValueChange = { password = it },
-                singleLine = true,
-                label = { Text("Password") },
+                label = "Password",
+                history = passwordHistory,
                 visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                trailingIcon = {
+                extraTrailingIcon = {
                     IconButton(onClick = withClickSound { passwordVisible = !passwordVisible }) {
                         Icon(
                             imageVector = if (passwordVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,

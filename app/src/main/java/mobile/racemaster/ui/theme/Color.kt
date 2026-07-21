@@ -16,7 +16,7 @@ val RaceMasterGreen = Color(0xFF1A6E3C)
 
 // A fixed (not theme-derived) synced/success green for Time/Bibs row text, paired with
 // UnsyncedRed below for the not-yet-synced state — deliberately not tied to the dynamic
-// color scheme, since sync status is a universal signal an operator needs to read at a
+// colour scheme, since sync status is a universal signal an operator needs to read at a
 // glance, not something that should shift with wallpaper-derived theming.
 val SyncedGreen = Color(0xFF2E7D32)
 val UnsyncedRed = Color(0xFFC62828)
@@ -25,5 +25,6 @@ val UnsyncedRed = Color(0xFFC62828)
 // as SyncedGreen, and chosen to stay readable against the banner's solid RaceMasterGreen
 // background specifically (unlike MaterialTheme.colorScheme.error, which isn't guaranteed to
 // contrast against it).
+val ServerOnlineGreen = Color(0xFF00FF00)
 val ServerOfflineRed = Color(0xFFE57373)
 val ServerInvalidAmber = Color(0xFFFFB74D)

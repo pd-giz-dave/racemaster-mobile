@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.milliseconds
@@ -41,11 +41,10 @@ import mobile.racemaster.data.settings.SettingsRepository
  *  anything found over BLE, and [advertisement] is null for it since there's no actual
  *  radio involved in "pulling" from yourself.
  *
- *  [lastReachableAtMillis] and [unreachable] exist so the list's color reflects *current*
+ *  [lastReachableAtMillis] and [unreachable] exist so the list's colour reflects *current*
  *  reachability rather than whatever was last successfully read — without them, a device
  *  that's gone out of range still shows the stale green/red from its last successful
- *  contact, contradicting an "Auto-pull failed: couldn't reach ..." warning shown at the
- *  same time. A device stays listed (marked [unreachable]) rather than disappearing on the
+ *  contact. A device stays listed (marked [unreachable]) rather than disappearing on the
  *  first failure, since a single missed BLE read is common and not worth losing the entry
  *  over — it's only dropped from [MuleSyncEngine]'s map once it's been continuously
  *  unreachable for [MuleSyncEngine.Companion.UNREACHABLE_DROP_THRESHOLD].
@@ -57,10 +56,13 @@ import mobile.racemaster.data.settings.SettingsRepository
  *  actually went anywhere. Flipping straight to red on every such blip made a device that
  *  was perfectly reachable flicker red "from time to time" for no real reason (confirmed in
  *  the field, worst on budget hardware). Only a run of consecutive failures now flips the
- *  color — see [MuleSyncEngine.Companion.UNREACHABLE_FAILURE_THRESHOLD] — while a single
+ *  colour — see [MuleSyncEngine.Companion.UNREACHABLE_FAILURE_THRESHOLD] — while a single
  *  miss still resets [lastReachableAtMillis]'s drop-timer contribution not at all (that
  *  timer only cares about the *last success*, so a debounced blip doesn't quietly extend a
- *  device's borrowed time either). */
+ *  device's borrowed time either). Surfaced directly on the device's own row as a running
+ *  "(missed N)" suffix below the threshold, then "(unreachable)" once it's crossed (see
+ *  MuleModeScreen.NearbyDevicesSection) — not a shared banner naming only one device, which
+ *  was misleading whenever more than one had actually dropped out. */
 data class DiscoveredDevice(
     val deviceKey: String,
     val advertisement: Advertisement?,
@@ -140,13 +142,25 @@ class MuleSyncEngine(
 
     // This device's own unsynced data, shaped as one more DiscoveredDevice (isSelf = true) so
     // it can be folded straight into the same list real BLE-discovered devices render in —
-    // "self" is exactly as much a sync candidate as anything found over the radio. Null
-    // (nothing to show) while there's no active race, same as a discovered device that
-    // hasn't reported anything yet.
-    val selfDevice: Flow<DiscoveredDevice?> = settingsRepository.activeRaceId
+    // "self" is exactly as much a sync candidate as anything found over the radio. Always
+    // shown, with an empty raceLabel/roleCounts while there's no active race — same as any
+    // other device Mule can see that hasn't got a race defined either (see
+    // MuleModeScreen.NearbyDevicesSection's "no race" label), never hidden entirely just
+    // because this device itself has nothing recorded right now.
+    val selfDevice: Flow<DiscoveredDevice> = settingsRepository.activeRaceId
         .flatMapLatest { raceId ->
             if (raceId == null) {
-                flowOf(null)
+                muleRepository.deviceName.map { deviceName ->
+                    DiscoveredDevice(
+                        deviceKey = SELF_DEVICE_KEY,
+                        advertisement = null,
+                        deviceId = SELF_DEVICE_KEY,
+                        deviceName = deviceName.orEmpty(),
+                        raceLabel = "",
+                        roleCounts = emptyMap(),
+                        isSelf = true,
+                    )
+                }
             } else {
                 combine(
                     raceRepository.observeRace(raceId),
@@ -209,12 +223,14 @@ class MuleSyncEngine(
             bluetoothWarningFlow.value = "Bluetooth is off — turn it on to discover nearby devices"
             return
         }
+        // The radio's confirmed on at this point, so any warning still showing is stale —
+        // clear it now rather than waiting for the collect below to see a first advertisement,
+        // which never happens (leaving a false "Bluetooth is off" stuck on screen) when
+        // scanning is perfectly healthy but simply no peer device happens to be nearby.
+        bluetoothWarningFlow.value = null
         scanJob = engineScope.launch {
             try {
                 muleRepository.scanForDevices().collect { advertisement ->
-                    // First successful emission proves the radio really is on and scanning —
-                    // clears any stale warning left over from before it was turned on.
-                    bluetoothWarningFlow.value = null
                     val address = advertisement.identifier
                     // Skip if this BLE identity is already tracked under any key (including a
                     // deviceId key it's since been merged into) — otherwise a device rescanned
@@ -226,6 +242,11 @@ class MuleSyncEngine(
                 }
             } catch (e: CancellationException) {
                 throw e
+            } catch (_: SecurityException) {
+                // BLUETOOTH_SCAN missing or revoked — distinct from the radio being off, and
+                // "turn Bluetooth on" would be actively misleading here. Same retry-on-next-tick
+                // behavior via startBluetoothStateLoop, in case it's granted later.
+                bluetoothWarningFlow.value = "Bluetooth permission needed to discover nearby devices"
             } catch (_: Exception) {
                 // Defensive backstop for the proactive check above — covers the radio being
                 // switched off in the brief window between that check and actually starting
@@ -263,27 +284,30 @@ class MuleSyncEngine(
             markUnreachable(key, device)
             return
         }
-        mergeDeviceInfo(key, device, info)
+        val since = muleRepository.lastPulledLineNumber(info.deviceId, info.raceLabel)
+        mergeDeviceInfo(key, device, info, since)
     }
 
     /** Folds a freshly-read [DeviceInfo] into [discoveredFlow], keyed by the stable
      *  `deviceId` rather than [oldKey] (a BLE address) — merging into any entry already
      *  tracked under that deviceId instead of creating a duplicate, and accumulating this
-     *  role's count alongside whatever the other role's last-known count was. A successful
-     *  read is by definition proof of reachability, so it always clears
-     *  [DiscoveredDevice.unreachable] and [DiscoveredDevice.consecutiveFailures], and bumps
-     *  [DiscoveredDevice.lastReachableAtMillis] to now. */
-    private fun mergeDeviceInfo(oldKey: String, device: DiscoveredDevice, info: DeviceInfo) {
+     *  role's outstanding-line count (info.lastLineNumber minus [lastPulledLineNumber], the
+     *  delta already computed by the caller) alongside whatever the other role's last-known
+     *  count was. A successful read is by definition proof of reachability, so it always
+     *  clears [DiscoveredDevice.unreachable] and [DiscoveredDevice.consecutiveFailures], and
+     *  bumps [DiscoveredDevice.lastReachableAtMillis] to now. */
+    private fun mergeDeviceInfo(oldKey: String, device: DiscoveredDevice, info: DeviceInfo, lastPulledLineNumber: Long) {
         val newKey = info.deviceId
         val current = discoveredFlow.value
         val base = current[newKey] ?: device
+        val outstanding = (info.lastLineNumber - lastPulledLineNumber).coerceAtLeast(0).toInt()
         val merged = base.copy(
             deviceKey = newKey,
             advertisement = device.advertisement,
             deviceId = newKey,
             deviceName = info.deviceName,
             raceLabel = info.raceLabel,
-            roleCounts = base.roleCounts + (info.deviceRole to info.unsyncedCount),
+            roleCounts = base.roleCounts + (info.deviceRole to outstanding),
             lastReachableAtMillis = System.currentTimeMillis(),
             consecutiveFailures = 0,
             unreachable = false,
@@ -353,26 +377,43 @@ class MuleSyncEngine(
      *  race-label matching: anything Mule can see, it pulls from — plus this phone's own
      *  unsynced data. Folds fresh [DeviceInfo] into [discoveredFlow] as it goes so the
      *  nearby-devices list's red/green status stays current even on ticks that don't end up
-     *  pulling anything. Returns a failure message from the last device that didn't respond
-     *  this tick, or null if every attempt succeeded (including "nothing to pull"). */
+     *  pulling anything. A device that simply couldn't be reached this tick doesn't set the
+     *  returned failure message — that's tracked per-device instead (see [markUnreachable] /
+     *  [DiscoveredDevice.consecutiveFailures], shown as a "(missed N)"/"(unreachable)" suffix
+     *  on that device's own row — a single shared banner naming only the last unreachable
+     *  device of however many was misleading when more than one had actually dropped out).
+     *  Returns a failure message from the last device whose *pull itself* failed (having
+     *  already proven reachable via a successful DeviceInfo read) this tick, or null if every
+     *  attempt succeeded (including "nothing to pull"). */
     private suspend fun pullAllVisibleDevices(): String? {
         var tickFailure: String? = null
         for ((key, device) in discoveredFlow.value.toList()) {
             val freshInfo = runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }.getOrNull()
             if (freshInfo == null) {
-                tickFailure = "Auto-pull failed: couldn't reach ${device.deviceName.ifEmpty { device.deviceKey.take(8) }}"
                 markUnreachable(key, device)
                 continue
             }
-            mergeDeviceInfo(key, device, freshInfo)
-            if (freshInfo.unsyncedCount <= 0) continue
-            val result = runCatching { muleRepository.pullFrom(device.requiredAdvertisement, freshInfo.deviceRole, freshInfo.raceLabel) }
+            val since = muleRepository.lastPulledLineNumber(freshInfo.deviceId, freshInfo.raceLabel)
+            mergeDeviceInfo(key, device, freshInfo, since)
+            if (freshInfo.lastLineNumber - since <= 0) continue
+            val result = runCatching {
+                muleRepository.pullFrom(
+                    device.requiredAdvertisement,
+                    freshInfo.deviceRole,
+                    freshInfo.raceLabel,
+                    freshInfo.deviceId,
+                    freshInfo.deviceName,
+                    since,
+                )
+            }
             result.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
             result.onSuccess {
-                // Reflects the drop in unsynced count immediately rather than waiting for
+                // Reflects the drop in outstanding lines immediately rather than waiting for
                 // the next periodic refresh, up to AUTO_SYNC_INTERVAL later.
-                runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }.getOrNull()
-                    ?.let { mergeDeviceInfo(key, device, it) }
+                runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }.getOrNull()?.let {
+                    val newSince = muleRepository.lastPulledLineNumber(it.deviceId, it.raceLabel)
+                    mergeDeviceInfo(key, device, it, newSince)
+                }
             }
         }
         runCatching { pullSelfRecords() }.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
@@ -395,17 +436,19 @@ class MuleSyncEngine(
         val raceId = settingsRepository.activeRaceId.first() ?: return 0
         val race = raceRepository.getRace(raceId)
         val raceLabel = race?.label.orEmpty()
+        val deviceName = race?.createdByDeviceName.orEmpty()
+        val myDeviceId = settingsRepository.getOrCreateDeviceId()
         var total = 0
         val splits = timeModeRepository.getUnsyncedSplits(raceId)
         if (splits.isNotEmpty()) {
             val records = splits.map { it.toSyncRecord(race?.timeModeStartedAtMillis) }
-            total += muleRepository.pullFromSelf(DEVICE_ROLE_TIME, raceLabel, records)
+            total += muleRepository.pullFromSelf(DEVICE_ROLE_TIME, raceLabel, myDeviceId, deviceName, records)
             timeModeRepository.markSplitsSyncedByUuid(records.map { it.recordUuid })
         }
         val entries = bibsModeRepository.getUnsyncedEntries(raceId)
         if (entries.isNotEmpty()) {
-            val records = entries.map { it.toSyncRecord() }
-            total += muleRepository.pullFromSelf(DEVICE_ROLE_BIBS, raceLabel, records)
+            val records = entries.map { it.toSyncRecord(race?.timeModeStartedAtMillis) }
+            total += muleRepository.pullFromSelf(DEVICE_ROLE_BIBS, raceLabel, myDeviceId, deviceName, records)
             bibsModeRepository.markEntriesSyncedByUuid(records.map { it.recordUuid })
         }
         return total
@@ -427,24 +470,27 @@ class MuleSyncEngine(
         }
     }
 
+    // The cheap local-only unsyncedCount check is only a valid shortcut for a background auto
+    // tick (skip the network round-trip on the overwhelmingly common case that nothing local
+    // changed since the last one). A manual Force Sync must not trust it: pushToServer()
+    // itself always re-checks the server's actual stored state (see its own doc) and only
+    // marks a row synced once that fresh check confirms it — a row that silently failed to
+    // land on the server (dropped mid-request, a server-side hiccup, ...) would otherwise
+    // never get retried, since the local unsyncedCount gate would keep skipping it forever
+    // once every local row already *looks* synced. Force Sync is exactly the operator's "no,
+    // really check" button, so it always runs the real reconciliation when logged in.
     private suspend fun pushIfNeeded(auto: Boolean) {
         if (!muleRepository.isLoggedIn.first()) {
             if (!auto) statusMessageFlow.value = "Push failed: not logged in"
             return
         }
-        if (muleRepository.unsyncedCount.first() <= 0) {
-            if (!auto) statusMessageFlow.value = "Nothing to push"
+        if (auto && muleRepository.unsyncedCount.first() <= 0) {
             return
         }
         busyFlow.value = true
         val result = runCatching { muleRepository.pushToServer() }
         busyFlow.value = false
-        if (!auto || result.isFailure) {
-            statusMessageFlow.value = result.fold(
-                onSuccess = { n -> "Pushed $n new record${if (n == 1) "" else "s"} to the server" },
-                onFailure = { e -> "Push failed: ${e.message}" },
-            )
-        }
+        pushResultMessage(auto, result)?.let { statusMessageFlow.value = it }
     }
 
     fun dismissStatusMessage() {
@@ -468,3 +514,21 @@ class MuleSyncEngine(
         private const val SELF_DEVICE_KEY = "self"
     }
 }
+
+/**
+ * The status message (if any) a push attempt's outcome should surface, pulled out as a pure
+ * function so it's directly testable without standing up MuleSyncEngine's full BLE/HTTP
+ * dependency graph. A genuinely successful automatic push is surfaced too, not just failures
+ * — previously an operator watching Mule Mode passively had no way to tell a successful
+ * background push had happened at all, only ever seeing a message on a manual "Force sync
+ * now" tap or on failure. Still suppressed (returns null) when there was genuinely nothing new
+ * (n == 0) on an automatic tick, so this doesn't spam a message every 10s tick once a device
+ * is fully caught up. A manual push (auto = false) always gets a message, including "Pushed 0
+ * new records" so a no-op manual tap still confirms something happened.
+ */
+internal fun pushResultMessage(auto: Boolean, result: Result<Int>): String? = result.fold(
+    onSuccess = { n ->
+        if (!auto || n > 0) "Pushed $n new record${if (n == 1) "" else "s"} to the server" else null
+    },
+    onFailure = { e -> "Push failed: ${e.message}" },
+)

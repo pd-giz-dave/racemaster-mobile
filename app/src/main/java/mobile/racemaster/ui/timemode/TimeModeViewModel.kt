@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
@@ -24,7 +25,14 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-data class FinishSplitUi(val id: Long, val splitNumber: Int, val elapsedMillis: Long, val note: String?, val synced: Boolean)
+data class FinishSplitUi(
+    val id: Long,
+    val splitNumber: Int,
+    val action: HistoryAction,
+    val elapsedMillis: Long,
+    val note: String?,
+    val synced: Boolean,
+)
 
 data class TimeModeUiState(
     val raceId: Long? = null,
@@ -73,8 +81,8 @@ class TimeModeViewModel(
 
                 combine(
                     raceRepository.observeRace(raceId),
-                    timeModeRepository.observeSplits(raceId),
-                    bibsModeRepository.observeEntries(raceId),
+                    timeModeRepository.observeCurrentSegmentSplits(raceId),
+                    bibsModeRepository.observeCurrentSegmentEntries(raceId),
                     tickerFlow,
                     muleStatusFlow,
                 ) { race, splits, bibEntries, now, (unsyncedCount, lastSyncedAtMillis) ->
@@ -96,6 +104,7 @@ class TimeModeViewModel(
                             FinishSplitUi(
                                 id = it.id,
                                 splitNumber = it.splitNumber,
+                                action = it.action,
                                 elapsedMillis = startedAt?.let { s -> it.timestampMillis - s } ?: 0L,
                                 note = it.note,
                                 synced = it.syncedAtMillis != null,
@@ -141,7 +150,7 @@ class TimeModeViewModel(
 
     fun undoLast() {
         val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch { timeModeRepository.deleteMostRecent(raceId) }
+        viewModelScope.launch { timeModeRepository.undoMostRecent(raceId) }
     }
 
     fun updateNote(splitId: Long, note: String) {

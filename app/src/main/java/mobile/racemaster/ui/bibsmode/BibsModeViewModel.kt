@@ -5,9 +5,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import mobile.racemaster.data.db.entity.BIB_REQUIRED_TYPES
-import mobile.racemaster.data.db.entity.BibEntryEntity
-import mobile.racemaster.data.db.entity.BibEntryType
+import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
+import mobile.racemaster.data.db.entity.HistoryAction
+import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
@@ -36,7 +36,7 @@ import kotlinx.coroutines.launch
 
 private data class RaceContext(
     val race: RaceEntity?,
-    val entries: List<BibEntryEntity>,
+    val entries: List<HistoryLineEntity>,
     val unsyncedCount: Int,
     val lastSyncedAtMillis: Long?,
 )
@@ -45,7 +45,7 @@ data class BibEntryUi(
     val id: Long,
     val bibNumber: Int?,
     val splitNumber: Int,
-    val type: BibEntryType,
+    val type: HistoryAction,
     val note: String?,
     val dupSplitRefs: List<Int>,
     val synced: Boolean,
@@ -54,8 +54,15 @@ data class BibEntryUi(
 data class BibsModeUiState(
     val raceId: Long? = null,
     val raceLabel: String = "",
+    // Whether this segment's Clock marker (split #0) has been logged yet — false for a fresh
+    // race, a race just switched into from a different mode, or one just Reset, in which case
+    // the screen shows a Start button instead of the entry keypad/list (see BibsModeScreen).
+    // Derived from entries rather than a dedicated race column: the Clock row is guaranteed
+    // non-undoable (see BibsModeRepository.undoMostRecent), so "any entries at all" reliably
+    // means "started" for as long as this segment lasts.
+    val started: Boolean = false,
     val currentDigits: String = "",
-    val pendingEventType: BibEntryType = BibEntryType.FINISH,
+    val pendingEventType: HistoryAction = HistoryAction.FINISH,
     val nextSplitNumber: Int = 1,
     val dupCount: Int = 0,
     val entries: List<BibEntryUi> = emptyList(),
@@ -98,7 +105,7 @@ class BibsModeViewModel(
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     private val digitsFlow = MutableStateFlow("")
-    private val pendingTypeFlow = MutableStateFlow(BibEntryType.FINISH)
+    private val pendingTypeFlow = MutableStateFlow(HistoryAction.FINISH)
     private val errorFlow = MutableStateFlow<String?>(null)
 
     private val raceAndEntriesFlow = raceIdFlow.flatMapLatest { raceId ->
@@ -107,7 +114,7 @@ class BibsModeViewModel(
         } else {
             combine(
                 raceRepository.observeRace(raceId),
-                bibsModeRepository.observeEntries(raceId),
+                bibsModeRepository.observeCurrentSegmentEntries(raceId),
                 bibsModeRepository.observeUnsyncedCount(raceId),
                 bibsModeRepository.observeLastSyncedAtMillis(raceId),
             ) { race, entries, unsyncedCount, lastSyncedAtMillis ->
@@ -124,11 +131,12 @@ class BibsModeViewModel(
     ) { context, digits, pendingType, error ->
         val (race, entries, unsyncedCount, lastSyncedAtMillis) = context
         val dupRefs = findDuplicateSplitRefs(entries)
-        val needsBib = pendingType in BIB_REQUIRED_TYPES
+        val needsBib = pendingType in BIB_REQUIRED_ACTIONS
         val outstanding = outstandingBibs(entries, race?.bibsRangeStart, race?.bibsRangeCount)
         BibsModeUiState(
             raceId = race?.id,
             raceLabel = race?.label.orEmpty(),
+            started = entries.isNotEmpty(),
             currentDigits = digits,
             pendingEventType = pendingType,
             nextSplitNumber = race?.bibsModeNextSplit ?: 1,
@@ -138,7 +146,7 @@ class BibsModeViewModel(
                     id = it.id,
                     bibNumber = it.bibNumber,
                     splitNumber = it.splitNumber,
-                    type = it.type,
+                    type = it.action,
                     note = it.note,
                     dupSplitRefs = dupRefs[it.id].orEmpty(),
                     synced = it.syncedAtMillis != null,
@@ -164,6 +172,11 @@ class BibsModeViewModel(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BibsModeUiState())
 
+    fun startBibsMode() {
+        val raceId = raceIdFlow.value ?: return
+        viewModelScope.launch { bibsModeRepository.startBibsMode(raceId) }
+    }
+
     fun onDigit(digit: Int) {
         if (digitsFlow.value.length >= MAX_BIB_DIGITS) return
         digitsFlow.value += digit.toString()
@@ -177,15 +190,15 @@ class BibsModeViewModel(
         digitsFlow.value = ""
     }
 
-    fun setPendingEventType(type: BibEntryType) {
+    fun setPendingEventType(type: HistoryAction) {
         pendingTypeFlow.value = type
-        if (type !in BIB_REQUIRED_TYPES) digitsFlow.value = ""
+        if (type !in BIB_REQUIRED_ACTIONS) digitsFlow.value = ""
     }
 
     fun submit() {
         val raceId = raceIdFlow.value ?: return
         val type = pendingTypeFlow.value
-        val needsBib = type in BIB_REQUIRED_TYPES
+        val needsBib = type in BIB_REQUIRED_ACTIONS
         val bib = if (needsBib) digitsFlow.value.toIntOrNull() ?: return else null
         if (needsBib) {
             val race = raceFlow.value ?: return
@@ -197,13 +210,13 @@ class BibsModeViewModel(
         viewModelScope.launch {
             bibsModeRepository.recordEntry(raceId, type, bib, note = null)
             digitsFlow.value = ""
-            pendingTypeFlow.value = BibEntryType.FINISH
+            pendingTypeFlow.value = HistoryAction.FINISH
             beeper.beep()
         }
     }
 
-    fun updateEntry(id: Long, bibNumber: Int?, type: BibEntryType, note: String?) {
-        val needsBib = type in BIB_REQUIRED_TYPES
+    fun updateEntry(id: Long, bibNumber: Int?, type: HistoryAction, note: String?) {
+        val needsBib = type in BIB_REQUIRED_ACTIONS
         if (needsBib) {
             val bib = bibNumber ?: run {
                 errorFlow.value = "Enter a bib number."
@@ -224,7 +237,7 @@ class BibsModeViewModel(
             errorFlow.value = "Enter a time as minutes and seconds, e.g. 5:30."
             return
         }
-        viewModelScope.launch { bibsModeRepository.updateEntry(id, bibNumber = null, type = BibEntryType.CLOCK, note = canonical) }
+        viewModelScope.launch { bibsModeRepository.updateEntry(id, bibNumber = null, action = HistoryAction.CLOCK, note = canonical) }
     }
 
     fun dismissError() {
@@ -233,7 +246,7 @@ class BibsModeViewModel(
 
     fun undoLast() {
         val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch { bibsModeRepository.deleteMostRecent(raceId) }
+        viewModelScope.launch { bibsModeRepository.undoMostRecent(raceId) }
     }
 
     fun stopBibsMode() {

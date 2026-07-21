@@ -19,9 +19,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.ui.bibsmode.displayName
-import mobile.racemaster.ui.components.BibEntryRow
-import mobile.racemaster.ui.components.SplitRow
+import mobile.racemaster.ui.components.HistoryLineRow
 import mobile.racemaster.util.formatWallClock
 import mobile.racemaster.util.withClickSound
 
@@ -55,44 +55,44 @@ fun RaceHistoryDetailScreen(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             if (uiState.deviceName.isNotBlank()) {
-                Text("Recorded by ${uiState.deviceName}", style = MaterialTheme.typography.labelSmall)
+                Text("From ${uiState.deviceName}", style = MaterialTheme.typography.labelSmall)
             }
             Text(
                 "Last synced: ${uiState.lastSyncedAtMillis?.let { formatWallClock(it) } ?: "never"}",
                 style = MaterialTheme.typography.bodyMedium,
             )
 
-            // Bibs before Time, matching the same ordering used everywhere else a race's two
-            // record types are listed together (see RaceHistoryViewModel's Mule-source list).
-            Text("Bib entries", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
-            if (uiState.bibEntries.isEmpty()) {
-                Text("No bib entries recorded", style = MaterialTheme.typography.bodyMedium)
+            Text("History", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
+            if (uiState.lines.isEmpty()) {
+                Text("No history recorded", style = MaterialTheme.typography.bodyMedium)
             } else {
-                uiState.bibEntries.sortedBy { it.splitNumber }.forEach { entry ->
-                    BibEntryRow(
-                        splitNumber = entry.splitNumber,
-                        bibNumber = entry.bibNumber,
-                        typeLabel = entry.type.displayName(),
-                        note = entry.note,
-                        dupSplitRefs = entry.dupSplitRefs,
-                        synced = entry.synced,
-                    )
-                }
-            }
-
-            Text("Time splits", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
-            if (uiState.splits.isEmpty()) {
-                Text("No splits recorded", style = MaterialTheme.typography.bodyMedium)
-            } else {
-                uiState.splits.sortedBy { it.splitNumber }.forEach { split ->
-                    SplitRow(
-                        splitNumber = split.splitNumber,
-                        elapsedMillis = split.elapsedMillis,
-                        note = split.note,
-                        synced = split.synced,
+                // One true chronology, sorted by lineNumber (not splitNumber, which restarts
+                // per segment and per mode and is no longer unique/orderable across either) —
+                // a race's Time and Bibs rows already shared one lineNumber sequence even
+                // before this screen rendered them together, so a normal single-mode race
+                // (the overwhelming common case) looks exactly as it always did; only a
+                // genuinely mixed-mode race now visibly interleaves both. Every line — a real
+                // split/entry, a Reset marker, or an Undo marker — renders through the one
+                // rationalized HistoryLineRow format; see its own doc for why.
+                uiState.lines.sortedBy { it.lineNumber }.forEach { line ->
+                    HistoryLineRow(
+                        lineNumber = line.lineNumber,
+                        splitNumber = line.splitNumber,
+                        actionLabel = line.action.displayName(),
+                        bibNumber = line.bibNumber,
+                        elapsedMillis = if (line.mode == HistoryMode.TIME) line.elapsedMillis else null,
+                        note = line.note,
+                        synced = line.synced,
+                        syncedToLabel = syncedToLabel(line.syncedTo),
+                        dupSplitRefs = line.dupSplitRefs,
+                        editedFromLineNumber = line.editedFromLineNumber,
+                        isUndoMarker = line.isUndoMarker,
                     )
                 }
             }
         }
     }
 }
+
+private fun syncedToLabel(syncedTo: List<String>): String? =
+    syncedTo.takeIf { it.isNotEmpty() }?.joinToString(", ")

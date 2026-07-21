@@ -17,39 +17,54 @@ data class MulePulledRecordUi(
     val action: String,
     val number: Int?,
     val splitNumber: Int,
+    val lineNumber: Long,
     val elapsedMillis: Long,
     val note: String?,
     val deviceName: String,
     val synced: Boolean,
+    // Per-record category signal (mirrors MuleRepository.pushToServer's own categorization):
+    // SyncRecord.time is unconditionally non-null for every Time-category record (including
+    // its markers) and unconditionally null for every Bibs-category record — a merged Mule
+    // source can now hold both categories under one race label, so this decides per record
+    // whether HistoryLineRow's elapsedMillis (vs its bib number) is the meaningful column.
+    val isTimeRecord: Boolean,
+    val isUndoMarker: Boolean,
+    val editedFromLineNumber: Long?,
 )
 
 data class MuleSourceDetailUiState(
     val raceLabel: String = "",
-    val deviceRole: String = "",
+    // Whichever device's records were seen most recently — see PulledSourceSummary's doc for
+    // why this is a single name in the overwhelming common case. Drives the "From {name}"
+    // heading, matching a local race's own detail screen.
+    val deviceName: String = "",
     val records: List<MulePulledRecordUi> = emptyList(),
 )
 
 class MuleSourceDetailViewModel(
-    deviceRole: String,
     raceLabel: String,
     muleRepository: MuleRepository,
 ) : ViewModel() {
 
-    val uiState: StateFlow<MuleSourceDetailUiState> = muleRepository.observeRecordsForSource(deviceRole, raceLabel)
+    val uiState: StateFlow<MuleSourceDetailUiState> = muleRepository.observeRecordsForSource(raceLabel)
         .map { records ->
             MuleSourceDetailUiState(
                 raceLabel = raceLabel,
-                deviceRole = deviceRole,
+                deviceName = records.lastOrNull()?.deviceName.orEmpty(),
                 records = records.map {
                     MulePulledRecordUi(
                         recordUuid = it.record.recordUuid,
                         action = it.record.action,
                         number = it.record.number,
                         splitNumber = it.record.splitNumber ?: 0,
+                        lineNumber = it.record.lineNumber,
                         elapsedMillis = parseElapsedClock(it.record.time),
                         note = it.record.note,
-                        deviceName = it.record.deviceName,
+                        deviceName = it.deviceName,
                         synced = it.syncedAtMillis != null,
+                        isTimeRecord = it.record.time != null,
+                        isUndoMarker = it.record.action == "Undo",
+                        editedFromLineNumber = it.record.refLineNumber,
                     )
                 },
             )
@@ -57,21 +72,27 @@ class MuleSourceDetailViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MuleSourceDetailUiState())
 
     companion object {
-        fun factory(deviceRole: String, raceLabel: String): ViewModelProvider.Factory = viewModelFactory {
+        fun factory(raceLabel: String): ViewModelProvider.Factory = viewModelFactory {
             initializer {
-                MuleSourceDetailViewModel(deviceRole, raceLabel, appContainer().muleRepository)
+                MuleSourceDetailViewModel(raceLabel, appContainer().muleRepository)
             }
         }
     }
 }
 
-// Inverse of SyncRecordMapping's formatElapsedAsClock — the wire format only carries elapsed
-// time as an "HH:MM:SS" string (matching the server's finisher-time convention), so a pulled
-// Time Mode record's centiseconds aren't recoverable here; this reuses the same SplitRow the
-// live screen and local race history use, at whatever precision the wire actually carried.
-private fun parseElapsedClock(time: String?): Long {
-    val parts = time?.split(":")?.mapNotNull { it.toIntOrNull() } ?: return 0L
+// Inverse of SyncRecordMapping's formatElapsedAsClock — the wire format carries elapsed time
+// as an "HH:MM:SS.CC" string. Splits off the optional ".CC" suffix before parsing rather than
+// naively splitting the whole string on ":" and requiring exactly 3 integer parts — a bare
+// "SS.CC".toIntOrNull() returns null (Kotlin rejects decimals), which used to silently zero
+// out every Mule-pulled Time record's displayed elapsed time once centiseconds were added.
+// Also tolerates the older centiseconds-free "HH:MM:SS" format (no trailing "." component).
+internal fun parseElapsedClock(time: String?): Long {
+    val parts = time?.split(":") ?: return 0L
     if (parts.size != 3) return 0L
-    val (hours, minutes, seconds) = parts
-    return ((hours * 3600L) + (minutes * 60L) + seconds) * 1000L
+    val hours = parts[0].toIntOrNull() ?: return 0L
+    val minutes = parts[1].toIntOrNull() ?: return 0L
+    val secondsParts = parts[2].split(".")
+    val seconds = secondsParts.getOrNull(0)?.toIntOrNull() ?: return 0L
+    val centis = secondsParts.getOrNull(1)?.toIntOrNull() ?: 0
+    return ((hours * 3600L) + (minutes * 60L) + seconds) * 1000L + centis * 10L
 }

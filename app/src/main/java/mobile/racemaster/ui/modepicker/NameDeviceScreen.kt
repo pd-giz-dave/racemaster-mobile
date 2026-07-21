@@ -37,6 +37,7 @@ fun NameDeviceScreen(
     viewModel: NameDeviceViewModel = viewModel(factory = NameDeviceViewModel.Factory),
 ) {
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
+    val hasActiveRace by viewModel.hasActiveRace.collectAsStateWithLifecycle()
 
     var nameText by remember { mutableStateOf("") }
     // Pre-fill exactly once from the loaded/generated name — later emissions (e.g. the
@@ -75,18 +76,26 @@ fun NameDeviceScreen(
                     "something short and easy to say out loud.",
                 style = MaterialTheme.typography.bodyMedium,
             )
+            if (hasActiveRace) {
+                Text(
+                    "Device name can't be changed while a race is active — stop and reset it first.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            val editingEnabled = prefilled && !hasActiveRace
             OutlinedTextField(
                 value = nameText,
                 onValueChange = { nameText = it },
                 singleLine = true,
-                enabled = prefilled,
+                enabled = editingEnabled,
                 label = { Text("Device name") },
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = withClickSound { nameText = viewModel.generateAnother() },
-                    enabled = prefilled,
+                    enabled = editingEnabled,
                     modifier = Modifier.weight(1f),
                 ) { Text("Suggest Name") }
                 Button(
@@ -94,7 +103,7 @@ fun NameDeviceScreen(
                         viewModel.save(nameText)
                         onDone()
                     },
-                    enabled = prefilled && nameText.isNotBlank(),
+                    enabled = editingEnabled && nameText.isNotBlank(),
                     modifier = Modifier.weight(1f),
                 ) { Text("Save") }
             }

@@ -40,6 +40,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.MainActivity
+import mobile.racemaster.data.db.entity.HistoryAction
+import mobile.racemaster.data.db.entity.formatSplitRef
 import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.SplitRow
 import mobile.racemaster.ui.components.StopOrResetButton
@@ -164,7 +166,7 @@ private fun TimeModeContent(
                 Text(text = "Race name: ${uiState.raceLabel}", style = MaterialTheme.typography.labelMedium)
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
-                        text = "Next: #${uiState.nextSplitNumber}",
+                        text = "Next: ${formatSplitRef(uiState.nextSplitNumber)}",
                         style = MaterialTheme.typography.labelMedium,
                     )
                     SyncStatusLine(uiState.unsyncedCount, uiState.lastSyncedAtMillis)
@@ -215,7 +217,7 @@ private fun TimeModeContent(
                             enabled = uiState.canUndo,
                             description = uiState.splits.firstOrNull()?.let {
                                 val noteSuffix = it.note?.let { note -> " · $note" }.orEmpty()
-                                "Remove split #${it.splitNumber}$noteSuffix (${formatElapsed(it.elapsedMillis)})"
+                                "Remove split ${formatSplitRef(it.splitNumber)}$noteSuffix (${formatElapsed(it.elapsedMillis)})"
                             }.orEmpty(),
                             onConfirm = onUndo,
                             modifier = Modifier.weight(1f),
@@ -249,12 +251,16 @@ private fun TimeModeContent(
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     items(uiState.splits, key = { it.id }) { split ->
+                        // Start/Stop marker rows are never editable — retyping either one's
+                        // own note would break every query keyed off it (the repository also
+                        // refuses this as a backstop, but the UI shouldn't offer it at all).
+                        val isMarkerRow = split.action == HistoryAction.START || split.action == HistoryAction.STOP
                         SplitRow(
                             splitNumber = split.splitNumber,
                             elapsedMillis = split.elapsedMillis,
                             note = split.note,
                             synced = split.synced,
-                            onClick = { editingSplitId = split.id },
+                            onClick = if (isMarkerRow) null else { { editingSplitId = split.id } },
                         )
                     }
                 }
@@ -277,7 +283,7 @@ private fun EditSplitNotePanel(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(
-            "Editing #${split.splitNumber}  ${formatElapsed(split.elapsedMillis)}",
+            "Editing ${formatSplitRef(split.splitNumber)}  ${formatElapsed(split.elapsedMillis)}",
             style = MaterialTheme.typography.titleMedium,
         )
         Row(

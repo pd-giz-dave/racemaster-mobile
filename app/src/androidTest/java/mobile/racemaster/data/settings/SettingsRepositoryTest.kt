@@ -84,4 +84,68 @@ class SettingsRepositoryTest {
         assertEquals("custom-name", repository.getOrCreateDeviceName())
         scope.cancel()
     }
+
+    // raceNameHistory — see RaceDetailsScreen's Race name field.
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun raceNameHistoryIsMostRecentFirstWithoutDuplicates() = runTest {
+        val file = tempFolder.newFile("test.preferences_pb")
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = SettingsRepository(dataStoreOverFile(file, scope))
+
+        repository.addRaceNameToHistory("Alpha")
+        repository.addRaceNameToHistory("Beta")
+        assertEquals(listOf("Beta", "Alpha"), repository.raceNameHistory.first())
+
+        // Re-adding an existing name moves it back to the front rather than leaving a
+        // duplicate entry behind.
+        repository.addRaceNameToHistory("Alpha")
+        assertEquals(listOf("Alpha", "Beta"), repository.raceNameHistory.first())
+        scope.cancel()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun blankRaceNameIsNeverAddedToHistory() = runTest {
+        val file = tempFolder.newFile("test.preferences_pb")
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = SettingsRepository(dataStoreOverFile(file, scope))
+
+        repository.addRaceNameToHistory("   ")
+        assertEquals(emptyList<String>(), repository.raceNameHistory.first())
+        scope.cancel()
+    }
+
+    // serverCredentialHistory — see MuleServerSetupScreen's url/username/password fields.
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun serverCredentialHistoryIsMostRecentFirstKeyedByUrlAndUsername() = runTest {
+        val file = tempFolder.newFile("test.preferences_pb")
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = SettingsRepository(dataStoreOverFile(file, scope))
+
+        repository.saveServerSetupDraft("https://a.example", "user-a", "pass-1")
+        repository.saveServerSetupDraft("https://b.example", "user-b", "pass-2")
+        assertEquals(
+            listOf(
+                ServerSetupDraft("https://b.example", "user-b", "pass-2"),
+                ServerSetupDraft("https://a.example", "user-a", "pass-1"),
+            ),
+            repository.serverCredentialHistory.first(),
+        )
+
+        // Re-submitting the same url+username combo (e.g. a corrected password) replaces the
+        // old entry and moves it back to the front, rather than leaving a stale duplicate.
+        repository.saveServerSetupDraft("https://a.example", "user-a", "pass-3")
+        assertEquals(
+            listOf(
+                ServerSetupDraft("https://a.example", "user-a", "pass-3"),
+                ServerSetupDraft("https://b.example", "user-b", "pass-2"),
+            ),
+            repository.serverCredentialHistory.first(),
+        )
+        scope.cancel()
+    }
 }

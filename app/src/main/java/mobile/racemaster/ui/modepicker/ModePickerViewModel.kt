@@ -5,7 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import mobile.racemaster.data.db.entity.BibEntryType
+import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
@@ -55,8 +55,8 @@ class ModePickerViewModel(
             } else {
                 combine(
                     raceRepository.observeRace(raceId),
-                    timeModeRepository.observeSplits(raceId),
-                    bibsModeRepository.observeEntries(raceId),
+                    timeModeRepository.observeCurrentSegmentSplits(raceId),
+                    bibsModeRepository.observeCurrentSegmentEntries(raceId),
                     settingsRepository.appMode,
                 ) { race, splits, bibEntries, mode ->
                     if (race == null) return@combine null
@@ -71,14 +71,17 @@ class ModePickerViewModel(
                         raceLabel = race.label,
                         currentModeLabel = mode.displayName(),
                         splitCount = splits.count { it.splitNumber != 0 },
-                        bibCount = bibEntries.count { it.type != BibEntryType.CLOCK },
+                        bibCount = bibEntries.count { it.action != HistoryAction.CLOCK },
                     )
                 }
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    /** Mode switch when a race is already active — no new race needed. */
+    /** Mode switch when a race is already active — no new race needed. Switching into Bibs
+     *  Mode for a race started in a different mode lands on an empty Bibs segment, same as a
+     *  freshly created one — its own Start button (see BibsModeScreen) is what begins it,
+     *  nothing needed here. */
     fun selectModeForExistingRace(mode: AppMode, onComplete: () -> Unit) {
         viewModelScope.launch {
             settingsRepository.setAppMode(mode)

@@ -32,6 +32,12 @@ class MuleServerSetupViewModel(
     val isLoggedIn: StateFlow<Boolean> = muleRepository.isLoggedIn
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    // Every url/username/password combination previously submitted here, most-recent-first —
+    // see MuleServerSetupScreen, which derives each field's own history dropdown (and the
+    // URL/username auto-fill behavior) from this one list.
+    val credentialHistory: StateFlow<List<ServerSetupDraft>> = settingsRepository.serverCredentialHistory
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     suspend fun save(url: String, username: String, password: String) {
         // Saved before attempting login, not after — so a failed attempt (e.g. a password
         // typo) still leaves the form sticky for a quick retry rather than losing everything

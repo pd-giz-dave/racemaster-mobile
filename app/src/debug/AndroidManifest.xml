@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- This is a merge fragment, not a standalone manifest — android:icon (and everything
+         else app-wide) is already declared on the main manifest's <application> tag and
+         merges in fine; tools:ignore just silences the per-file "no icon" inspection some
+         IDE/lint passes raise when analyzing this fragment in isolation rather than merged. -->
+    <application
+        android:networkSecurityConfig="@xml/network_security_config_debug"
+        tools:ignore="MissingApplicationIcon" />
+
+</manifest>

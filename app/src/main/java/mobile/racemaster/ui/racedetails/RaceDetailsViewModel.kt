@@ -6,7 +6,6 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.RaceEntity
-import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
@@ -30,7 +29,6 @@ class RaceDetailsViewModel(
     val mode: AppMode,
     val existingRaceId: Long?,
     private val raceRepository: RaceRepository,
-    private val bibsModeRepository: BibsModeRepository,
     private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
@@ -44,35 +42,41 @@ class RaceDetailsViewModel(
     val deviceName: StateFlow<String?> = settingsRepository.deviceName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    /** Creates a new race (bibsRangeStart/Count required when [mode] is BIBS) or updates the
-     *  existing one's details, then arms it as the active race for new ones. Returns the
-     *  resulting race id. */
+    // Every race name previously saved from this form (new or renamed) — see
+    // RaceDetailsScreen's Race name field, which offers these for re-selection.
+    val raceNameHistory: StateFlow<List<String>> = settingsRepository.raceNameHistory
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    // Every course previously saved from this form — see RaceDetailsScreen's Course field.
+    val courseHistory: StateFlow<List<String>> = settingsRepository.courseHistory
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Creates a new race or updates the existing one's details, then arms it as the active
+     *  race for new ones. Returns the resulting race id. Bibs Mode no longer needs a
+     *  dedicated creation path — its Clock marker is deferred to an explicit Start button
+     *  press (see BibsModeRepository.startBibsMode), so creation itself is identical to every
+     *  other mode's. bibsRangeStart/Count are required in practice for BIBS (the form itself
+     *  won't enable Create without them — see RaceDetailsScreen's countFieldsValid), but
+     *  stay nullable here since Time Mode collects the same fields purely for form/feedback
+     *  parity without ever needing them. */
     suspend fun save(name: String, course: String, bibsRangeStart: Int?, bibsRangeCount: Int?): Long {
         val trimmedName = name.trim()
         val trimmedCourse = course.trim()
+        settingsRepository.addRaceNameToHistory(trimmedName)
+        settingsRepository.addCourseToHistory(trimmedCourse)
 
         val raceId = existingRaceId
         return if (raceId != null) {
             raceRepository.updateRaceDetails(raceId, trimmedName, trimmedCourse, bibsRangeStart, bibsRangeCount)
             raceId
         } else {
-            val newRaceId = if (mode == AppMode.BIBS) {
-                bibsModeRepository.createRaceWithClockMarker(
-                    name = trimmedName,
-                    course = trimmedCourse,
-                    bibsRangeStart = requireNotNull(bibsRangeStart) { "Bibs races require a bib range start" },
-                    bibsRangeCount = requireNotNull(bibsRangeCount) { "Bibs races require a bib range count" },
-                    deviceRole = mode.name,
-                )
-            } else {
-                raceRepository.startNewRace(
-                    trimmedName,
-                    trimmedCourse,
-                    deviceRole = mode.name,
-                    bibsRangeStart = bibsRangeStart,
-                    bibsRangeCount = bibsRangeCount,
-                )
-            }
+            val newRaceId = raceRepository.startNewRace(
+                trimmedName,
+                trimmedCourse,
+                deviceRole = mode.name,
+                bibsRangeStart = bibsRangeStart,
+                bibsRangeCount = bibsRangeCount,
+            )
             settingsRepository.setAppMode(mode)
             settingsRepository.setActiveRaceId(newRaceId)
             newRaceId
@@ -87,7 +91,6 @@ class RaceDetailsViewModel(
                     mode,
                     existingRaceId,
                     container.raceRepository,
-                    container.bibsModeRepository,
                     container.settingsRepository,
                 )
             }

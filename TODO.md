@@ -176,9 +176,9 @@ scoped to Mule ↔ Time/Bibs over BLE + Mule → racemaster server over HTTP; mu
 - [x] xperia crashes on opening the mule mode screen when bluetooth not on
 - [x] allow mule mode to connect to whatever others it can see, no limits
 - [x] fractional seconds are not getting to the mule
-- [ ] on the mule history put source device name on the same line as the data
+- [x] on the mule history put source device name on the same line as the data
 - [x] detect if bluetooth is off and warn user
-- [ ] use grid for bibs mode digit keypad, not buttons, like the built-in numeric keyboard
+- [x] use grid for bibs mode digit keypad, not buttons, like the built-in numeric keyboard
 - [x] treat 'self' as a discovered device and list just like the others but with "(self)" suffix
 - [ ] treat 404 as an expected response when ping'ing or post/put a server that is not a race master server
       and just invalidate the server (with app header feedback), put keep re-trying
@@ -186,11 +186,95 @@ scoped to Mule ↔ Time/Bibs over BLE + Mule → racemaster server over HTTP; mu
       ie. 1 line per device, no pull button, its auto and assumed, if it can see it it pulls from it
 - [x] verify screen blank/lock is disabled when Racemaster running
 - [x] new server structure /mobile/user/race/device then a JSON file of whatever that device holds
-- [ ] when user does a 'reset' do not clear history, instead insert a 'reset' line,
+- [x] when user does a 'reset' do not clear history, instead insert a 'reset' line,
       the mode screens clear as now, history just carries on,
       every history line is uniquely numbered, devices broadcast race name + last history line #,
-      recipient devices know last line# they received and ask for any new ones,
-- [ ] provide a means of extracting the last line# in the server files so that only deltas need be sent
+      recipient devices know last line# they received and ask for any new ones:
+      `RaceEntity.nextLineNumber` (permanent, never decremented, separate from the display
+      counters that still reset per-segment), `FinishSplitEntity`/`BibEntryEntity.lineNumber`,
+      Reset now inserts a `note`/`type = RESET` marker row instead of deleting (Bibs re-inserts
+      a fresh Clock row after, same as at creation) — "current segment" for the live screen is
+      a derived `WHERE lineNumber > (last Reset's lineNumber)` boundary, full history (Race
+      History screen) is unfiltered and renders a "— Reset —" divider for marker rows; BLE
+      `DeviceInfo.lastLineNumber` + `PullRequest(sinceLineNumber)` replace the old bare
+      unsynced-count/pull-everything model, `AckPayload(deviceId, recordUuids)` lets the
+      peripheral attribute an ack back to whichever device pulled it
+- [x] provide a means of extracting the last line# in the server files so that only deltas need
+      be sent: `GET /api/mobile/:raceLabel/status` reports each stored device's max `time`/`bibs`
+      `lineNumber`, `MuleRepository.pushToServer()` filters each record against it before
+      sending — recordUuid dedup on the server stays as the backstop regardless
+- [x] mule mode history now needs a list of devices that have sync'd each line, including the
+      server for online mules — deliberately simple, non-gossip bookkeeping (no multi-hop
+      mule-to-mule relay, see "Later phases" below): new `LineSyncEntity`/`LineSyncDao`
+      records, per line, every deviceId that's BLE-acked it (`PeripheralSyncService.markSynced`)
+      and (for this device's own originated lines only) the reserved `SERVER_TARGET_ID` once a
+      push to the server succeeds; Race History renders "Synced to: ..." per line. Verified live
+      on the 3-phone fleet: two independent nearby devices (a Mule and a bystander Bibs phone
+      both running the always-on sync engine) each pulled and acked a Time phone's splits, and
+      the DB-level attribution matched each device's own real deviceId exactly
+- [x] history is a true chronology of **everything** the user did,
+      so undo gets a history line,
+      previous line edit gets a history line, it has a new unique number but echoes the details of the original line after its been edited,
+      so going through the file on the server from top to bottom replays all user actions and at the end you have what user sees on his bibs mode or time mode screen:
+      `FinishSplitEntity`/`BibEntryEntity` gained a nullable `refLineNumber` — an edit-echo or
+      undo-marker always points it at the original ROOT row (never an intermediate echo, so
+      reconstructing "what's visible" only needs one level of grouping); `undoMostRecent`
+      (renamed from `deleteMostRecent`) and `updateNote`/`updateEntry` both moved from
+      raw SQL delete/UPDATE to inserting a new row, in `HistoryFold.foldLatestVisible`
+      (folds current-segment rows down to "latest visible logical entry per root, undone
+      groups excluded" — used by both mode repositories' live-screen queries); race-state
+      side effects (Start/Stop/Clock guards) are keyed off the resolved ROOT row, never the
+      edited target, so they can't be defeated by an edit; Race History (still fully
+      unfolded, as intended) now renders a "edited from #N" caption and a dedicated
+      "↩ Undo of #N" marker row instead of passing these through unremarked. Verified live:
+      edited a split's note (stayed at its original position, original row untouched in the
+      DB), undid a split (hidden from the live view, not deleted), confirmed via direct DB
+      inspection that `lineNumber`/`refLineNumber` matched design exactly
+- [x] using a UUID in history for sync'd too is not user friendly, use the device name:
+      `AckPayload`/`LineSyncEntity` both gained a `deviceName`/`targetName` field captured at
+      write time (same denormalized-at-write-time convention as the recording device's own
+      `deviceName` column) — Race History's "Synced to" now shows real device names
+      ("larky-ferret", "Server"), confirmed live on-device
+- [x] merge bib entries and time entries in history, its just one table with one line number series, 
+      a device typically only does one or the other,
+      unified line: line#, split#, time (null for a bib entry), bib# (null for a time entry), action, note —
+      `FinishSplitEntity`/`BibEntryEntity` replaced by one `HistoryLineEntity`/`HistoryLineDao`
+      (discriminated by a new `HistoryMode` enum), Time markers moved into a real `HistoryAction`
+      instead of being smuggled through `note`; confirmed live with a deliberately mixed-mode race
+      (Bibs entries then Time splits on the same race, no new race created) rendering as one true
+      chronology by line number in Race History
+- [x] device name per line in history is overkill, the whole table comes from a single device
+      and that is propagated to the server as a file name —
+      `HistoryLineEntity` carries no per-row device name; outgoing records now source `deviceName`
+      from `RaceEntity.createdByDeviceName` (fixed at race creation), confirmed live: renaming the
+      device mid-race left every record — local and server-pushed — attributed to the original name
+- [x] add some more adjectives and nouns for name generation (to minimise name collisions) —
+      `DeviceNameGenerator`'s adjective/noun lists both expanded from 60 to 80 entries
+
+## Bugs
+
+- [x] history: via Mule (BIBS) and via Mule (TIME) is confusing, they replicate Created by dapper-raven, show bibs/time in one list like local and label it in the same way ie. Created by ... but call it, in all cases, "From ..." —
+      local and Mule-sourced races both now say "From {name}"; the two per-role Mule-source list
+      entries merged into one per race label, confirmed live
+- [x] Unique line number not getting through to the server (useful in case array ordering goes wonky) —
+      confirmed live: pushed a mixed-mode race and the server's `/status` endpoint reported the
+      correct max lineNumber per category (bibs: 2, time: 5) from one shared sequence
+- [x] dup bib detection is not considering reset boundaries —
+      new `findDuplicateSplitRefsPerSegment` splits history into Reset-bounded segments before
+      checking for duplicates, so a bib reused after a Reset is no longer flagged against an
+      earlier, already-reset-away segment
+- [x] mule mode connected to server is not showing feedback that server has got it —
+      a genuinely successful automatic push now sets a status message too, not just failures;
+      confirmed live ("Pushed 5 new records to the server" appeared without tapping Force sync now)
+- [x] in time mode do not put start, stop, reset, et al, in the note field put it in the action field, the note field is for the user only —
+      Time markers now use dedicated `HistoryAction` values (`CLOCK_START`/`CLOCK_STOP`/`CLOCK_RESET`),
+      `note` is free text only
+- [x] time centiseconds not getting through to the server —
+      wire `time` format gained centiseconds (`HH:MM:SS.CC`); confirmed live in the server's stored
+      JSON (`"00:00:24.16"`, `"00:04:09.04"`)
+- [x] edited from #2 in history is misleading, looks like a splitnumber, its not its the line#, show that too in history —
+      wording changed to "edited from line #N" / "Undo of line #N"
+- [x] in mule mode show last pull and last push on 2 lines, not 1 that wraps
 
 ## Mule Mode changes
 
@@ -205,6 +289,10 @@ scoped to Mule ↔ Time/Bibs over BLE + Mule → racemaster server over HTTP; mu
 - [x] the sections are updated/replaced in their entirety for each sync, so no record uuid required
       (recordUuid is still carried per-record and used server-side only to report a meaningful
       `added` count in the response, not to merge/dedup — the section itself is always wholly replaced)
+      — superseded once delta-sync shipped: since the client now sends only new lines rather
+      than a full resend every tick, a wholesale replace would silently drop everything already
+      stored, so the server now append-merges new records (deduped by recordUuid) into each
+      device's existing section instead of replacing it outright
 - [x] must be able to identify dup phones and de-select them, the id mechanism must be such that
       a user can just ask whoever is holding the phone "who are you" so they need to be able to see their ID,
       the ID should be auto allocated but short and memorable (i.e. not a uuid), may be the user allocates it as part

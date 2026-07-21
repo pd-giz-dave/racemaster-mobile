@@ -42,21 +42,28 @@ class DefaultAppContainer(context: Context) : AppContainer {
     }
 
     override val raceRepository: RaceRepository by lazy {
-        RaceRepository(database.raceDao(), settingsRepository)
+        RaceRepository(
+            database.raceDao(),
+            database.historyLineDao(),
+            database.lineSyncDao(),
+            database.pulledRecordDao(),
+            settingsRepository,
+            bibsModeRepository,
+        )
     }
 
     override val timeModeRepository: TimeModeRepository by lazy {
-        TimeModeRepository(database, database.raceDao(), database.finishSplitDao(), settingsRepository)
+        TimeModeRepository(database, database.raceDao(), database.historyLineDao())
     }
 
     override val bibsModeRepository: BibsModeRepository by lazy {
-        BibsModeRepository(database, database.raceDao(), database.bibEntryDao(), settingsRepository)
+        BibsModeRepository(database, database.raceDao(), database.historyLineDao())
     }
 
     private val muleSyncClient: MuleSyncClient by lazy { MuleSyncClient() }
 
     override val muleRepository: MuleRepository by lazy {
-        MuleRepository(database.pulledRecordDao(), settingsRepository, MulePullClient(), muleSyncClient)
+        MuleRepository(database.pulledRecordDao(), settingsRepository, MulePullClient(), muleSyncClient, raceRepository)
     }
 
     override val muleSyncEngine: MuleSyncEngine by lazy {

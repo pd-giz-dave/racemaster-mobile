@@ -16,17 +16,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.BuildConfig
 import mobile.racemaster.R
 import mobile.racemaster.data.mule.ServerStatus
 import mobile.racemaster.ui.theme.RaceMasterGreen
 import mobile.racemaster.ui.theme.ServerInvalidAmber
 import mobile.racemaster.ui.theme.ServerOfflineRed
-import mobile.racemaster.ui.theme.SyncedGreen
+import mobile.racemaster.ui.theme.ServerOnlineGreen
 
 /**
  * Always-visible app banner shown above every screen, styled to match the RaceMaster web
@@ -59,7 +63,12 @@ fun AppBanner(
             modifier = Modifier.size(28.dp),
         )
         Text(
-            "RaceMaster Mobile",
+            buildAnnotatedString {
+                append("RaceMaster Mobile ")
+                withStyle(SpanStyle(fontSize = 11.sp, fontWeight = FontWeight.Normal)) {
+                    append("v${BuildConfig.VERSION_NAME}")
+                }
+            },
             color = Color.White,
             fontWeight = FontWeight.SemiBold,
             fontSize = 17.sp,
@@ -75,7 +84,7 @@ fun AppBanner(
 private fun ServerStatusIndicator(status: ServerStatus) {
     val indicator = when (status) {
         ServerStatus.UNKNOWN -> null
-        ServerStatus.ONLINE -> SyncedGreen to "Online"
+        ServerStatus.ONLINE -> ServerOnlineGreen to "Online"
         ServerStatus.OFFLINE -> ServerOfflineRed to "Offline"
         ServerStatus.INVALID -> ServerInvalidAmber to "Invalid server"
     } ?: return

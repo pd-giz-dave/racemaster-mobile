@@ -62,16 +62,24 @@ class MulePullClient {
         }
     }
 
-    /** Connects, requests a pull, reassembles the chunked/notified record stream, hands the
+    /** Connects, requests every line after [sinceLineNumber] (delta-sync — 0 requests the
+     *  device's entire history), reassembles the chunked/notified record stream, hands the
      *  records to [onReceived] to persist, and — only once that returns successfully — acks
-     *  back the received `recordUuid`s so the peripheral can mark them synced. Acking is
-     *  deliberately gated on [onReceived] completing without throwing: if it throws (a failed
-     *  local insert, a mid-write disconnect, cancellation, ...), the peripheral never hears
-     *  about these records and will still offer them again on the next pull — the safe
-     *  failure mode is a harmless redundant re-pull (records are deduped by `recordUuid` on
-     *  the way in), not the source silently marking data synced that the mule never actually
-     *  captured. */
-    suspend fun pull(advertisement: Advertisement, onReceived: suspend (List<SyncRecord>) -> Unit): Unit = coroutineScope {
+     *  back the received `recordUuid`s (tagged with [pullerDeviceId]/[pullerDeviceName]) so
+     *  the peripheral can attribute and mark them synced. Acking is deliberately gated on
+     *  [onReceived] completing without throwing: if it throws (a failed local insert, a
+     *  mid-write disconnect,
+     *  cancellation, ...), the peripheral never hears about these records and will still offer
+     *  them again on the next pull — the safe failure mode is a harmless redundant re-pull
+     *  (records are deduped by `recordUuid` on the way in), not the source silently marking
+     *  data synced that the mule never actually captured. */
+    suspend fun pull(
+        advertisement: Advertisement,
+        pullerDeviceId: String,
+        pullerDeviceName: String,
+        sinceLineNumber: Long,
+        onReceived: suspend (List<SyncRecord>) -> Unit,
+    ): Unit = coroutineScope {
         val peripheral = peripheralFor(advertisement)
         peripheral.connect()
         try {
@@ -103,7 +111,8 @@ class MulePullClient {
             // on this characteristic server-side — Kable's write() defaults to
             // WriteType.WithoutResponse, which fails against a with-response-only
             // characteristic ("writeWithoutResponse property not found").
-            peripheral.write(controlCharacteristic, MuleGattProfile.PULL_COMMAND.toByteArray(Charsets.UTF_8), WriteType.WithResponse)
+            val pullRequest = json.encodeToString(PullRequest(sinceLineNumber))
+            peripheral.write(controlCharacteristic, pullRequest.toByteArray(Charsets.UTF_8), WriteType.WithResponse)
             withTimeout(PULL_TIMEOUT) { collectJob.join() }
 
             val payload = chunks.fold(ByteArray(0)) { acc, chunk -> acc + chunk }.toString(Charsets.UTF_8)
@@ -111,7 +120,7 @@ class MulePullClient {
 
             if (records.isNotEmpty()) {
                 onReceived(records)
-                val ackPayload = json.encodeToString(records.map { it.recordUuid })
+                val ackPayload = json.encodeToString(AckPayload(pullerDeviceId, records.map { it.recordUuid }, pullerDeviceName))
                 peripheral.write(ackCharacteristic, ackPayload.toByteArray(Charsets.UTF_8), WriteType.WithResponse)
             }
         } finally {

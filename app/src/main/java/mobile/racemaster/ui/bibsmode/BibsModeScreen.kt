@@ -46,8 +46,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.MainActivity
-import mobile.racemaster.data.db.entity.BIB_REQUIRED_TYPES
-import mobile.racemaster.data.db.entity.BibEntryType
+import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
+import mobile.racemaster.data.db.entity.HistoryAction
+import mobile.racemaster.data.db.entity.formatSplitRef
 import mobile.racemaster.ui.components.BibEntryRow
 import mobile.racemaster.ui.components.DigitKeypad
 import mobile.racemaster.ui.components.ModeScreenTopBar
@@ -106,6 +107,7 @@ fun BibsModeScreen(
         BibsModeContent(
             uiState = uiState,
             deviceName = deviceName,
+            onStart = viewModel::startBibsMode,
             onDigit = viewModel::onDigit,
             onBackspace = viewModel::onBackspace,
             onClear = viewModel::onClear,
@@ -138,15 +140,16 @@ fun BibsModeScreen(
 private fun BibsModeContent(
     uiState: BibsModeUiState,
     deviceName: String?,
+    onStart: () -> Unit,
     onDigit: (Int) -> Unit,
     onBackspace: () -> Unit,
     onClear: () -> Unit,
-    onSetPendingEventType: (BibEntryType) -> Unit,
+    onSetPendingEventType: (HistoryAction) -> Unit,
     onSubmit: () -> Unit,
     onStop: () -> Unit,
     onReset: () -> Unit,
     onUndo: () -> Unit,
-    onUpdateEntry: (id: Long, bibNumber: Int?, type: BibEntryType, note: String?) -> Unit,
+    onUpdateEntry: (id: Long, bibNumber: Int?, type: HistoryAction, note: String?) -> Unit,
     onUpdateClockTime: (id: Long, raw: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -205,7 +208,7 @@ private fun BibsModeContent(
                 Text(text = "Race name: ${uiState.raceLabel}", style = MaterialTheme.typography.labelMedium)
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
-                        text = "Next: #${uiState.nextSplitNumber}",
+                        text = "Next: ${formatSplitRef(uiState.nextSplitNumber)}",
                         style = MaterialTheme.typography.labelMedium,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -244,107 +247,130 @@ private fun BibsModeContent(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Text(
-                    text = if (uiState.pendingEventType in BIB_REQUIRED_TYPES) {
-                        uiState.currentDigits.ifEmpty { "Enter bib" }
-                    } else {
-                        uiState.pendingEventType.displayName()
-                    },
-                    style = MaterialTheme.typography.headlineSmall,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
-                DigitKeypad(
-                    onDigit = onDigit,
-                    onBackspace = onBackspace,
-                    onClear = onClear,
-                    enabled = uiState.raceId != null,
-                    buttonHeight = 52.dp,
-                    spacing = 4.dp,
-                )
-
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (!uiState.started) {
+                    // Nothing recorded yet for this segment (a fresh race, a race switched
+                    // into from a different mode, or one just Reset) — side-effect-free to
+                    // just look at, exactly like Time Mode's own pre-Start state. Nothing
+                    // below is written until this is pressed (see
+                    // BibsModeRepository.startBibsMode).
                     Button(
-                        onClick = withClickSound(onSubmit),
-                        enabled = uiState.canSubmit,
-                        contentPadding = BUTTON_ROW_CONTENT_PADDING,
-                        modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
-                    ) { Text(uiState.pendingEventType.displayName()) }
-                    OutlinedButton(
-                        onClick = withClickSound { showEventPicker = true },
-                        enabled = uiState.raceId != null && !uiState.stopped,
-                        contentPadding = BUTTON_ROW_CONTENT_PADDING,
-                        modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
-                    ) { Text("Event") }
-                    StopOrResetButton(
-                        isStopped = uiState.stopped,
-                        stopDescription = "No more bib entries can be logged. Undo the Stop entry to resume.",
-                        resetDescription = "This clears every bib entry and resets ready to start again from scratch.",
-                        onStop = onStop,
-                        onReset = onReset,
+                        onClick = withClickSound(onStart),
                         enabled = uiState.raceId != null,
-                        contentPadding = BUTTON_ROW_CONTENT_PADDING,
-                        modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(96.dp),
+                    ) { Text("START", style = MaterialTheme.typography.displaySmall) }
+                } else {
+                    Text(
+                        text = if (uiState.pendingEventType in BIB_REQUIRED_ACTIONS) {
+                            uiState.currentDigits.ifEmpty { "Enter bib" }
+                        } else {
+                            uiState.pendingEventType.displayName()
+                        },
+                        style = MaterialTheme.typography.headlineSmall,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
                     )
-                    UndoLastButton(
-                        enabled = uiState.raceId != null && uiState.canUndo,
-                        description = uiState.entries.firstOrNull()?.let { undoDescription(it) }.orEmpty(),
-                        onConfirm = onUndo,
-                        contentPadding = BUTTON_ROW_CONTENT_PADDING,
-                        modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
-                    )
-                }
 
-                if (showEventPicker) {
-                    EventPickerDialog(
-                        current = uiState.pendingEventType,
-                        onSelect = { type ->
-                            onSetPendingEventType(type)
-                            showEventPicker = false
-                        },
-                        onDismiss = { showEventPicker = false },
+                    DigitKeypad(
+                        onDigit = onDigit,
+                        onBackspace = onBackspace,
+                        onClear = onClear,
+                        enabled = uiState.raceId != null,
+                        buttonHeight = 52.dp,
+                        spacing = 4.dp,
                     )
-                }
 
-                if (editingEntry != null) {
-                    HorizontalDivider()
-                    EditBibEntryPanel(
-                        entry = editingEntry,
-                        onSaveEntry = { bib, type, note ->
-                            onUpdateEntry(editingEntry.id, bib, type, note)
-                            editingEntryId = null
-                        },
-                        onSaveClockTime = { raw ->
-                            onUpdateClockTime(editingEntry.id, raw)
-                            editingEntryId = null
-                        },
-                        onCancel = { editingEntryId = null },
-                    )
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Button(
+                            onClick = withClickSound(onSubmit),
+                            enabled = uiState.canSubmit,
+                            contentPadding = BUTTON_ROW_CONTENT_PADDING,
+                            modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
+                        ) { Text(uiState.pendingEventType.displayName()) }
+                        OutlinedButton(
+                            onClick = withClickSound { showEventPicker = true },
+                            enabled = uiState.raceId != null && !uiState.stopped,
+                            contentPadding = BUTTON_ROW_CONTENT_PADDING,
+                            modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
+                        ) { Text("Event") }
+                        StopOrResetButton(
+                            isStopped = uiState.stopped,
+                            stopDescription = "No more bib entries can be logged. Undo the Stop entry to resume.",
+                            resetDescription = "This clears every bib entry and resets ready to start again from scratch.",
+                            onStop = onStop,
+                            onReset = onReset,
+                            enabled = uiState.raceId != null,
+                            contentPadding = BUTTON_ROW_CONTENT_PADDING,
+                            modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
+                        )
+                        UndoLastButton(
+                            enabled = uiState.raceId != null && uiState.canUndo,
+                            description = uiState.entries.firstOrNull()?.let { undoDescription(it) }.orEmpty(),
+                            onConfirm = onUndo,
+                            contentPadding = BUTTON_ROW_CONTENT_PADDING,
+                            modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
+                        )
+                    }
+
+                    if (showEventPicker) {
+                        EventPickerDialog(
+                            current = uiState.pendingEventType,
+                            onSelect = { type ->
+                                onSetPendingEventType(type)
+                                showEventPicker = false
+                            },
+                            onDismiss = { showEventPicker = false },
+                        )
+                    }
+
+                    if (editingEntry != null) {
+                        HorizontalDivider()
+                        EditBibEntryPanel(
+                            entry = editingEntry,
+                            onSaveEntry = { bib, type, note ->
+                                onUpdateEntry(editingEntry.id, bib, type, note)
+                                editingEntryId = null
+                            },
+                            onSaveClockTime = { raw ->
+                                onUpdateClockTime(editingEntry.id, raw)
+                                editingEntryId = null
+                            },
+                            onCancel = { editingEntryId = null },
+                        )
+                    }
                 }
             }
 
-            HorizontalDivider()
+            if (uiState.started) {
+                HorizontalDivider()
 
-            val listState = rememberLazyListState()
-            LaunchedEffect(uiState.entries.firstOrNull()?.id) {
-                if (uiState.entries.isNotEmpty()) listState.scrollToItem(0)
-            }
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                items(uiState.entries, key = { it.id }) { entry ->
-                    BibEntryRow(
-                        splitNumber = entry.splitNumber,
-                        bibNumber = entry.bibNumber,
-                        typeLabel = entry.type.displayName(),
-                        note = entry.note,
-                        dupSplitRefs = entry.dupSplitRefs,
-                        synced = entry.synced,
-                        onClick = { editingEntryId = entry.id },
-                    )
+                val listState = rememberLazyListState()
+                LaunchedEffect(uiState.entries.firstOrNull()?.id) {
+                    if (uiState.entries.isNotEmpty()) listState.scrollToItem(0)
+                }
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    items(uiState.entries, key = { it.id }) { entry ->
+                        // Stop/Reset marker rows are never editable — retyping either one's own
+                        // type/note would break every query keyed off it (the repository also
+                        // refuses this as a backstop, but the UI shouldn't offer it at all). Clock
+                        // stays editable via its own dedicated time-only panel (see
+                        // EditBibEntryPanel).
+                        val isMarkerRow = entry.type == HistoryAction.STOP || entry.type == HistoryAction.RESET
+                        BibEntryRow(
+                            splitNumber = entry.splitNumber,
+                            bibNumber = entry.bibNumber,
+                            typeLabel = entry.type.displayName(),
+                            note = entry.note,
+                            dupSplitRefs = entry.dupSplitRefs,
+                            synced = entry.synced,
+                            onClick = if (isMarkerRow) null else { { editingEntryId = entry.id } },
+                        )
+                    }
                 }
             }
         }
@@ -353,8 +379,8 @@ private fun BibsModeContent(
 
 @Composable
 private fun EventPickerDialog(
-    current: BibEntryType,
-    onSelect: (BibEntryType) -> Unit,
+    current: HistoryAction,
+    onSelect: (HistoryAction) -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -381,17 +407,17 @@ private fun EventPickerDialog(
 @Composable
 private fun EditBibEntryPanel(
     entry: BibEntryUi,
-    onSaveEntry: (bibNumber: Int?, type: BibEntryType, note: String?) -> Unit,
+    onSaveEntry: (bibNumber: Int?, type: HistoryAction, note: String?) -> Unit,
     onSaveClockTime: (raw: String) -> Unit,
     onCancel: () -> Unit,
 ) {
-    if (entry.type == BibEntryType.CLOCK) {
+    if (entry.type == HistoryAction.CLOCK) {
         var timeText by remember(entry.id) { mutableStateOf(entry.note.orEmpty()) }
         Column(
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text("Editing #${entry.splitNumber}  Clock", style = MaterialTheme.typography.titleMedium)
+            Text("Editing ${formatSplitRef(entry.splitNumber)}  Clock", style = MaterialTheme.typography.titleMedium)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -414,13 +440,13 @@ private fun EditBibEntryPanel(
     var bibText by remember(entry.id) { mutableStateOf(entry.bibNumber?.toString().orEmpty()) }
     var noteText by remember(entry.id) { mutableStateOf(entry.note.orEmpty()) }
     var showEventPicker by remember { mutableStateOf(false) }
-    val needsBib = editType in BIB_REQUIRED_TYPES
+    val needsBib = editType in BIB_REQUIRED_ACTIONS
 
     Column(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text("Editing #${entry.splitNumber}", style = MaterialTheme.typography.titleMedium)
+        Text("Editing ${formatSplitRef(entry.splitNumber)}", style = MaterialTheme.typography.titleMedium)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = withClickSound { showEventPicker = true }) { Text(editType.displayName()) }
             if (needsBib) {
@@ -465,5 +491,5 @@ private fun EditBibEntryPanel(
 
 private fun undoDescription(entry: BibEntryUi): String {
     val subject = entry.bibNumber?.let { "bib $it (${entry.type.displayName()})" } ?: entry.type.displayName()
-    return "Remove $subject #${entry.splitNumber}"
+    return "Remove $subject ${formatSplitRef(entry.splitNumber)}"
 }

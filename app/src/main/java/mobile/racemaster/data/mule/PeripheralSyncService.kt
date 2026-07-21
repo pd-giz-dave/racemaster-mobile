@@ -84,6 +84,13 @@ class PeripheralSyncService : Service() {
     private var dataCharacteristic: BluetoothGattCharacteristic? = null
 
     private var deviceId: String = ""
+
+    // Kept live for this service's whole lifetime by observeDeviceName() below — a rename via
+    // NameDeviceScreen must reach onCharacteristicReadRequest's DeviceInfo replies immediately,
+    // not just the next time this long-running service happens to restart. @Volatile for the
+    // same cross-thread visibility reason as servingState below — written from a
+    // serviceScope coroutine, read from the GATT callback thread.
+    @Volatile
     private var deviceName: String = ""
 
     @Volatile
@@ -93,7 +100,7 @@ class PeripheralSyncService : Service() {
         val mode: AppMode? = null,
         val raceId: Long? = null,
         val raceLabel: String = "",
-        val unsyncedCount: Int = 0,
+        val lastLineNumber: Long = 0,
     )
 
     // Chunked notification send queue, one per connected central (keyed by MAC address).
@@ -110,8 +117,25 @@ class PeripheralSyncService : Service() {
         super.onCreate()
         startForegroundWithNotification()
         observeServingState()
+        observeDeviceName()
         startAdvertisingRetryLoop()
         container.muleSyncEngine.start()
+    }
+
+    // Keeps the `deviceName` field genuinely live for the rest of this process's life —
+    // without this, a rename via NameDeviceScreen only ever reached SettingsRepository's own
+    // DataStore, never this already-running service, so onCharacteristicReadRequest kept
+    // answering every DeviceInfo read with whatever name was current when the service last
+    // started (confirmed in the field: a device renamed mid-session kept showing its old name
+    // to every nearby Mule until the app itself was killed and relaunched). A rename now
+    // reaches every device already scanning for this one on its very next DeviceInfo read,
+    // same as any other change to servingState.
+    private fun observeDeviceName() {
+        serviceScope.launch {
+            container.settingsRepository.deviceName.collect { name ->
+                if (!name.isNullOrBlank()) deviceName = name
+            }
+        }
     }
 
     // Advertising (and the GATT server backing it) used to start once, at service creation,
@@ -155,6 +179,20 @@ class PeripheralSyncService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
+    // A foreground service otherwise keeps running (and advertising) even after the user
+    // swipes the app away from Recents — by design, that's what lets a Mule keep relaying in
+    // the background while the operator is on another screen or the phone's asleep. But once
+    // the whole app is genuinely dismissed, this device shouldn't keep showing up as a nearby
+    // advertiser to every other phone forever; stopSelf() here tears everything down via the
+    // usual onDestroy() path below. android:stopWithTask="true" (see the manifest) is the
+    // declarative form of the same intent, but relying on that alone has proven unreliable
+    // for foreground services on some OEM Android skins — this is the explicit, always-honored
+    // backstop.
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         stopAdvertisingIfPossible()
         closeGattServerIfPossible()
@@ -172,18 +210,12 @@ class PeripheralSyncService : Service() {
                         combine(
                             container.settingsRepository.appMode,
                             container.raceRepository.observeRace(raceId),
-                            container.timeModeRepository.observeUnsyncedCount(raceId),
-                            container.bibsModeRepository.observeUnsyncedCount(raceId),
-                        ) { mode, race, unsyncedSplits, unsyncedEntries ->
+                        ) { mode, race ->
                             ServingState(
                                 mode = mode,
                                 raceId = raceId,
                                 raceLabel = race?.label.orEmpty(),
-                                unsyncedCount = when (mode) {
-                                    AppMode.TIME -> unsyncedSplits
-                                    AppMode.BIBS -> unsyncedEntries
-                                    else -> 0
-                                },
+                                lastLineNumber = (race?.nextLineNumber ?: 1) - 1,
                             )
                         }
                     }
@@ -304,7 +336,7 @@ class PeripheralSyncService : Service() {
                 deviceId = deviceId,
                 deviceRole = servingState.mode?.name.orEmpty(),
                 raceLabel = servingState.raceLabel,
-                unsyncedCount = servingState.unsyncedCount,
+                lastLineNumber = servingState.lastLineNumber,
                 deviceName = deviceName,
             )
             val bytes = json.encodeToString(info).toByteArray(Charsets.UTF_8)
@@ -324,15 +356,16 @@ class PeripheralSyncService : Service() {
         ) {
             when (characteristic.uuid) {
                 MuleGattProfile.CONTROL_CHARACTERISTIC_UUID -> {
-                    val command = String(value, Charsets.UTF_8)
-                    if (command == MuleGattProfile.PULL_COMMAND) {
-                        serviceScope.launch { streamRecords(device) }
+                    val request = runCatching { json.decodeFromString<PullRequest>(String(value, Charsets.UTF_8)) }.getOrNull()
+                    if (request != null) {
+                        serviceScope.launch { streamRecords(device, request.sinceLineNumber) }
                     }
                 }
                 MuleGattProfile.ACK_CHARACTERISTIC_UUID -> {
-                    val recordUuids = runCatching { json.decodeFromString<List<String>>(String(value, Charsets.UTF_8)) }
-                        .getOrDefault(emptyList())
-                    serviceScope.launch { markSynced(recordUuids) }
+                    val ack = runCatching { json.decodeFromString<AckPayload>(String(value, Charsets.UTF_8)) }.getOrNull()
+                    if (ack != null) {
+                        serviceScope.launch { markSynced(ack.recordUuids, ack.deviceId, ack.deviceName) }
+                    }
                 }
             }
             if (responseNeeded) {
@@ -374,22 +407,18 @@ class PeripheralSyncService : Service() {
         }
     }
 
-    // --- Streaming unsynced records out to a connected Mule ------------------------------
+    // --- Streaming delta records out to a connected Mule ---------------------------------
 
-    private suspend fun streamRecords(device: BluetoothDevice) {
-        val snapshot = servingState
-        val raceId = snapshot.raceId ?: return
-        val records: List<SyncRecord> = when (snapshot.mode) {
-            AppMode.TIME -> {
-                val race = container.raceRepository.getRace(raceId)
-                container.timeModeRepository.getUnsyncedSplits(raceId)
-                    .map { it.toSyncRecord(race?.timeModeStartedAtMillis) }
-            }
-            AppMode.BIBS -> {
-                container.bibsModeRepository.getUnsyncedEntries(raceId).map { it.toSyncRecord() }
-            }
-            else -> emptyList()
-        }
+    private suspend fun streamRecords(device: BluetoothDevice, sinceLineNumber: Long) {
+        val raceId = servingState.raceId ?: return
+        // Unconditional — not scoped to servingState.mode: a mixed-mode race (nothing in the
+        // app prevents switching AppMode without starting a new race) must still sync
+        // everything this device holds over BLE, regardless of which mode's screen the
+        // operator currently has open. Fixes a latent bug: this used to only ever stream
+        // whichever category matched the currently displayed screen.
+        val race = container.raceRepository.getRace(raceId)
+        val records = container.raceRepository.getHistorySinceLineNumber(raceId, sinceLineNumber)
+            .map { it.toSyncRecord(race?.timeModeStartedAtMillis) }
         // ATT header is 3 bytes, so the usable notification payload is (MTU - 3). Sizing to
         // whatever actually got negotiated (see onMtuChanged) is what fixed real truncation
         // corruption in the field: a fixed chunk size larger than the un-negotiated default
@@ -442,13 +471,16 @@ class PeripheralSyncService : Service() {
         }.onFailure { Log.e(TAG, "notifyCharacteristicChanged failed for chunk of ${chunk.size} bytes", it) }
     }
 
-    private suspend fun markSynced(recordUuids: List<String>) {
+    // [ackDeviceId]/[ackDeviceName] identify the puller that just took these records —
+    // recorded per-line as "synced to" feedback (see LineSyncEntity) alongside the existing
+    // syncedAtMillis marking. Unconditional — not scoped to servingState.mode, for the same
+    // reason as streamRecords: a mixed-mode race's ack can cover rows from either family.
+    private suspend fun markSynced(recordUuids: List<String>, ackDeviceId: String, ackDeviceName: String) {
         if (recordUuids.isEmpty()) return
-        when (servingState.mode) {
-            AppMode.TIME -> container.timeModeRepository.markSplitsSyncedByUuid(recordUuids)
-            AppMode.BIBS -> container.bibsModeRepository.markEntriesSyncedByUuid(recordUuids)
-            else -> {}
-        }
+        val raceId = servingState.raceId ?: return
+        container.raceRepository.markHistorySyncedByUuid(recordUuids)
+        val lineNumbers = container.raceRepository.getHistoryLineNumbersForUuids(recordUuids)
+        container.raceRepository.recordLineSyncs(raceId, lineNumbers, ackDeviceId, targetName = ackDeviceName)
     }
 
     // --- Notification / permissions -----------------------------------------------------
@@ -508,7 +540,14 @@ class PeripheralSyncService : Service() {
                 ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
             val hasAdvertise = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
                 ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
-            if (!hasConnect || !hasAdvertise) return
+            // Missing before: this service also drives MuleSyncEngine's scan (see onCreate
+            // below), which needs BLUETOOTH_SCAN, not just CONNECT/ADVERTISE — without this
+            // check the service could start with scanning permanently broken, which
+            // MuleSyncEngine's generic exception handler then misreported as "Bluetooth is
+            // off" instead of a permission problem.
+            val hasScan = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+            if (!hasConnect || !hasAdvertise || !hasScan) return
             // Called unconditionally from Application.onCreate(), which also runs when the
             // OS silently respawns the process in the background (e.g. after a previous
             // crash, restarting a START_STICKY service) with no foreground Activity — Android

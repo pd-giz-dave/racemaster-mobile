@@ -21,10 +21,20 @@ class PulledRecordDaoTest {
     private lateinit var db: RacemasterDatabase
     private lateinit var dao: PulledRecordDao
 
-    private fun record(recordUuid: String, pulledAtMillis: Long = 0L) = PulledRecordEntity(
+    private fun record(
+        recordUuid: String,
+        pulledAtMillis: Long = 0L,
+        sourceDeviceId: String = "device-1",
+        lineNumber: Long = 1L,
+        sourceRaceLabel: String = "Test Race",
+        deviceName: String = "clever-gecko",
+    ) = PulledRecordEntity(
         recordUuid = recordUuid,
+        sourceDeviceId = sourceDeviceId,
         sourceDeviceRole = "BIBS",
-        sourceRaceLabel = "Test Race",
+        sourceRaceLabel = sourceRaceLabel,
+        lineNumber = lineNumber,
+        deviceName = deviceName,
         payloadJson = """{"recordUuid":"$recordUuid"}""",
         pulledAtMillis = pulledAtMillis,
     )
@@ -85,5 +95,63 @@ class PulledRecordDaoTest {
         dao.insertAll(listOf(record("later", pulledAtMillis = 200L), record("earlier", pulledAtMillis = 100L)))
         val ordered = dao.getUnsynced()
         assertTrue(ordered.map { it.recordUuid } == listOf("earlier", "later"))
+    }
+
+    @Test
+    fun lastPulledLineNumberIsNullForAnUnknownSource() = runTest {
+        assertNull(dao.getLastPulledLineNumber("device-1", "Test Race"))
+    }
+
+    @Test
+    fun lastPulledLineNumberIsTheMaxAcrossRecordsFromThatSourceOnly() = runTest {
+        dao.insertAll(
+            listOf(
+                record("a", sourceDeviceId = "device-1", lineNumber = 3L),
+                record("b", sourceDeviceId = "device-1", lineNumber = 7L),
+                // A different device sharing the same race label must not affect device-1's cutoff.
+                record("c", sourceDeviceId = "device-2", lineNumber = 99L),
+            ),
+        )
+        assertEquals(7L, dao.getLastPulledLineNumber("device-1", "Test Race"))
+        assertEquals(99L, dao.getLastPulledLineNumber("device-2", "Test Race"))
+    }
+
+    @Test
+    fun sourceSummariesExcludeThisDevicesOwnSelfPulledRows() = runTest {
+        // MuleSyncEngine.pullSelfRecords tags this device's own records with its own
+        // deviceId purely for push-to-server bookkeeping — those must never surface as a
+        // separate "From Mule" entry, since the same race is already shown as a local race.
+        dao.insertAll(
+            listOf(
+                record("a", sourceDeviceId = "my-device-id", sourceRaceLabel = "My Own Race"),
+                record("b", sourceDeviceId = "another-device-id", sourceRaceLabel = "Their Race"),
+            ),
+        )
+        val summaries = dao.observeSourceSummaries(myDeviceId = "my-device-id").first()
+        assertEquals(listOf("Their Race"), summaries.map { it.sourceRaceLabel })
+    }
+
+    @Test
+    fun sourceSummaryDeviceNameIsTheMostRecentlyPulledDeviceForThatRaceLabel() = runTest {
+        dao.insertAll(
+            listOf(
+                record("a", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", deviceName = "earlier-device", pulledAtMillis = 100L),
+                record("b", sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label", deviceName = "later-device", pulledAtMillis = 200L),
+            ),
+        )
+        val summary = dao.observeSourceSummaries(myDeviceId = "my-device-id").first().single()
+        assertEquals("later-device", summary.deviceName)
+    }
+
+    @Test
+    fun observeForSourceExcludesThisDevicesOwnSelfPulledRows() = runTest {
+        dao.insertAll(
+            listOf(
+                record("a", sourceDeviceId = "my-device-id", sourceRaceLabel = "Shared Label"),
+                record("b", sourceDeviceId = "another-device-id", sourceRaceLabel = "Shared Label"),
+            ),
+        )
+        val rows = dao.observeForSource("Shared Label", myDeviceId = "my-device-id").first()
+        assertEquals(listOf("b"), rows.map { it.recordUuid })
     }
 }

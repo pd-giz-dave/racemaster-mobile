@@ -7,15 +7,24 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -27,10 +36,11 @@ import mobile.racemaster.util.withClickSound
 fun RaceHistoryScreen(
     onBack: () -> Unit,
     onRaceSelected: (Long) -> Unit,
-    onMuleSourceSelected: (deviceRole: String, raceLabel: String) -> Unit,
+    onMuleSourceSelected: (raceLabel: String) -> Unit,
     viewModel: RaceHistoryViewModel = viewModel(factory = RaceHistoryViewModel.Factory),
 ) {
     val items by viewModel.historyItems.collectAsStateWithLifecycle()
+    var pendingDelete by remember { mutableStateOf<HistoryItemUi.LocalRace?>(null) }
 
     Scaffold(
         topBar = {
@@ -55,7 +65,7 @@ fun RaceHistoryScreen(
                     key = {
                         when (it) {
                             is HistoryItemUi.LocalRace -> "race-${it.id}"
-                            is HistoryItemUi.MuleSource -> "mule-${it.deviceRole}-${it.raceLabel}"
+                            is HistoryItemUi.MuleSource -> "mule-${it.raceLabel}"
                         }
                     },
                 ) { item ->
@@ -63,15 +73,36 @@ fun RaceHistoryScreen(
                         is HistoryItemUi.LocalRace -> ListItem(
                             headlineContent = { Text(item.label) },
                             supportingContent = {
-                                if (item.createdByDeviceName.isNotBlank()) Text("Created by ${item.createdByDeviceName}")
+                                val parts = listOfNotNull(
+                                    "From ${item.createdByDeviceName} (self)".takeIf { item.createdByDeviceName.isNotBlank() },
+                                    "Active, can't be deleted".takeIf { item.isActive },
+                                )
+                                if (parts.isNotEmpty()) Text(parts.joinToString(" — "))
+                            },
+                            trailingContent = {
+                                // Never offered for the active race — RaceRepository.deleteRace
+                                // also refuses it as a backstop, but the UI shouldn't dangle a
+                                // control in front of the operator that would silently no-op.
+                                IconButton(
+                                    onClick = withClickSound { pendingDelete = item },
+                                    enabled = !item.isActive,
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Delete,
+                                        contentDescription = "Delete race",
+                                        tint = if (item.isActive) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f) else MaterialTheme.colorScheme.error,
+                                    )
+                                }
                             },
                             modifier = Modifier.clickable(onClick = withClickSound { onRaceSelected(item.id) }),
                         )
                         is HistoryItemUi.MuleSource -> ListItem(
-                            headlineContent = { Text(item.raceLabel.ifEmpty { item.deviceRole }) },
-                            supportingContent = { Text("via Mule (${item.deviceRole}) · ${item.syncedCount}/${item.totalCount} synced") },
+                            headlineContent = { Text(item.raceLabel.ifEmpty { "Mule" }) },
+                            supportingContent = {
+                                if (item.deviceName.isNotBlank()) Text("From ${item.deviceName}")
+                            },
                             modifier = Modifier.clickable(
-                                onClick = withClickSound { onMuleSourceSelected(item.deviceRole, item.raceLabel) },
+                                onClick = withClickSound { onMuleSourceSelected(item.raceLabel) },
                             ),
                         )
                     }
@@ -79,5 +110,24 @@ fun RaceHistoryScreen(
                 }
             }
         }
+    }
+
+    pendingDelete?.let { race ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete this race?") },
+            text = { Text("This permanently deletes \"${race.label}\" and its entire history. This cannot be undone.") },
+            confirmButton = {
+                TextButton(
+                    onClick = withClickSound {
+                        viewModel.deleteRace(race.id)
+                        pendingDelete = null
+                    },
+                ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = withClickSound { pendingDelete = null }) { Text("Cancel") }
+            },
+        )
     }
 }

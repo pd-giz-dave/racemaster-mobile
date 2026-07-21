@@ -19,25 +19,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import mobile.racemaster.data.mule.DEVICE_ROLE_BIBS
-import mobile.racemaster.ui.components.BibEntryRow
-import mobile.racemaster.ui.components.SplitRow
+import mobile.racemaster.ui.components.HistoryLineRow
 import mobile.racemaster.util.withClickSound
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MuleSourceDetailScreen(
-    deviceRole: String,
     raceLabel: String,
     onBack: () -> Unit,
 ) {
-    val viewModel: MuleSourceDetailViewModel = viewModel(factory = MuleSourceDetailViewModel.factory(deviceRole, raceLabel))
+    val viewModel: MuleSourceDetailViewModel = viewModel(factory = MuleSourceDetailViewModel.factory(raceLabel))
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(uiState.raceLabel.ifEmpty { uiState.deviceRole }) },
+                title = { Text(uiState.raceLabel.ifEmpty { "Mule" }) },
                 navigationIcon = { TextButton(onClick = withClickSound(onBack)) { Text("Back") } },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
@@ -54,7 +51,9 @@ fun MuleSourceDetailScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text("Pulled via Mule (${uiState.deviceRole})", style = MaterialTheme.typography.titleMedium)
+            if (uiState.deviceName.isNotBlank()) {
+                Text("From ${uiState.deviceName}", style = MaterialTheme.typography.titleMedium)
+            }
             if (uiState.records.isEmpty()) {
                 Text("No records", style = MaterialTheme.typography.bodyMedium)
             } else {
@@ -62,26 +61,20 @@ fun MuleSourceDetailScreen(
                     Column {
                         // A Mule source can hold records pulled from more than one physical
                         // phone under the same race label, unlike a local race's own history
-                        // (always one device) — so, unlike SplitRow/BibEntryRow's live usage,
-                        // the device name is shown per record here rather than once for the
-                        // whole screen.
-                        if (uiState.deviceRole == DEVICE_ROLE_BIBS) {
-                            BibEntryRow(
-                                splitNumber = record.splitNumber,
-                                bibNumber = record.number,
-                                typeLabel = record.action,
-                                note = record.note,
-                                dupSplitRefs = emptyList(),
-                                synced = record.synced,
-                            )
-                        } else {
-                            SplitRow(
-                                splitNumber = record.splitNumber,
-                                elapsedMillis = record.elapsedMillis,
-                                note = record.note,
-                                synced = record.synced,
-                            )
-                        }
+                        // (always one device) — so, unlike HistoryLineRow's other usage, the
+                        // device name is shown per record here rather than once for the whole
+                        // screen.
+                        HistoryLineRow(
+                            lineNumber = record.lineNumber,
+                            splitNumber = record.splitNumber,
+                            actionLabel = record.action,
+                            bibNumber = record.number,
+                            elapsedMillis = if (record.isTimeRecord) record.elapsedMillis else null,
+                            note = record.note,
+                            synced = record.synced,
+                            isUndoMarker = record.isUndoMarker,
+                            editedFromLineNumber = record.editedFromLineNumber,
+                        )
                         if (record.deviceName.isNotBlank()) {
                             Text(record.deviceName, style = MaterialTheme.typography.labelSmall)
                         }

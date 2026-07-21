@@ -1,5 +1,6 @@
 package mobile.racemaster.ui.mulemode
 
+import android.app.Application
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -15,6 +16,8 @@ import mobile.racemaster.data.mule.DiscoveredDevice
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.MuleSyncEngine
 import mobile.racemaster.di.appContainer
+import mobile.racemaster.di.applicationContext
+import mobile.racemaster.util.hasInternetConnectivity
 
 data class MuleModeUiState(
     val discoveredDevices: List<DiscoveredDevice> = emptyList(),
@@ -41,6 +44,9 @@ data class MuleModeUiState(
 class MuleModeViewModel(
     private val muleRepository: MuleRepository,
     private val muleSyncEngine: MuleSyncEngine,
+    // Typed as Application, not Context — see ViewModelFactorySupport.applicationContext's own
+    // doc for why that's what keeps Lint's StaticFieldLeak check from flagging this field.
+    private val context: Application,
 ) : ViewModel() {
 
     val deviceName: StateFlow<String?> = muleRepository.deviceName
@@ -51,6 +57,10 @@ class MuleModeViewModel(
     // completes, which would otherwise misfire the screen's auto-forward-to-Setup-Server
     // check (see MuleModeScreen) for an operator who genuinely already is logged in.
     suspend fun isLoggedIn(): Boolean = muleRepository.isLoggedIn.first()
+
+    // Checked once, at the same moment as isLoggedIn() above (see MuleModeScreen) — a hint
+    // for which of "With server"/"Without server" to recommend, not a live subscription.
+    fun hasInternetConnectivity(): Boolean = hasInternetConnectivity(context)
 
     @Suppress("UNCHECKED_CAST")
     val uiState: StateFlow<MuleModeUiState> = combine(
@@ -68,9 +78,9 @@ class MuleModeViewModel(
     ) { values ->
         val isLoggedIn = values[4] as Boolean
         val autoSyncStopped = values[8] as Boolean
-        val selfDevice = values[10] as DiscoveredDevice?
+        val selfDevice = values[10] as DiscoveredDevice
         MuleModeUiState(
-            discoveredDevices = ((values[0] as Map<String, DiscoveredDevice>).values + listOfNotNull(selfDevice))
+            discoveredDevices = ((values[0] as Map<String, DiscoveredDevice>).values + selfDevice)
                 .sortedBy { it.raceLabel.ifEmpty { it.deviceKey } },
             unsyncedCount = values[1] as Int,
             lastSyncedAtMillis = values[2] as Long?,
@@ -111,6 +121,7 @@ class MuleModeViewModel(
                 MuleModeViewModel(
                     container.muleRepository,
                     container.muleSyncEngine,
+                    applicationContext(),
                 )
             }
         }

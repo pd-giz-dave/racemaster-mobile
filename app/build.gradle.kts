@@ -16,7 +16,7 @@ android {
         minSdk = 24
         targetSdk = 37
         versionCode = 1
-        versionName = "1.0"
+        versionName = "0.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -26,6 +26,21 @@ android {
             optimization {
                 enable = false
             }
+            // Never resolves to a real address outside dev — matches the empty defaults in
+            // defaultConfig below, so a release build never carries live-looking placeholder
+            // credentials even though the field itself must exist to compile either variant.
+            buildConfigField("String", "DEV_SERVER_URL", "\"\"")
+            buildConfigField("String", "DEV_SERVER_USERNAME", "\"\"")
+            buildConfigField("String", "DEV_SERVER_PASSWORD", "\"\"")
+        }
+        debug {
+            // Lets a fresh debug install's Setup Server screen self-populate against the local
+            // dev server (see scripts/dev-server.sh) instead of typing these in by hand every
+            // time — only ever used as a fallback when nothing's been saved yet (see
+            // MuleServerSetupScreen), so an existing real login is never overwritten.
+            buildConfigField("String", "DEV_SERVER_URL", "\"http://127.0.0.1:3000\"")
+            buildConfigField("String", "DEV_SERVER_USERNAME", "\"mobiletest\"")
+            buildConfigField("String", "DEV_SERVER_PASSWORD", "\"test1234\"")
         }
     }
     compileOptions {
@@ -34,6 +49,36 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+}
+
+// One-click convenience for local manual testing (see scripts/dev-server.sh's own doc):
+// starts the local racemaster server if it isn't already running and points every connected
+// device's "localhost" at it via `adb reverse`. Shows up in Android Studio's Gradle tool
+// window under Tasks/other, and can be added as a Run Configuration's "before launch" step.
+tasks.register<Exec>("devServer") {
+    group = "other"
+    description = "Start the local racemaster server and adb reverse it to every connected device"
+    commandLine("bash", "${rootDir}/scripts/dev-server.sh")
+}
+
+// It's detached from devServer's own Exec process (see scripts/dev-server.sh), so it keeps
+// running across builds/IDE restarts on its own — this is the one-click way to kill it again.
+tasks.register<Exec>("stopDevServer") {
+    group = "other"
+    description = "Stop the local racemaster server started by devServer"
+    commandLine("bash", "${rootDir}/scripts/stop-dev-server.sh")
+}
+
+// Wired into every debug build/install and every debug instrumented-test run (both go through
+// these variant preBuild tasks) so "Run" and "connectedDebugAndroidTest" from Android Studio or
+// the command line always have a reachable local server and adb-reversed devices first — no
+// separate `./gradlew devServer` step to remember each session. Left off preDebugUnitTestBuild
+// since JVM unit tests don't touch a real device or network.
+tasks.configureEach {
+    if (name == "preDebugBuild" || name == "preDebugAndroidTestBuild") {
+        dependsOn("devServer")
     }
 }
 

@@ -63,7 +63,8 @@
         <service
             android:name=".data.mule.PeripheralSyncService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="connectedDevice"
+            android:stopWithTask="true" />
     </application>
 
 </manifest>

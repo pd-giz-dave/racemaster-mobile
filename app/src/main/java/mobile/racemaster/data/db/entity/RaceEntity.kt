@@ -14,6 +14,12 @@ data class RaceEntity(
     val createdAtMillis: Long,
     val timeModeNextSplit: Int = 1,
     val bibsModeNextSplit: Int = 1,
+    // Permanent, race-wide history line counter — completely separate from the two display
+    // counters above (which reset per segment on Reset). Only ever incremented, never
+    // decremented (not even on Undo): a retired line number is an intentional permanent gap,
+    // not something to reuse, so every split/entry/marker this race ever holds gets its own
+    // number forever, letting devices sync by delta ("everything after line N").
+    val nextLineNumber: Long = 1,
     val timeModeStartedAtMillis: Long? = null,
     val timeModeStoppedAtMillis: Long? = null,
     val bibsRangeStart: Int? = null,

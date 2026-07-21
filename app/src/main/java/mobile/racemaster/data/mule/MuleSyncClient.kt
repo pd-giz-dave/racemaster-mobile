@@ -22,16 +22,30 @@ data class LoginRequest(val username: String, val password: String)
 @Serializable
 data class LoginResponse(val token: String, val username: String, val isAdmin: Boolean)
 
-// Body for POST .../mobile — two separate tables server-side ("-mobile.json"'s `times` and
-// `bibs` arrays), not one mixed array, so a race's Time splits and Bib entries stay distinct.
+// Body for POST .../mobile — one flat, chronological line array per device (deviceName ->
+// lines), mirroring the server's own one-JSON-file-per-device storage exactly. A single
+// request can still carry more than one device's lines at once (a Mule pushing data pulled
+// from several nearby phones for the same race), just grouped by device instead of by
+// Bibs/Time category — see SyncRecord's own doc for why category no longer needs a separate
+// list (lineLabel's B/T prefix already carries it) and device no longer needs repeating per
+// line (this map's key already does).
 @Serializable
 data class MobileSyncPayload(
-    val times: List<SyncRecord>,
-    val bibs: List<SyncRecord>,
+    val devices: Map<String, List<SyncRecord>>,
 )
 
+// Only `added` is ever actually read (see MuleRepository.pushToServer) — the rest of what the
+// server's own reply shape happens to include (`ok`/`received`/`version`, or anything else) is
+// deliberately not modelled here at all, rather than declared as required fields kotlinx.serialization
+// then demands be present. A production server running an older/different build than this
+// exact endpoint's current shape (confirmed in the field: a response missing `version`) would
+// otherwise throw a MissingFieldException and surface as a baffling "Push failed" to the
+// operator over something that was never actually a real failure. `added` itself defaults to 0
+// as a last-resort fallback rather than failing outright even if the server one day drops it
+// too — worst case, a genuinely new push briefly under-reports "0 new records" instead of
+// crashing.
 @Serializable
-data class MobileSyncResponse(val ok: Boolean, val added: Int, val received: Int, val version: Int)
+data class MobileSyncResponse(val added: Int = 0)
 
 @Serializable
 data class PingResponseBody(val ok: Boolean = false)
@@ -79,24 +93,27 @@ class MuleSyncClient {
             PingOutcome.Unreachable
         }
 
-    // Always sends the *full* record set the caller currently holds, not just what's changed
-    // — the server wholly replaces each device's section, so this is idempotent, and it means
-    // a server-side file that's been deleted or corrupted gets fully reconstructed on the very
-    // next push rather than only receiving whatever's new since. The response's `added` count
-    // (genuinely new rows, not the full send size) is what should be shown to the operator.
-    // [raceLabel] scopes the push to `mobile/<user>/<raceLabel>/` on the server — the race's
-    // own name as recorded on the phone.
+    // What the server already has stored, per device, for this race — call before pushing so
+    // only the lineNumber delta needs to be sent (see MuleRepository.pushToServer). A device
+    // absent from the response means the server has nothing for it yet (treat as 0).
+    suspend fun getSyncStatus(baseUrl: String, token: String, raceLabel: String): Map<String, Long> =
+        client.get("${baseUrl.trimEnd('/')}/api/mobile/${encodePathSegment(raceLabel)}/status") {
+            bearerAuth(token)
+        }.body()
+
+    // The response's `added` count (genuinely new rows, not the full send size) is what
+    // should be shown to the operator. [raceLabel] scopes the push to
+    // `mobile/<user>/<raceLabel>/` on the server — the race's own name as recorded on the phone.
     suspend fun pushRecords(
         baseUrl: String,
         token: String,
         raceLabel: String,
-        times: List<SyncRecord>,
-        bibs: List<SyncRecord>,
+        devices: Map<String, List<SyncRecord>>,
     ): MobileSyncResponse =
         client.post("${baseUrl.trimEnd('/')}/api/mobile/${encodePathSegment(raceLabel)}") {
             bearerAuth(token)
             contentType(ContentType.Application.Json)
-            setBody(MobileSyncPayload(times, bibs))
+            setBody(MobileSyncPayload(devices))
         }.body()
 
     fun close() {

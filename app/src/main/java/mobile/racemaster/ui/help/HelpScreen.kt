@@ -17,7 +17,17 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import mobile.racemaster.BuildConfig
 import mobile.racemaster.util.withClickSound
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -26,7 +36,16 @@ fun HelpScreen(onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Help") },
+                title = {
+                    Text(
+                        buildAnnotatedString {
+                            append("Help ")
+                            withStyle(SpanStyle(fontSize = 11.sp, fontWeight = FontWeight.Normal)) {
+                                append("v${BuildConfig.VERSION_NAME}")
+                            }
+                        },
+                    )
+                },
                 navigationIcon = { TextButton(onClick = withClickSound(onBack)) { Text("Back") } },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
@@ -43,6 +62,26 @@ fun HelpScreen(onBack: () -> Unit) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            Text(
+                buildAnnotatedString {
+                    append("RaceMaster Mobile is open source — code and issues at ")
+                    withLink(
+                        LinkAnnotation.Url(
+                            url = "https://github.com/pd-giz-dave/racemaster-mobile",
+                            styles = TextLinkStyles(
+                                style = SpanStyle(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textDecoration = TextDecoration.Underline,
+                                ),
+                            ),
+                        ),
+                    ) {
+                        append("github.com/pd-giz-dave/racemaster-mobile")
+                    }
+                    append(".")
+                },
+                style = MaterialTheme.typography.bodySmall,
+            )
             HelpSection(
                 title = "Overview",
                 body = "RaceMaster Mobile is a companion app for timing races on the day, used " +
@@ -59,7 +98,7 @@ fun HelpScreen(onBack: () -> Unit) {
             )
             HelpSection(
                 title = "Time Mode",
-                body = "START begins the stopwatch and records a fixed \"Start\" marker as split #0. " +
+                body = "START begins the stopwatch and records a fixed \"Start\" marker as split S0. " +
                     "SPLIT records the current time every time it's tapped — two fast taps always " +
                     "produce two separate splits. STOP freezes the clock and records a \"Stop\" split; " +
                     "undoing that Stop split resumes the clock with no time lost. Once stopped, the " +
@@ -72,22 +111,23 @@ fun HelpScreen(onBack: () -> Unit) {
                 body = "New Race asks for the race name, the first bib number, and how many runners " +
                     "there are — together these define the legal bib range for the race. A bib " +
                     "outside that range is rejected with an on-screen error. A fixed \"Clock\" marker " +
-                    "is automatically recorded as split #0.",
+                    "is automatically recorded as split S0.",
             )
             HelpSection(
                 title = "Bibs Mode — logging",
-                body = "Type a bib number on the keypad and tap the big Log button to record it — by " +
-                    "default it logs \"Finish\". Tap Event to change what the next tap will log: " +
-                    "Finish, Start, Retire (each needs a bib number), or Ignore/Seniors/Juniors/Male/" +
-                    "Female (group-wide markers that don't need a bib number — the keypad digits are " +
-                    "cleared automatically when one of these is chosen). After each log, the Event " +
-                    "choice resets back to Finish. The \"Next: #N\" line always shows the split number " +
-                    "the next entry will get.",
+                body = "Type a bib number on the keypad and tap the button below it to record it — the " +
+                    "button's own label always shows which event it's about to log, \"Finish\" by " +
+                    "default. Tap Event to change what the next tap will log: Finish, Start, Retire " +
+                    "(each needs a bib number), or Ignore/Seniors/Juniors/Male/Female (group-wide " +
+                    "markers that don't need a bib number — the keypad digits are cleared " +
+                    "automatically when one of these is chosen). After each log, the Event choice " +
+                    "resets back to Finish. The \"Next:\" line always shows the split number (as S1, " +
+                    "S2, and so on) the next entry will get.",
             )
             HelpSection(
                 title = "Bibs Mode — duplicates",
                 body = "Entering the same bib number for the same event twice (e.g. two Finishes for " +
-                    "bib 101) is still allowed — it's flagged as \"dup of #N\", referencing the other " +
+                    "bib 101) is still allowed — it's flagged as \"dup of S1\", referencing the other " +
                     "matching row, and a running dup count appears at the top right of the \"Next\" " +
                     "line. A Start and a Finish for the same bib is normal and never counts as a " +
                     "duplicate. Tap any row to correct its bib number or event type — if that resolves " +
@@ -96,25 +136,39 @@ fun HelpScreen(onBack: () -> Unit) {
             HelpSection(
                 title = "Bibs Mode — editing rows",
                 body = "Tap any logged row to edit it. For a normal row this opens the event type, bib " +
-                    "number, and an optional short note. For the Clock row (split #0) it instead opens " +
+                    "number, and an optional short note. For the Clock row (split S0) it instead opens " +
                     "an offset time field — enter it as minutes and seconds (any separator, e.g. " +
                     "\"5:30\" or \"5 30\") or as a single number of seconds (e.g. \"90\" means 1:30). " +
                     "This records how late the clock was started after a mass start.",
             )
             HelpSection(
                 title = "Bibs Mode — stop and reset",
-                body = "STOP freezes logging (Log/Event are disabled) and frees up New Race — this " +
-                    "records a \"Stop\" marker that can be undone to resume logging. Once stopped, the " +
-                    "same button becomes RESET, which wipes every bib entry back to just a fresh Clock " +
-                    "marker (with confirmation).",
+                body = "STOP freezes logging (the log button and Event are disabled) and frees up New " +
+                    "Race — this records a \"Stop\" marker that can be undone to resume logging. Once " +
+                    "stopped, the same button becomes RESET, which wipes every bib entry back to just " +
+                    "a fresh Clock marker (with confirmation).",
+            )
+            HelpSection(
+                title = "Mule Mode",
+                body = "Mule Mode continuously syncs with every other RaceMaster Mobile device it can " +
+                    "see over Bluetooth — no pairing step needed, any nearby device running the app " +
+                    "is discovered and synced automatically. The first time you open Mule Mode without " +
+                    "a saved server login, you're asked whether to also sync to the RaceMaster server " +
+                    "(recommended when the phone has a working internet connection) or stay purely " +
+                    "device-to-device for now — this choice can be changed later via Setup Server in " +
+                    "the title bar. Nearby devices lists every device Mule can currently see, coloured " +
+                    "red while it still has unsynced data and green once it's fully synced. Force " +
+                    "sync now triggers an immediate pull-and-push cycle instead of waiting for the " +
+                    "automatic few-second tick; Stop auto-sync/Resume auto-sync pauses or resumes that " +
+                    "background cycle.",
             )
             HelpSection(
                 title = "External triggers",
                 body = "A USB (via OTG) or Bluetooth clicker, presenter remote, camera shutter remote, " +
                     "or foot pedal that enumerates as a HID keyboard can be used in place of tapping " +
-                    "the main button — this works for Time Mode's SPLIT and Bibs Mode's Log, whichever " +
-                    "screen is currently showing. No pairing code is needed on our end, just pair the " +
-                    "device with the phone as normal in Android's Bluetooth settings.",
+                    "the main button — this works for Time Mode's SPLIT and Bibs Mode's log button, " +
+                    "whichever screen is currently showing. No pairing code is needed on our end, " +
+                    "just pair the device with the phone as normal in Android's Bluetooth settings.",
             )
             HelpSection(
                 title = "General",

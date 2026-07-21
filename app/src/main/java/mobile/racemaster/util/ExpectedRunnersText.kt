@@ -10,7 +10,10 @@ fun formatBibsExpectedText(firstBibNumber: Int?, expectedRunnerCount: Int?, fini
     if (firstBibNumber == null && expectedRunnerCount == null) return null
     val parts = listOfNotNull(
         firstBibNumber?.let { "First bib $it" },
-        expectedRunnerCount?.let { expected -> "Expecting $expected · ${(expected - finishedCount).coerceAtLeast(0)} more expected" },
+        expectedRunnerCount?.let { expected ->
+            val outstanding = (expected - finishedCount).coerceAtLeast(0)
+            "$outstanding of $expected still outstanding"
+        },
     )
     return parts.joinToString(" · ")
 }

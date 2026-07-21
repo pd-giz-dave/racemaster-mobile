@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug-build-only: permits cleartext HTTP to the loopback address so a debug build can log
+     in against a racemaster server running locally on the same machine during development,
+     without weakening the release build's default (cleartext blocked everywhere). -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

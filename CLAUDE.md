@@ -17,6 +17,7 @@ All commands run from the repo root using the Gradle wrapper.
 - Run instrumented tests (`app/src/androidTest`, requires a connected device/emulator): `./gradlew connectedDebugAndroidTest`
 - Lint: `./gradlew lint`
 - Full check (lint + tests): `./gradlew check`
+- Local Mule/server testing against `localhost` (no manual per-session setup): every debug build/install and `connectedDebugAndroidTest` run automatically starts the racemaster server at `/home/dave/racemaster` (if it isn't already running) and `adb reverse`s port 3000 to every connected device — see the `devServer` task dependency in `app/build.gradle.kts` and `scripts/dev-server.sh`. Run `./gradlew devServer` / `./gradlew stopDevServer` (or `scripts/dev-server.sh` / `scripts/stop-dev-server.sh` directly) to start or stop it by hand; it's detached from Gradle so it keeps running across builds until stopped or rebooted. A debug build's Setup Server screen self-fills `http://127.0.0.1:3000` / `mobiletest` on a fresh install (see `DEV_SERVER_*` in `app/build.gradle.kts` — empty in release builds). Cleartext HTTP to `127.0.0.1`/`localhost` is permitted in debug builds only (`app/src/debug/res/xml/network_security_config_debug.xml`).
 
 ## Architecture
 

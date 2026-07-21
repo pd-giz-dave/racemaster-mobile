@@ -11,6 +11,13 @@ interface RaceDao {
     @Insert
     suspend fun insert(race: RaceEntity): Long
 
+    // Permanently removes the race — HistoryLineEntity's ForeignKey(onDelete = CASCADE) takes
+    // its full history down with it in the same statement; nothing else in Room references
+    // raceId, so this is the only query needed to fully erase a race locally. Irreversible —
+    // gated behind RaceHistoryScreen's own confirmation dialog, not enforced here.
+    @Query("DELETE FROM races WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
     @Query("SELECT * FROM races WHERE id = :id")
     suspend fun getById(id: Long): RaceEntity?
 
@@ -19,6 +26,12 @@ interface RaceDao {
 
     @Query("SELECT * FROM races ORDER BY createdAtMillis DESC")
     fun observeAll(): Flow<List<RaceEntity>>
+
+    // Used to resolve a self-originated PulledRecordEntity's sourceRaceLabel back to this
+    // device's own local race, for Phase D's server-sync line attribution. LIMIT 1 defensive
+    // only — a race label is effectively unique among this device's own races in practice.
+    @Query("SELECT * FROM races WHERE label = :label LIMIT 1")
+    suspend fun getByLabel(label: String): RaceEntity?
 
     @Query("UPDATE races SET timeModeNextSplit = timeModeNextSplit + 1 WHERE id = :raceId")
     suspend fun incrementTimeCounter(raceId: Long)
@@ -58,6 +71,11 @@ interface RaceDao {
 
     @Query("UPDATE races SET bibsModeNextSplit = 1, bibsModeStoppedAtMillis = NULL WHERE id = :raceId")
     suspend fun resetBibsMode(raceId: Long)
+
+    // The permanent, race-wide history line counter — see RaceEntity.nextLineNumber. Only
+    // ever incremented, including across a Reset (unlike the display counters above).
+    @Query("UPDATE races SET nextLineNumber = nextLineNumber + 1 WHERE id = :raceId")
+    suspend fun incrementLineNumber(raceId: Long)
 
     // Editable at any time via the race details screen, including after the race has
     // stopped — name/course typos shouldn't be permanently locked in once logging is done.

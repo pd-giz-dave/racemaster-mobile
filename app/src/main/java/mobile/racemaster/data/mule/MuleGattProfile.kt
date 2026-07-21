@@ -25,17 +25,16 @@ object MuleGattProfile {
     /** Read-only: JSON-encoded [DeviceInfo] describing this device and what it's holding. */
     val DEVICE_INFO_CHARACTERISTIC_UUID: UUID = UUID.fromString("6d6f6269-6c65-2e72-6163-000000000001")
 
-    /** Write: the central writes [PULL_COMMAND] here to request a record stream. */
+    /** Write: the central writes a JSON-encoded [PullRequest] here to request a record stream. */
     val CONTROL_CHARACTERISTIC_UUID: UUID = UUID.fromString("6d6f6269-6c65-2e72-6163-000000000002")
 
     /** Notify: chunked JSON array of [SyncRecord], see class doc above. */
     val DATA_CHARACTERISTIC_UUID: UUID = UUID.fromString("6d6f6269-6c65-2e72-6163-000000000003")
 
-    /** Write: the central writes the JSON array of received `recordUuid`s back here once the
-     *  stream is fully reassembled, so the peripheral knows it's safe to mark them synced. */
+    /** Write: the central writes a JSON-encoded [AckPayload] back here once the stream is
+     *  fully reassembled, so the peripheral knows it's safe to mark those records synced. */
     val ACK_CHARACTERISTIC_UUID: UUID = UUID.fromString("6d6f6269-6c65-2e72-6163-000000000004")
 
-    const val PULL_COMMAND = "PULL"
     const val REQUESTED_MTU = 247
     const val FALLBACK_CHUNK_SIZE_BYTES = 20
 
@@ -55,13 +54,29 @@ data class DeviceInfo(
     val deviceId: String,
     val deviceRole: String,
     val raceLabel: String,
-    val unsyncedCount: Int,
-    // The serving phone's memorable name (SettingsRepository.getOrCreateDeviceName()) — lets
-    // Mule Mode's nearby-devices list show a human-readable identity rather than just a race
-    // label (which may not even be set yet). Defaulted for backward compatibility with an
-    // older-app peer whose DeviceInfo predates this field.
+    // The highest permanent history line number (RaceEntity.nextLineNumber - 1) this device
+    // currently holds for its active race — 0 if it holds none. A puller compares this
+    // against whatever it's already pulled from this specific device (see
+    // MuleRepository.lastPulledLineNumber) to decide whether there's a delta worth pulling,
+    // and if so, requests only lines after that point (see PullRequest) — replaces the old
+    // unsyncedCount-based "pull everything currently unsynced" model.
+    val lastLineNumber: Long,
     val deviceName: String = "",
 )
+
+/** Written to [MuleGattProfile.CONTROL_CHARACTERISTIC_UUID] to request a delta stream of
+ *  every line after [sinceLineNumber] (0 to request the device's entire history). */
+@Serializable
+data class PullRequest(val sinceLineNumber: Long)
+
+/** Written to [MuleGattProfile.ACK_CHARACTERISTIC_UUID] once a pulled stream is fully
+ *  reassembled and durably stored, so the peripheral knows it's safe to mark those records
+ *  synced. [deviceId] identifies the puller — lets the peripheral attribute each acked line
+ *  to whichever device just took it (see PeripheralSyncService.markSynced). [deviceName] is
+ *  the puller's own memorable name, carried alongside so the "synced to" feedback shown in
+ *  Race History can display something more useful than a raw UUID. */
+@Serializable
+data class AckPayload(val deviceId: String, val recordUuids: List<String>, val deviceName: String = "")
 
 /**
  * One transferable record — Time Mode splits and Bibs Mode entries both flatten into this
@@ -70,6 +85,12 @@ data class DeviceInfo(
  * (elapsed-since-race-start, matching `finishers`' convention) is only meaningful for Time
  * Mode splits — Bibs Mode has no stopwatch of its own, so its records leave `time` null and
  * rely purely on `timestampMillis`, the raw wall-clock instant the record was created.
+ *
+ * Deliberately carries no `deviceName`: every place this travels (a BLE pull stream, a
+ * `PulledRecordEntity` row, a server push/status entry) is already scoped to one originating
+ * device — via `DeviceInfo.deviceName` on the wire, `PulledRecordEntity.deviceName` locally,
+ * or the enclosing `deviceName` key server-side — so repeating it on every line would be pure
+ * redundancy, not information.
  */
 @Serializable
 data class SyncRecord(
@@ -78,11 +99,14 @@ data class SyncRecord(
     val number: Int?,
     val time: String?,
     val splitNumber: Int?,
+    // Permanent, ascending history position — see RaceEntity.nextLineNumber. What delta-sync
+    // (both the BLE pull protocol and the server's mobile-sync endpoint) keys off.
+    val lineNumber: Long,
+    // Non-null for an edit-echo/undo-marker row — points at the original ROOT row's
+    // lineNumber (see HistoryLineEntity's own refLineNumber doc). Carried over BLE/HTTP purely
+    // for downstream (e.g. the racemaster web app) replay purposes — nothing in this repo
+    // needs to interpret it once it's synced.
+    val refLineNumber: Long? = null,
     val note: String?,
     val timestampMillis: Long,
-    // The recording phone's memorable name (see FinishSplitEntity/BibEntryEntity's own
-    // deviceName column) — carried over BLE so Mule's pulled-record history can show who
-    // recorded what. Defaulted for backward compatibility with any already-pulled record
-    // (or older-app peer) whose payload predates this field.
-    val deviceName: String = "",
 )

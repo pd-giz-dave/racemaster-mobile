@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -25,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -33,6 +35,7 @@ import kotlinx.coroutines.launch
 import mobile.racemaster.data.repository.MAX_BIB_NUMBER
 import mobile.racemaster.data.repository.MIN_BIB_NUMBER
 import mobile.racemaster.data.settings.AppMode
+import mobile.racemaster.ui.components.HistoryTextField
 import mobile.racemaster.util.withClickSound
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -46,6 +49,8 @@ fun RaceDetailsScreen(
 ) {
     val existingRace by viewModel.existingRace.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
+    val raceNameHistory by viewModel.raceNameHistory.collectAsStateWithLifecycle()
+    val courseHistory by viewModel.courseHistory.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     var name by remember { mutableStateOf("") }
@@ -101,29 +106,50 @@ fun RaceDetailsScreen(
         // every screen — without this, this inner Scaffold reserves it a second time.
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->
+        // imePadding() shrinks this Column over several animation frames as the keyboard
+        // opens/closes rather than settling instantly, so a single scroll-to-max at open time
+        // (or relying on the field's own default bring-into-view behavior) can undershoot or
+        // overshoot mid-animation and get stuck there — on at least one device (Sony Xperia,
+        // API 28) this left fields/the submit button permanently invisible even after the
+        // keyboard was fully dismissed, since nothing ever re-settled the scroll position once
+        // the animation's intermediate value had been baked in. Re-keying on the live ime
+        // bottom inset re-runs animateScrollTo(maxValue) on every frame of that animation,
+        // converging on the correct (fully visible) position once the keyboard finishes
+        // opening — or closing. Same fix already proven in TimeModeScreen/BibsModeScreen's own
+        // editors.
+        val scrollState = rememberScrollState()
+        val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
+        LaunchedEffect(imeBottomPx) {
+            scrollState.animateScrollTo(scrollState.maxValue)
+        }
         Column(
             modifier = Modifier
                 .padding(padding)
                 .imePadding()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scrollState)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (!deviceName.isNullOrBlank()) {
                 Text("Device name: $deviceName", style = MaterialTheme.typography.labelMedium)
             }
-            OutlinedTextField(
+            HistoryTextField(
                 value = name,
                 onValueChange = { name = it },
-                singleLine = true,
-                label = { Text("Race name") },
+                label = "Race name",
+                // Picking a previous name only ever fills this field — course/first bib/runner
+                // count are unrelated and stay exactly as already entered (see
+                // SettingsRepository.raceNameHistory's own doc).
+                history = raceNameHistory,
                 modifier = Modifier.fillMaxWidth(),
             )
-            OutlinedTextField(
+            HistoryTextField(
                 value = course,
                 onValueChange = { course = it },
-                singleLine = true,
-                label = { Text("Course (e.g. Seniors, Juniors)") },
+                label = "Course (e.g. Seniors, Juniors)",
+                // Same independent-field behavior as the Race name field above — picking a
+                // previous course only ever fills this field.
+                history = courseHistory,
                 modifier = Modifier.fillMaxWidth(),
             )
             if (showRunnerFields) {

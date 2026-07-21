@@ -13,6 +13,10 @@ private val ADJECTIVES = listOf(
     "daring", "cheerful", "cosy", "crisp", "dapper", "drowsy", "earnest", "feisty", "frosty", "glossy",
     "grand", "hardy", "hearty", "humble", "keen", "larky", "loyal", "merry", "noble", "perky",
     "plush", "proud", "rosy", "ruddy", "shiny", "sleek", "snug", "spry", "steady", "trusty",
+    "gallant", "sturdy", "vivid", "chipper", "spirited", "wily", "genial", "radiant", "supple", "stalwart",
+    "peppy", "bonny", "canny", "chirpy", "dashing", "jaunty", "nifty", "sprightly", "zippy", "zingy",
+    "spiffy", "plummy", "comely", "dinky", "flashy", "frisky", "gutsy", "handy", "jazzy", "lucky",
+    "mellow", "natty", "pert", "quaint", "saucy", "speedy", "sporty", "suave", "trim", "wiry",
 )
 
 private val NOUNS = listOf(
@@ -22,6 +26,10 @@ private val NOUNS = listOf(
     "fox", "hare", "lynx", "robin", "magpie", "swallow", "wren", "finch", "stoat", "ferret",
     "dolphin", "seal", "osprey", "merlin", "harrier", "teal", "grouse", "wagtail", "dipper", "gull",
     "glen", "dale", "moor", "marsh", "grove", "knoll", "bay", "creek", "cliff", "dune",
+    "swan", "stork", "crane", "egret", "curlew", "warbler", "siskin", "bunting", "vale", "fen",
+    "copse", "heath", "crag", "tarn", "reef", "shoal", "delta", "isle", "cape", "spring",
+    "viper", "cobra", "panther", "jaguar", "ibis", "toucan", "parrot", "condor", "beaver", "squirrel",
+    "hedgehog", "mongoose", "ocelot", "panda", "koala", "wallaby", "kiwi", "emu", "pelican", "flamingo",
 )
 
 /** Generates a memorable "adjective-noun" device name, e.g. "clever-cricket". */
