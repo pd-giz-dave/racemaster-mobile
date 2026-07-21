@@ -39,6 +39,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import mobile.racemaster.BuildConfig
 import mobile.racemaster.ui.components.HistoryTextField
+import mobile.racemaster.ui.theme.ServerOfflineRed
+import mobile.racemaster.ui.theme.SyncedGreen
 import mobile.racemaster.util.withClickSound
 
 /** Device-wide Racemaster server URL + login — reached via "Setup Server" in Mule Mode's
@@ -76,6 +78,12 @@ fun MuleServerSetupScreen(
     var prefilled by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    // null while the one-shot check is still resolving (renders nothing that one frame,
+    // rather than flashing a wrong answer first) — see
+    // MuleServerSetupViewModel.hasInternetConnectivity's own doc for why this is a one-shot
+    // check, not a live subscription.
+    var hasInternet by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(Unit) { hasInternet = viewModel.hasInternetConnectivity() }
 
     LaunchedEffect(draft, currentServerUrl) {
         if (prefilled) return@LaunchedEffect
@@ -119,6 +127,13 @@ fun MuleServerSetupScreen(
                 if (isLoggedIn) "Currently logged in to: ${currentServerUrl.orEmpty()}" else "Not logged in",
                 style = MaterialTheme.typography.bodyMedium,
             )
+            hasInternet?.let { available ->
+                Text(
+                    if (available) "Internet connection available" else "No internet connection detected — logging in will likely fail until you have signal or WiFi",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (available) SyncedGreen else ServerOfflineRed,
+                )
+            }
             HistoryTextField(
                 value = url,
                 onValueChange = { url = it },

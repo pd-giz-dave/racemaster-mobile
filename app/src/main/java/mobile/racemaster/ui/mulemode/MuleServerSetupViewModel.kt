@@ -1,5 +1,6 @@
 package mobile.racemaster.ui.mulemode
 
+import android.app.Application
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -12,12 +13,17 @@ import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.settings.ServerSetupDraft
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
+import mobile.racemaster.di.applicationContext
+import mobile.racemaster.util.hasInternetConnectivity
 
 /** Device-wide Racemaster server URL + login, set together in one form — reached via a
  *  "Setup Server" link in Mule Mode's title bar. */
 class MuleServerSetupViewModel(
     private val muleRepository: MuleRepository,
     private val settingsRepository: SettingsRepository,
+    // Application, not Context — see ViewModelFactorySupport.applicationContext's own doc for
+    // why that's what keeps Lint's StaticFieldLeak check from flagging a ViewModel field here.
+    private val context: Application,
 ) : ViewModel() {
 
     // What the operator last typed here, sticky across reopening the form (and even a
@@ -46,11 +52,18 @@ class MuleServerSetupViewModel(
         muleRepository.login(url, username, password)
     }
 
+    // Checked once when the screen opens (see MuleServerSetupScreen) — a plain synchronous
+    // hint, not a live subscription, same one-shot use NetworkStatus.hasInternetConnectivity's
+    // own doc already describes for Mule Mode's with/without-server prompt. Surfacing it here
+    // too means an operator about to attempt a login sees upfront why it's likely to fail,
+    // rather than only finding out after tapping Save & Log In.
+    fun hasInternetConnectivity(): Boolean = hasInternetConnectivity(context)
+
     companion object {
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val container = appContainer()
-                MuleServerSetupViewModel(container.muleRepository, container.settingsRepository)
+                MuleServerSetupViewModel(container.muleRepository, container.settingsRepository, applicationContext())
             }
         }
     }

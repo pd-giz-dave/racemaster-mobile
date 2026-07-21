@@ -31,6 +31,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.ui.components.CompactTopAppBarHeight
 import mobile.racemaster.ui.components.SyncStatusLine
+import mobile.racemaster.ui.theme.ServerOfflineRed
 import mobile.racemaster.ui.theme.SyncedGreen
 import mobile.racemaster.ui.theme.UnsyncedRed
 import mobile.racemaster.util.formatWallClock
@@ -156,11 +157,16 @@ private fun ServerChoicePrompt(
                 "devices are out of Bluetooth range of each other.",
             style = MaterialTheme.typography.bodyMedium,
         )
+        Text(
+            if (recommendServer) "Internet connection available" else "No internet connection detected",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (recommendServer) SyncedGreen else ServerOfflineRed,
+        )
         if (!recommendServer) {
             Text(
-                "No internet connection detected right now, so Without server is recommended " +
-                    "— you can still connect to a server later from this screen's Setup " +
-                    "Server button once you have signal or WiFi.",
+                "So Without server is recommended for now — you can still connect to a " +
+                    "server later from this screen's Setup Server button once you have " +
+                    "signal or WiFi.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
