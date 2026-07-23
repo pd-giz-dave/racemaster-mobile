@@ -7,7 +7,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -26,7 +29,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -52,6 +59,16 @@ fun RaceDetailsScreen(
     val raceNameHistory by viewModel.raceNameHistory.collectAsStateWithLifecycle()
     val courseHistory by viewModel.courseHistory.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    // The on-screen keyboard has no physical Tab key, and without an explicit ImeAction.Next
+    // + KeyboardActions.onNext every field here defaults to a plain "Done" action that just
+    // dismisses the keyboard — leaving no way to advance to the next field at all, let alone
+    // one that also scrolls it into view (bringIntoView() below only fires on focus, and a
+    // field the operator can't reach by tapping — fully scrolled below the keyboard — can
+    // never receive that focus in the first place). moveFocus(Down) plus each field's own
+    // bringIntoView-on-focus (see HistoryTextField) together give the keyboard's own "next"
+    // arrow the same effect a physical Tab key would have.
+    val focusManager = LocalFocusManager.current
+    val nextFieldAction = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) })
 
     var name by remember { mutableStateOf("") }
     var course by remember { mutableStateOf("") }
@@ -106,21 +123,19 @@ fun RaceDetailsScreen(
         // every screen — without this, this inner Scaffold reserves it a second time.
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->
-        // imePadding() shrinks this Column over several animation frames as the keyboard
-        // opens/closes rather than settling instantly, so a single scroll-to-max at open time
-        // (or relying on the field's own default bring-into-view behavior) can undershoot or
-        // overshoot mid-animation and get stuck there — on at least one device (Sony Xperia,
-        // API 28) this left fields/the submit button permanently invisible even after the
-        // keyboard was fully dismissed, since nothing ever re-settled the scroll position once
-        // the animation's intermediate value had been baked in. Re-keying on the live ime
-        // bottom inset re-runs animateScrollTo(maxValue) on every frame of that animation,
-        // converging on the correct (fully visible) position once the keyboard finishes
-        // opening — or closing. Same fix already proven in TimeModeScreen/BibsModeScreen's own
-        // editors.
+        // Each field brings itself into view on focus (see HistoryTextField/the two raw
+        // OutlinedTextFields below) — a per-field fix for a budget/older device where the
+        // keyboard's own ime inset either never fired or settled too late to scroll a
+        // just-tapped field out from behind it. That leaves one gap: nothing brings the
+        // Save/Create button itself into view once the operator's done with the last field.
+        // Re-settling to the max scroll position specifically when the keyboard finishes
+        // closing (not on every intermediate frame while it's still open, which would fight
+        // the per-field scrolling above) is what keeps the submit button reachable afterward
+        // — same fix already proven in TimeModeScreen/BibsModeScreen's own editors.
         val scrollState = rememberScrollState()
         val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
-        LaunchedEffect(imeBottomPx) {
-            scrollState.animateScrollTo(scrollState.maxValue)
+        LaunchedEffect(imeBottomPx == 0) {
+            if (imeBottomPx == 0) scrollState.animateScrollTo(scrollState.maxValue)
         }
         Column(
             modifier = Modifier
@@ -141,6 +156,9 @@ fun RaceDetailsScreen(
                 // count are unrelated and stay exactly as already entered (see
                 // SettingsRepository.raceNameHistory's own doc).
                 history = raceNameHistory,
+                // Always followed by Course, so always "Next" — see nextFieldAction's own doc.
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                keyboardActions = nextFieldAction,
                 modifier = Modifier.fillMaxWidth(),
             )
             HistoryTextField(
@@ -150,26 +168,47 @@ fun RaceDetailsScreen(
                 // Same independent-field behavior as the Race name field above — picking a
                 // previous course only ever fills this field.
                 history = courseHistory,
+                // The last field gets "Done" (dismisses the keyboard); every other field gets
+                // "Next" — Course is last exactly when the runner fields aren't shown.
+                keyboardOptions = KeyboardOptions(imeAction = if (showRunnerFields) ImeAction.Next else ImeAction.Done),
+                keyboardActions = if (showRunnerFields) nextFieldAction else KeyboardActions(onDone = { focusManager.clearFocus() }),
                 modifier = Modifier.fillMaxWidth(),
             )
             if (showRunnerFields) {
+                // bringIntoViewRequester + onFocusEvent — see HistoryTextField's own doc for
+                // why relying on the keyboard's own ime inset alone isn't reliable everywhere.
+                val startFieldRequester = remember { BringIntoViewRequester() }
                 OutlinedTextField(
                     value = startText,
                     onValueChange = { startText = it.filter(Char::isDigit).take(3) },
                     enabled = countFieldsEnabled,
                     singleLine = true,
                     label = { Text("First bib number (1–999)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                    keyboardActions = nextFieldAction,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .bringIntoViewRequester(startFieldRequester)
+                        .onFocusEvent { state ->
+                            if (state.isFocused) scope.launch { startFieldRequester.bringIntoView() }
+                        },
                 )
+                val countFieldRequester = remember { BringIntoViewRequester() }
                 OutlinedTextField(
                     value = countText,
                     onValueChange = { countText = it.filter(Char::isDigit).take(3) },
                     enabled = countFieldsEnabled,
                     singleLine = true,
                     label = { Text("Number of runners") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth(),
+                    // Last field in this branch — "Done" dismisses the keyboard.
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .bringIntoViewRequester(countFieldRequester)
+                        .onFocusEvent { state ->
+                            if (state.isFocused) scope.launch { countFieldRequester.bringIntoView() }
+                        },
                 )
                 if (!countFieldsEnabled) {
                     Text(

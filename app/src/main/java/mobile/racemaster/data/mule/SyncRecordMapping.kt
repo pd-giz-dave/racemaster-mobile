@@ -36,12 +36,8 @@ fun HistoryLineEntity.toSyncRecord(raceStartedAtMillis: Long?): SyncRecord {
 }
 
 private fun HistoryAction.toServerAction(): String = when (this) {
-    // Time Mode only — this now reaches the server honestly (previously every Time row
-    // hardcoded action = "Finish" regardless of whether it was really a marker, with the
-    // real type only ever visible in `note`).
-    HistoryAction.SPLIT -> "Finish"
-    // Shared between Time's session markers and Bibs' own runner-start action.
-    HistoryAction.START -> "Start"
+    // Time Mode
+    HistoryAction.SPLIT -> "Split"
     // Bibs Mode
     HistoryAction.FINISH -> "Finish"
     HistoryAction.RETIRE -> "DNF"
@@ -51,10 +47,40 @@ private fun HistoryAction.toServerAction(): String = when (this) {
     HistoryAction.MALE -> "Male"
     HistoryAction.FEMALE -> "Female"
     HistoryAction.CLOCK -> "Clock"
+    // Shared
+    HistoryAction.START -> "Start"
     HistoryAction.STOP -> "Stop"
     HistoryAction.RESET -> "Reset"
-    // Shared
     HistoryAction.UNDO -> "Undo"
+}
+
+/**
+ * Reconstructs the original [HistoryAction] from a pulled [SyncRecord]'s own wire fields — the
+ * exact inverse of [toServerAction] above, kept right beside it so the two can never quietly
+ * drift apart. This is what lets Mule Source Detail (a pulled record) render an action label
+ * via the very same [mobile.racemaster.ui.bibsmode.displayName] a local race's own history
+ * (Race History) uses, instead of showing the raw wire string — which isn't the same wording
+ * (e.g. "DNF" on the wire vs. this app's own "Retire"). Every wire value maps to exactly one
+ * [HistoryAction] — "Split" and "Finish" are no longer ambiguous with each other now that a
+ * Time split is sent as its own honest "Split" (see [toServerAction]), not disguised as
+ * "Finish".
+ */
+fun SyncRecord.toHistoryAction(): HistoryAction = when (action) {
+    "Split" -> HistoryAction.SPLIT
+    "Finish" -> HistoryAction.FINISH
+    "Start" -> HistoryAction.START
+    "DNF" -> HistoryAction.RETIRE
+    "Ignore" -> HistoryAction.IGNORE
+    "Seniors" -> HistoryAction.SENIORS
+    "Juniors" -> HistoryAction.JUNIORS
+    "Male" -> HistoryAction.MALE
+    "Female" -> HistoryAction.FEMALE
+    "Clock" -> HistoryAction.CLOCK
+    "Stop" -> HistoryAction.STOP
+    "Reset" -> HistoryAction.RESET
+    "Undo" -> HistoryAction.UNDO
+    // An unrecognized wire value - should not get here
+    else -> HistoryAction.IGNORE
 }
 
 // Centisecond precision, matching util/ElapsedTimeFormat.kt's on-screen convention exactly —

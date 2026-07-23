@@ -34,23 +34,40 @@ private val ACCOUNTED_FOR_ACTIONS = setOf(HistoryAction.FINISH, HistoryAction.RE
  * a bib out of a group makes the flags disappear automatically with no separate invalidation
  * step.
  */
-fun findDuplicateSplitRefs(entries: List<HistoryLineEntity>): Map<Long, List<Int>> {
-    val groups = entries
-        .filter { it.action in BIB_REQUIRED_ACTIONS && it.bibNumber != null }
-        .groupBy { it.bibNumber }
+fun findDuplicateSplitRefs(entries: List<HistoryLineEntity>): Map<Long, List<Int>> =
+    findDuplicateSplitRefs(entries, { it.id }, { it.bibNumber }, { it.action }, { it.splitNumber })
 
-    val result = mutableMapOf<Long, List<Int>>()
+/**
+ * Generic core behind [findDuplicateSplitRefs] above — pulled out with extractor lambdas (same
+ * pattern as [foldLatestVisible]) so a *pulled* Mule record can share this exact duplicate rule
+ * with a local race's own [HistoryLineEntity] rows, rather than a hand-duplicated copy that
+ * risks silently drifting out of sync — see
+ * [mobile.racemaster.ui.racehistory.MuleSourceDetailViewModel] for that call site.
+ */
+fun <T, K> findDuplicateSplitRefs(
+    entries: List<T>,
+    keyOf: (T) -> K,
+    bibNumberOf: (T) -> Int?,
+    actionOf: (T) -> HistoryAction,
+    splitNumberOf: (T) -> Int,
+): Map<K, List<Int>> {
+    val groups = entries
+        .filter { actionOf(it) in BIB_REQUIRED_ACTIONS && bibNumberOf(it) != null }
+        .groupBy { bibNumberOf(it) }
+
+    val result = mutableMapOf<K, List<Int>>()
     for (group in groups.values) {
-        flagExcess(group.filter { it.action == HistoryAction.START }, result)
-        flagExcess(group.filter { it.action in ACCOUNTED_FOR_ACTIONS }, result)
+        flagExcess(group.filter { actionOf(it) == HistoryAction.START }, keyOf, splitNumberOf, result)
+        flagExcess(group.filter { actionOf(it) in ACCOUNTED_FOR_ACTIONS }, keyOf, splitNumberOf, result)
     }
     return result
 }
 
-private fun flagExcess(group: List<HistoryLineEntity>, result: MutableMap<Long, List<Int>>) {
+private fun <T, K> flagExcess(group: List<T>, keyOf: (T) -> K, splitNumberOf: (T) -> Int, result: MutableMap<K, List<Int>>) {
     if (group.size <= 1) return
     for (entry in group) {
-        result[entry.id] = group.filter { it.id != entry.id }.map { it.splitNumber }
+        val key = keyOf(entry)
+        result[key] = group.filter { keyOf(it) != key }.map { splitNumberOf(it) }
     }
 }
 
@@ -68,22 +85,50 @@ private fun flagExcess(group: List<HistoryLineEntity>, result: MutableMap<Long, 
  * duplicate — only whatever's still actually visible should ever be flagged, same as the operator
  * would see live.
  */
-fun findDuplicateSplitRefsPerSegment(entries: List<HistoryLineEntity>): Map<Long, List<Int>> {
-    val ascending = entries.sortedBy { it.lineNumber }
-    val segments = mutableListOf<MutableList<HistoryLineEntity>>()
-    var current = mutableListOf<HistoryLineEntity>()
+fun findDuplicateSplitRefsPerSegment(entries: List<HistoryLineEntity>): Map<Long, List<Int>> =
+    findDuplicateSplitRefsPerSegment(
+        entries,
+        lineNumberOf = { it.lineNumber },
+        refLineNumberOf = { it.refLineNumber },
+        isUndoMarker = { it.action == HistoryAction.UNDO },
+        isReset = { it.action == HistoryAction.RESET },
+        keyOf = { it.id },
+        bibNumberOf = { it.bibNumber },
+        actionOf = { it.action },
+        splitNumberOf = { it.splitNumber },
+    )
+
+/**
+ * Generic core behind [findDuplicateSplitRefsPerSegment] above — see its doc for the actual
+ * segment/fold rules this applies; pulled out with extractor lambdas for the same reason
+ * [findDuplicateSplitRefs]'s own generic core is, so a pulled Mule record can share it too.
+ */
+fun <T, K> findDuplicateSplitRefsPerSegment(
+    entries: List<T>,
+    lineNumberOf: (T) -> Long,
+    refLineNumberOf: (T) -> Long?,
+    isUndoMarker: (T) -> Boolean,
+    isReset: (T) -> Boolean,
+    keyOf: (T) -> K,
+    bibNumberOf: (T) -> Int?,
+    actionOf: (T) -> HistoryAction,
+    splitNumberOf: (T) -> Int,
+): Map<K, List<Int>> {
+    val ascending = entries.sortedBy { lineNumberOf(it) }
+    val segments = mutableListOf<MutableList<T>>()
+    var current = mutableListOf<T>()
     for (row in ascending) {
         current.add(row)
-        if (row.action == HistoryAction.RESET) {
+        if (isReset(row)) {
             segments.add(current)
             current = mutableListOf()
         }
     }
     if (current.isNotEmpty()) segments.add(current)
-    val result = mutableMapOf<Long, List<Int>>()
+    val result = mutableMapOf<K, List<Int>>()
     for (segment in segments) {
-        val visible = foldLatestVisible(segment, { it.lineNumber }, { it.refLineNumber }, { it.action == HistoryAction.UNDO })
-        result.putAll(findDuplicateSplitRefs(visible))
+        val visible = foldLatestVisible(segment, lineNumberOf, refLineNumberOf, isUndoMarker)
+        result.putAll(findDuplicateSplitRefs(visible, keyOf, bibNumberOf, actionOf, splitNumberOf))
     }
     return result
 }

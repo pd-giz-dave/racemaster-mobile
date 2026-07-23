@@ -3,6 +3,9 @@ package mobile.racemaster.ui.components
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -16,9 +19,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.text.input.VisualTransformation
+import kotlinx.coroutines.launch
 import mobile.racemaster.util.withClickSound
 
 /**
@@ -43,10 +49,22 @@ fun HistoryTextField(
     onPick: (String) -> Unit = onValueChange,
     singleLine: Boolean = true,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
     visualTransformation: VisualTransformation = VisualTransformation.None,
     extraTrailingIcon: @Composable (() -> Unit)? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    // Scrolls this field into view the moment it gains focus, rather than relying on the
+    // keyboard's own animated inset (see RaceDetailsScreen's own doc for why that alone isn't
+    // reliable everywhere — confirmed in the field on a budget/older device where the ime
+    // inset either never fires or settles too late, leaving a field the operator just tapped
+    // still hidden behind the keyboard until they dismiss it and tap again). bringIntoView()
+    // asks the nearest scrollable ancestor (the form's own verticalScroll Column) to scroll
+    // just enough to fit this field's current bounds in whatever viewport imePadding() has
+    // already shrunk to — correct regardless of whether the keyboard's own inset animation is
+    // reported smoothly, in one jump, or at all.
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+    val coroutineScope = rememberCoroutineScope()
 
     Box(modifier = modifier) {
         OutlinedTextField(
@@ -55,6 +73,7 @@ fun HistoryTextField(
             singleLine = singleLine,
             label = { Text(label) },
             keyboardOptions = keyboardOptions,
+            keyboardActions = keyboardActions,
             visualTransformation = visualTransformation,
             trailingIcon = if (extraTrailingIcon != null || history.isNotEmpty()) {
                 {
@@ -70,7 +89,14 @@ fun HistoryTextField(
             } else {
                 null
             },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .bringIntoViewRequester(bringIntoViewRequester)
+                .onFocusEvent { state ->
+                    if (state.isFocused) {
+                        coroutineScope.launch { bringIntoViewRequester.bringIntoView() }
+                    }
+                },
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             history.forEach { item ->

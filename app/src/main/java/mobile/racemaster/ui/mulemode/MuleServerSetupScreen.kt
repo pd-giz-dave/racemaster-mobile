@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -30,6 +31,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -56,6 +60,11 @@ fun MuleServerSetupScreen(
     val isLoggedIn by viewModel.isLoggedIn.collectAsStateWithLifecycle()
     val credentialHistory by viewModel.credentialHistory.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    // See RaceDetailsScreen's own doc for why this is needed: the keyboard has no physical
+    // Tab key, so without an explicit ImeAction.Next + KeyboardActions.onNext there's no way
+    // to advance through this form's fields at all.
+    val focusManager = LocalFocusManager.current
+    val nextFieldAction = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) })
 
     // credentialHistory is already most-recent-first (see SettingsRepository's own doc), so
     // distinctBy keeps each url/username's most recently submitted full combination — that's
@@ -148,6 +157,8 @@ fun MuleServerSetupScreen(
                 },
                 label = "Racemaster server URL",
                 history = urlHistory.map { it.url },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                keyboardActions = nextFieldAction,
                 modifier = Modifier.fillMaxWidth(),
             )
             HistoryTextField(
@@ -161,6 +172,8 @@ fun MuleServerSetupScreen(
                 },
                 label = "Username",
                 history = usernameHistory.map { it.username },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                keyboardActions = nextFieldAction,
                 modifier = Modifier.fillMaxWidth(),
             )
             HistoryTextField(
@@ -169,7 +182,9 @@ fun MuleServerSetupScreen(
                 label = "Password",
                 history = passwordHistory,
                 visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                // Last field — "Done" dismisses the keyboard.
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                 extraTrailingIcon = {
                     IconButton(onClick = withClickSound { passwordVisible = !passwordVisible }) {
                         Icon(

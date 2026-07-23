@@ -203,7 +203,16 @@ class MuleSyncEngine(
     private fun startBluetoothStateLoop() {
         engineScope.launch {
             while (isActive) {
-                if (bluetoothStateRepository.isEnabled()) {
+                if (muleRepository.bluetoothOff.first()) {
+                    // Explicit operator choice, not a warning — tearing down the scan here
+                    // (rather than leaving it running and just discarding results) is what
+                    // stops this phone showing up as "still discovering" to itself and lets
+                    // startScan() rebuild discoveredFlow from scratch once back online, same
+                    // as re-entering Mule Mode already does.
+                    stopScan()
+                    discoveredFlow.value = emptyMap()
+                    bluetoothWarningFlow.value = null
+                } else if (bluetoothStateRepository.isEnabled()) {
                     startScan()
                 } else {
                     stopScan()
@@ -352,19 +361,33 @@ class MuleSyncEngine(
 
     private suspend fun autoPullAndPushIfArmed() {
         if (busyFlow.value) return
-        // Deliberately *not* gated on login here — pulling is a purely local BLE operation
-        // into Mule's own inbox, and every device visible should end up captured there (and
-        // colored green once caught up) regardless of whether *this* phone is logged in to
-        // push anywhere yet. Only the push phase below needs that, and pushIfNeeded() already
-        // no-ops quietly if it isn't configured. Without this split, an unlogged-in phone
-        // would never auto-pull from anyone — including itself — and its nearby-devices list
-        // would stay red forever no matter how caught up it really was, which is exactly the
-        // inconsistency this is fixing.
+        // Deliberately *not* gated on bluetoothOff or login here — pulling is a purely local
+        // operation into Mule's own inbox (BLE when there's something visible, always
+        // including this phone's own unsynced data regardless — see pullSelfRecords), and
+        // every device visible should end up captured there (and colored green once caught
+        // up) regardless of whether *this* phone is logged in to push anywhere yet, or has
+        // Bluetooth turned off (in which case discoveredFlow is simply empty and this loop
+        // does nothing on the BLE side, self-pull still runs). Only the push phase below
+        // needs the login/server-sync gates, and pushIfNeeded() already no-ops quietly if it
+        // isn't configured. Without this split, an unlogged-in phone would never auto-pull
+        // from anyone — including itself — and its nearby-devices list would stay red forever
+        // no matter how caught up it really was, which is exactly the inconsistency this is
+        // fixing.
         if (muleRepository.autoSyncStopped.first()) return
 
+        // try/finally, not a bare set-true/set-false either side of the call: MulePullClient's
+        // own CONNECT_TIMEOUT/PULL_TIMEOUT already bound how long a single stuck device can
+        // hang pullAllVisibleDevices for, but this is the backstop that guarantees busyFlow
+        // still gets cleared even if something unexpected still throws (or a future change
+        // reintroduces an unbounded suspend somewhere in that call chain) — without it, every
+        // future tick's `if (busyFlow.value) return` guard above would wedge shut forever,
+        // exactly the "stuck" symptom this whole timeout pass fixes.
         busyFlow.value = true
-        val tickFailure = pullAllVisibleDevices()
-        busyFlow.value = false
+        val tickFailure = try {
+            pullAllVisibleDevices()
+        } finally {
+            busyFlow.value = false
+        }
         // Self-clearing: a tick with no failures (including one where everything is already
         // synced and there was nothing to attempt) wipes out any earlier stale warning,
         // instead of it sticking around after the connection has actually recovered.
@@ -462,34 +485,53 @@ class MuleSyncEngine(
      *  becomes invisible to the operator. */
     fun forceSyncNow() {
         engineScope.launch {
+            // No bluetoothOff/serverSyncOff guard here — same reasoning as
+            // autoPullAndPushIfArmed: this degrades gracefully (pullAllVisibleDevices' BLE loop
+            // is naturally a no-op with an empty discoveredFlow, and pushIfNeeded checks
+            // serverSyncOff itself), rather than needing to know about every combination here.
+            //
+            // try/finally — see autoPullAndPushIfArmed's own doc for why: without it, a stuck
+            // device (bounded now, but still worth the backstop) would leave this button
+            // permanently disabled (isBusy never clears) rather than just this one tick failing.
             busyFlow.value = true
-            pullAllVisibleDevices()
-            busyFlow.value = false
+            try {
+                pullAllVisibleDevices()
+            } finally {
+                busyFlow.value = false
+            }
             pushIfNeeded(auto = false)
             autoWarningFlow.value = null
         }
     }
 
-    // The cheap local-only unsyncedCount check is only a valid shortcut for a background auto
-    // tick (skip the network round-trip on the overwhelmingly common case that nothing local
-    // changed since the last one). A manual Force Sync must not trust it: pushToServer()
-    // itself always re-checks the server's actual stored state (see its own doc) and only
-    // marks a row synced once that fresh check confirms it — a row that silently failed to
-    // land on the server (dropped mid-request, a server-side hiccup, ...) would otherwise
-    // never get retried, since the local unsyncedCount gate would keep skipping it forever
-    // once every local row already *looks* synced. Force Sync is exactly the operator's "no,
-    // really check" button, so it always runs the real reconciliation when logged in.
+    // Deliberately no local-only unsyncedCount shortcut here (there used to be one, skipping
+    // the network round-trip on an auto tick whenever every local row already *looked*
+    // synced) — pushToServer() itself always re-checks the server's actual stored state (see
+    // its own doc) and only marks a row synced once that fresh check confirms it, which is
+    // exactly what catches a server-side file that's gone missing (deleted, corrupted, a
+    // restored-from-backup server, ...): a row this device already believes is synced would
+    // otherwise never get re-sent, since the local unsyncedCount gate would keep skipping the
+    // one check that could ever notice the server no longer has it. So every sync attempt,
+    // automatic or manual, always runs the real reconciliation once logged in — this is a
+    // deliberate trade of a bit of extra network chatter (a status check per distinct race
+    // label this device has ever held, every ~10s) for self-healing against server data loss
+    // without needing an operator to notice and hit Force Sync.
     private suspend fun pushIfNeeded(auto: Boolean) {
+        if (muleRepository.serverSyncOff.first()) {
+            if (!auto) statusMessageFlow.value = "Can't push while server sync is off"
+            return
+        }
         if (!muleRepository.isLoggedIn.first()) {
             if (!auto) statusMessageFlow.value = "Push failed: not logged in"
             return
         }
-        if (auto && muleRepository.unsyncedCount.first() <= 0) {
-            return
-        }
+        // try/finally, same reasoning as the pull-phase callers above.
         busyFlow.value = true
-        val result = runCatching { muleRepository.pushToServer() }
-        busyFlow.value = false
+        val result = try {
+            runCatching { muleRepository.pushToServer() }
+        } finally {
+            busyFlow.value = false
+        }
         pushResultMessage(auto, result)?.let { statusMessageFlow.value = it }
     }
 

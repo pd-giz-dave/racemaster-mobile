@@ -9,7 +9,7 @@ object Routes {
     const val MULE_MODE = "mule_mode"
     const val RACE_HISTORY = "race_history"
     const val RACE_HISTORY_DETAIL = "race_history_detail/{raceId}"
-    const val MULE_SOURCE_DETAIL = "mule_source_detail/{raceLabel}"
+    const val MULE_SOURCE_DETAIL = "mule_source_detail/{raceLabel}/{sourceDeviceId}"
     const val RACE_DETAILS = "race_details/{mode}/{raceId}"
     const val HELP = "help"
     const val NAME_DEVICE = "name_device"
@@ -18,9 +18,13 @@ object Routes {
     fun raceHistoryDetail(raceId: Long) = "race_history_detail/$raceId"
 
     // raceLabel is free-form user text (race names can contain spaces/punctuation), so it
-    // must be URL-encoded to travel safely as a nav argument.
-    fun muleSourceDetail(raceLabel: String) =
-        "mule_source_detail/${java.net.URLEncoder.encode(raceLabel, "UTF-8")}"
+    // must be URL-encoded to travel safely as a nav argument. sourceDeviceId disambiguates
+    // between two different physical devices that happen to share the same raceLabel (see
+    // PulledRecordDao.PulledSourceSummary's own doc) — encoded too even though today's ids are
+    // URL-safe already, for consistency and future-proofing.
+    fun muleSourceDetail(raceLabel: String, sourceDeviceId: String) =
+        "mule_source_detail/${java.net.URLEncoder.encode(raceLabel, "UTF-8")}/" +
+            java.net.URLEncoder.encode(sourceDeviceId, "UTF-8")
 
     // raceId of -1 is the "new race" sentinel — Nav Compose's Long arg type doesn't support
     // nullable values, so this avoids a second parallel route just for "no existing race".

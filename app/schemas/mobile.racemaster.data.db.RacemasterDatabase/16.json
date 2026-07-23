@@ -1,0 +1,376 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 16,
+    "identityHash": "0feeb2bad04f58a72d60b1ba0be77537",
+    "entities": [
+      {
+        "tableName": "races",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `course` TEXT NOT NULL, `label` TEXT NOT NULL, `createdAtMillis` INTEGER NOT NULL, `timeModeNextSplit` INTEGER NOT NULL, `bibsModeNextSplit` INTEGER NOT NULL, `nextLineNumber` INTEGER NOT NULL, `timeModeStartedAtMillis` INTEGER, `timeModeStoppedAtMillis` INTEGER, `bibsRangeStart` INTEGER, `bibsRangeCount` INTEGER, `bibsModeStoppedAtMillis` INTEGER, `deviceRole` TEXT, `serverUrl` TEXT, `createdByDeviceName` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "course",
+            "columnName": "course",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "label",
+            "columnName": "label",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMillis",
+            "columnName": "createdAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timeModeNextSplit",
+            "columnName": "timeModeNextSplit",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bibsModeNextSplit",
+            "columnName": "bibsModeNextSplit",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nextLineNumber",
+            "columnName": "nextLineNumber",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timeModeStartedAtMillis",
+            "columnName": "timeModeStartedAtMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "timeModeStoppedAtMillis",
+            "columnName": "timeModeStoppedAtMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "bibsRangeStart",
+            "columnName": "bibsRangeStart",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "bibsRangeCount",
+            "columnName": "bibsRangeCount",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "bibsModeStoppedAtMillis",
+            "columnName": "bibsModeStoppedAtMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "deviceRole",
+            "columnName": "deviceRole",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "serverUrl",
+            "columnName": "serverUrl",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdByDeviceName",
+            "columnName": "createdByDeviceName",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "history_lines",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `raceId` INTEGER NOT NULL, `mode` TEXT NOT NULL, `action` TEXT NOT NULL, `bibNumber` INTEGER, `splitNumber` INTEGER NOT NULL, `lineNumber` INTEGER NOT NULL, `refLineNumber` INTEGER, `note` TEXT, `timestampMillis` INTEGER NOT NULL, `recordUuid` TEXT NOT NULL, `syncedAtMillis` INTEGER, FOREIGN KEY(`raceId`) REFERENCES `races`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "raceId",
+            "columnName": "raceId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mode",
+            "columnName": "mode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "action",
+            "columnName": "action",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bibNumber",
+            "columnName": "bibNumber",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "splitNumber",
+            "columnName": "splitNumber",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lineNumber",
+            "columnName": "lineNumber",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "refLineNumber",
+            "columnName": "refLineNumber",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "timestampMillis",
+            "columnName": "timestampMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recordUuid",
+            "columnName": "recordUuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncedAtMillis",
+            "columnName": "syncedAtMillis",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_history_lines_raceId",
+            "unique": false,
+            "columnNames": [
+              "raceId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_history_lines_raceId` ON `${TABLE_NAME}` (`raceId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "races",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "raceId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "pulled_records",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `recordUuid` TEXT NOT NULL, `sourceDeviceId` TEXT NOT NULL, `sourceDeviceRole` TEXT NOT NULL, `sourceRaceLabel` TEXT NOT NULL, `lineNumber` INTEGER NOT NULL, `deviceName` TEXT NOT NULL, `payloadJson` TEXT NOT NULL, `pulledAtMillis` INTEGER NOT NULL, `syncedAtMillis` INTEGER, `syncedTargetName` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recordUuid",
+            "columnName": "recordUuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceDeviceId",
+            "columnName": "sourceDeviceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceDeviceRole",
+            "columnName": "sourceDeviceRole",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceRaceLabel",
+            "columnName": "sourceRaceLabel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lineNumber",
+            "columnName": "lineNumber",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deviceName",
+            "columnName": "deviceName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payloadJson",
+            "columnName": "payloadJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pulledAtMillis",
+            "columnName": "pulledAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncedAtMillis",
+            "columnName": "syncedAtMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "syncedTargetName",
+            "columnName": "syncedTargetName",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_pulled_records_recordUuid",
+            "unique": true,
+            "columnNames": [
+              "recordUuid"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_pulled_records_recordUuid` ON `${TABLE_NAME}` (`recordUuid`)"
+          },
+          {
+            "name": "index_pulled_records_sourceDeviceId_sourceRaceLabel",
+            "unique": false,
+            "columnNames": [
+              "sourceDeviceId",
+              "sourceRaceLabel"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_pulled_records_sourceDeviceId_sourceRaceLabel` ON `${TABLE_NAME}` (`sourceDeviceId`, `sourceRaceLabel`)"
+          }
+        ]
+      },
+      {
+        "tableName": "line_syncs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `raceId` INTEGER NOT NULL, `lineNumber` INTEGER NOT NULL, `targetId` TEXT NOT NULL, `targetName` TEXT NOT NULL, `syncedAtMillis` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "raceId",
+            "columnName": "raceId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lineNumber",
+            "columnName": "lineNumber",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetId",
+            "columnName": "targetId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetName",
+            "columnName": "targetName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncedAtMillis",
+            "columnName": "syncedAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_line_syncs_raceId_lineNumber_targetId",
+            "unique": true,
+            "columnNames": [
+              "raceId",
+              "lineNumber",
+              "targetId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_line_syncs_raceId_lineNumber_targetId` ON `${TABLE_NAME}` (`raceId`, `lineNumber`, `targetId`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '0feeb2bad04f58a72d60b1ba0be77537')"
+    ]
+  }
+}

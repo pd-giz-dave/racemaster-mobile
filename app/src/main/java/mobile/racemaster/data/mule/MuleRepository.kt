@@ -19,8 +19,10 @@ const val DEVICE_ROLE_TIME = "TIME"
 const val DEVICE_ROLE_BIBS = "BIBS"
 
 // deviceName comes from the entity's own column, not the decoded record — SyncRecord itself
-// carries no per-line device name (see its own doc).
-data class PulledRecordDisplay(val record: SyncRecord, val deviceName: String, val syncedAtMillis: Long?)
+// carries no per-line device name (see its own doc). syncedToLabel mirrors a local race's own
+// LineSyncEntity.targetName (see PulledRecordEntity.syncedTargetName's own doc) so a pulled
+// record's "Synced to: X" tag matches a local race's exactly, not just a bare color.
+data class PulledRecordDisplay(val record: SyncRecord, val deviceName: String, val syncedAtMillis: Long?, val syncedToLabel: String?)
 
 /**
  * Orchestrates Mule Mode: pulling unsynced records from nearby Time/Bibs phones over BLE
@@ -46,6 +48,8 @@ class MuleRepository(
     val lastPulledAtMillis: Flow<Long?> = pulledRecordDao.observeLastPulledAtMillis()
     val isLoggedIn: Flow<Boolean> = settingsRepository.authToken.map { it != null }
     val autoSyncStopped: Flow<Boolean> = settingsRepository.autoSyncStopped
+    val bluetoothOff: Flow<Boolean> = settingsRepository.bluetoothOff
+    val serverSyncOff: Flow<Boolean> = settingsRepository.serverSyncOff
     // Both queries below need this device's own stable id to exclude its self-pulled rows
     // (see PulledRecordDao's doc) — read once per collection via getOrCreateDeviceId() rather
     // than a raw DataStore Flow, since it must also handle the first-ever-launch case where
@@ -57,9 +61,19 @@ class MuleRepository(
         myDeviceIdFlow.flatMapLatest { myDeviceId -> pulledRecordDao.observeSourceSummaries(myDeviceId) }
     val deviceName: Flow<String?> = settingsRepository.deviceName
 
-    fun observeRecordsForSource(sourceRaceLabel: String): Flow<List<PulledRecordDisplay>> =
-        myDeviceIdFlow.flatMapLatest { myDeviceId -> pulledRecordDao.observeForSource(sourceRaceLabel, myDeviceId) }
-            .map { entities -> entities.map { PulledRecordDisplay(json.decodeFromString(it.payloadJson), it.deviceName, it.syncedAtMillis) } }
+    // See PulledRecordDao.deleteForSource's own doc for why this is always safe to offer,
+    // unlike deleting a local race.
+    suspend fun deleteSource(sourceRaceLabel: String, sourceDeviceId: String) {
+        pulledRecordDao.deleteForSource(sourceRaceLabel, sourceDeviceId)
+    }
+
+    fun observeRecordsForSource(sourceRaceLabel: String, sourceDeviceId: String): Flow<List<PulledRecordDisplay>> =
+        pulledRecordDao.observeForSource(sourceRaceLabel, sourceDeviceId)
+            .map { entities ->
+                entities.map {
+                    PulledRecordDisplay(json.decodeFromString(it.payloadJson), it.deviceName, it.syncedAtMillis, it.syncedTargetName)
+                }
+            }
 
     fun scanForDevices(): Flow<Advertisement> = pullClient.scanForDevices()
 
@@ -67,6 +81,14 @@ class MuleRepository(
 
     suspend fun setAutoSyncStopped(stopped: Boolean) {
         settingsRepository.setAutoSyncStopped(stopped)
+    }
+
+    suspend fun setBluetoothOff(off: Boolean) {
+        settingsRepository.setBluetoothOff(off)
+    }
+
+    suspend fun setServerSyncOff(off: Boolean) {
+        settingsRepository.setServerSyncOff(off)
     }
 
     // The delta-sync cutoff for the next pull from this specific device/race — 0 (request
@@ -206,7 +228,12 @@ class MuleRepository(
             val justSentUuids = devicesToSend.values.flatten().map { it.recordUuid }.toSet()
             val confirmedRows = rowsForRace.filter { it.recordUuid !in justSentUuids }
             if (confirmedRows.isNotEmpty()) {
-                pulledRecordDao.markSynced(confirmedRows.map { it.recordUuid }, System.currentTimeMillis())
+                // Same targetName as the self-originated LineSyncEntity tagging just below —
+                // the only destination a pulled record is ever pushed to from here is this
+                // server, so this is always accurate, and it's what lets Mule Source Detail
+                // show "Synced to: X" exactly like a local race's own history instead of just
+                // a bare color.
+                pulledRecordDao.markSynced(confirmedRows.map { it.recordUuid }, System.currentTimeMillis(), targetName = baseUrl)
             }
 
             // Record "synced to SERVER" for this device's own originated lines only, since a

@@ -107,3 +107,54 @@ fun HistoryLineRow(
         }
     }
 }
+
+/** Everything [HistoryLineRow] needs, independent of whether the line came from a local
+ *  race (Race History) or a Mule-pulled source (Mule source detail) — lets both screens
+ *  render through the exact same [HistoryLinesList] rather than each hand-rolling its own
+ *  forEach/HistoryLineRow loop. */
+data class HistoryLineDisplay(
+    val lineNumber: Long,
+    val splitNumber: Int,
+    val actionLabel: String,
+    val bibNumber: Int?,
+    val elapsedMillis: Long?,
+    val note: String?,
+    val synced: Boolean,
+    val syncedToLabel: String? = null,
+    val dupSplitRefs: List<Int> = emptyList(),
+    val isUndoMarker: Boolean = false,
+    val editedFromLineNumber: Long? = null,
+)
+
+/** Renders [lines] via [HistoryLineRow], or [emptyMessage] if there are none — the one shared
+ *  list-rendering function both Race History and Mule source detail use, so a pulled race's
+ *  history looks exactly like a local race's own (no per-line device name; the source's
+ *  device is already named once, in that screen's own header — see MuleSourceDetailScreen). */
+@Composable
+fun HistoryLinesList(
+    lines: List<HistoryLineDisplay>,
+    emptyMessage: String,
+    modifier: Modifier = Modifier,
+) {
+    if (lines.isEmpty()) {
+        Text(emptyMessage, style = MaterialTheme.typography.bodyMedium, modifier = modifier)
+    } else {
+        Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            lines.forEach { line ->
+                HistoryLineRow(
+                    lineNumber = line.lineNumber,
+                    splitNumber = line.splitNumber,
+                    actionLabel = line.actionLabel,
+                    bibNumber = line.bibNumber,
+                    elapsedMillis = line.elapsedMillis,
+                    note = line.note,
+                    synced = line.synced,
+                    syncedToLabel = line.syncedToLabel,
+                    dupSplitRefs = line.dupSplitRefs,
+                    editedFromLineNumber = line.editedFromLineNumber,
+                    isUndoMarker = line.isUndoMarker,
+                )
+            }
+        }
+    }
+}

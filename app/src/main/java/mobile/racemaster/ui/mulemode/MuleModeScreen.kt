@@ -12,7 +12,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -117,6 +116,7 @@ fun MuleModeScreen(
                     Text(text = "Device name: $deviceName", style = MaterialTheme.typography.labelMedium)
                 }
                 SyncStatusLine(uiState.unsyncedCount, uiState.lastSyncedAtMillis)
+                BluetoothAndServerSyncToggles(uiState, viewModel)
                 AutoSyncStatus(uiState, viewModel)
 
                 uiState.statusMessage?.let { message ->
@@ -129,14 +129,7 @@ fun MuleModeScreen(
                 }
 
                 NearbyDevicesSection(uiState)
-                HorizontalDivider()
 
-                if (!uiState.isLoggedIn) {
-                    Text(
-                        "Not logged in — tap Setup Server above to configure the server URL and log in.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
             }
         }
     }
@@ -184,6 +177,62 @@ private fun ServerChoicePrompt(
     }
 }
 
+// Two independent toggles, side by side: turning Bluetooth off takes the whole radio
+// presence down (not scanning, not advertising, not answerable by any other Mule) without
+// affecting server sync; turning server sync off stops pushing to/checking the server
+// without affecting BLE device-to-device sync. Both are also independent of the Auto-sync
+// stop/resume toggle below (which only pauses this device's own pull/push loop while it
+// keeps scanning/advertising/serving).
+@Composable
+private fun BluetoothAndServerSyncToggles(uiState: MuleModeUiState, viewModel: MuleModeViewModel) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (uiState.bluetoothOff) {
+            Text(
+                "Bluetooth: OFF — not scanning, not advertising, not visible to nearby devices",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        } else {
+            Text(
+                "Bluetooth: ON — scanning, advertising, pulling data from nearby devices",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        if (uiState.serverSyncOff) {
+            Text(
+                "Server sync: OFF — not pushing to or checking the server",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        } else if (!uiState.isLoggedIn) {
+            Text(
+                "Not logged in — tap Setup Server above to configure the server URL and log in.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        } else {
+            Text(
+                "Server sync: ON — pushing pulled and self data to the server",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (uiState.bluetoothOff) {
+                Button(onClick = withClickSound(viewModel::turnBluetoothOn)) { Text("Bluetooth off") }
+            } else {
+                OutlinedButton(onClick = withClickSound(viewModel::turnBluetoothOff)) { Text("Bluetooth on") }
+            }
+            if (uiState.serverSyncOff) {
+                Button(onClick = withClickSound(viewModel::turnServerSyncOn)) { Text("Server sync off") }
+            } else {
+                OutlinedButton(onClick = withClickSound(viewModel::turnServerSyncOff)) { Text("Server sync on") }
+            }
+        }
+    }
+}
+
 @Composable
 private fun AutoSyncStatus(uiState: MuleModeUiState, viewModel: MuleModeViewModel) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -194,14 +243,9 @@ private fun AutoSyncStatus(uiState: MuleModeUiState, viewModel: MuleModeViewMode
                 color = MaterialTheme.colorScheme.error,
             )
             uiState.autoSyncArmed -> Text(
-                "Auto-sync: ON — pulling and pushing automatically every few seconds",
+                "Auto-sync: ON — pulling and pushing every few seconds",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
-            )
-            else -> Text(
-                "Pulling from every visible device automatically. Pushing to the server " +
-                    "starts once you're logged in.",
-                style = MaterialTheme.typography.bodySmall,
             )
         }
         uiState.autoWarning?.let { warning ->
@@ -233,11 +277,12 @@ private fun NearbyDevicesSection(uiState: MuleModeUiState) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text("Nearby devices", style = MaterialTheme.typography.titleMedium)
         Text(
-            "Every device Mule can see is synced automatically — red means it has unsynced " +
-                "data, green means it's all synced.",
+            "Red means it has unsynced data, green means it's all synced.",
             style = MaterialTheme.typography.bodySmall,
         )
-        if (uiState.bluetoothWarning != null) {
+        if (uiState.bluetoothOff) {
+            Text("Bluetooth off — not scanning for nearby devices", style = MaterialTheme.typography.bodySmall)
+        } else if (uiState.bluetoothWarning != null) {
             Text(
                 uiState.bluetoothWarning,
                 style = MaterialTheme.typography.bodyMedium,

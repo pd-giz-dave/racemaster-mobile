@@ -30,6 +30,8 @@ class SettingsRepository(
         val SERVER_BASE_URL = stringPreferencesKey("server_base_url")
         val AUTH_TOKEN = stringPreferencesKey("auth_token")
         val AUTO_SYNC_STOPPED = booleanPreferencesKey("auto_sync_stopped")
+        val BLUETOOTH_OFF = booleanPreferencesKey("bluetooth_off")
+        val SERVER_SYNC_OFF = booleanPreferencesKey("server_sync_off")
         val DRAFT_SERVER_URL = stringPreferencesKey("draft_server_url")
         val DRAFT_USERNAME = stringPreferencesKey("draft_username")
         val DRAFT_PASSWORD = stringPreferencesKey("draft_password")
@@ -200,5 +202,28 @@ class SettingsRepository(
 
     suspend fun setAutoSyncStopped(stopped: Boolean) {
         dataStore.edit { prefs -> prefs[Keys.AUTO_SYNC_STOPPED] = stopped }
+    }
+
+    // Independent of autoSyncStopped above (which only pauses this device's own pull/push
+    // loop) and of serverSyncOff below — this takes the whole Mule *radio* presence down: no
+    // scanning, no advertising, not answerable by any other Mule over BLE. For an operator who
+    // wants this phone to genuinely stop participating in device-to-device sync (e.g. to rule
+    // it out while troubleshooting a crowded BLE environment), independent of whether it's
+    // still pushing to the server.
+    val bluetoothOff: Flow<Boolean> = dataStore.data.map { prefs -> prefs[Keys.BLUETOOTH_OFF] ?: false }
+
+    suspend fun setBluetoothOff(off: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.BLUETOOTH_OFF] = off }
+    }
+
+    // The server-sync counterpart to bluetoothOff above — stops pushing to (and checking
+    // status from) the server, independent of whether BLE device-to-device sync keeps
+    // running. Lets an operator pause server connectivity specifically (e.g. no signal, or
+    // deliberately keeping data local for now) without also taking down discovery/relay to
+    // other nearby Mules, and vice versa.
+    val serverSyncOff: Flow<Boolean> = dataStore.data.map { prefs -> prefs[Keys.SERVER_SYNC_OFF] ?: false }
+
+    suspend fun setServerSyncOff(off: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.SERVER_SYNC_OFF] = off }
     }
 }

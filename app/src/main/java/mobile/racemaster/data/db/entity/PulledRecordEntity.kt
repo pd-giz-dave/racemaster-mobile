@@ -37,4 +37,9 @@ data class PulledRecordEntity(
     val payloadJson: String,
     val pulledAtMillis: Long,
     val syncedAtMillis: Long? = null,
+    // The same destination string a local race's own LineSyncEntity.targetName captures for
+    // a self-originated line's server push (see MuleRepository.pushToServer) — set alongside
+    // syncedAtMillis so a Mule-pulled record's "Synced to: X" tag matches a local race's own
+    // exactly, instead of only getting a bare synced/unsynced color with no destination.
+    val syncedTargetName: String? = null,
 )

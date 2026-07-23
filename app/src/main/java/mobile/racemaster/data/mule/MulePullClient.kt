@@ -1,7 +1,9 @@
 package mobile.racemaster.data.mule
 
+import android.bluetooth.le.ScanSettings
 import com.juul.kable.Advertisement
 import com.juul.kable.AndroidPeripheral
+import com.juul.kable.ObsoleteKableApi
 import com.juul.kable.Peripheral
 import com.juul.kable.Scanner
 import com.juul.kable.WriteType
@@ -10,6 +12,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -24,12 +27,31 @@ import kotlin.uuid.toKotlinUuid
 class MulePullClient {
     private val json = Json { ignoreUnknownKeys = true }
 
+    // Deliberately unfiltered at the Scanner level — Kable's `filters { match { services = ... } }`
+    // compiles down to a single native android.bluetooth.le.ScanFilter.setServiceUuid(), which
+    // hands matching to the device's own BLE controller/stack. That's a well-documented source
+    // of false negatives for custom 128-bit service UUIDs on exactly the kind of budget/older
+    // chipsets this app runs on (confirmed in the field: three phones simultaneously running
+    // Mule Mode saw wildly inconsistent subsets of each other even after every device's
+    // *advertising* was confirmed still active — the timeout/busyFlow fixes elsewhere in this
+    // file's history addressed a stuck-connect hang, not this: a scan that simply never
+    // delivers a result for another device's advertisement can't be timed out, since nothing is
+    // ever pending). Matching [MuleGattProfile.SERVICE_UUID] ourselves against every
+    // unfiltered advertisement (see scanForDevices below) moves that check into this process,
+    // which is exactly as correct and avoids trusting the controller's own filter hardware/
+    // firmware to do it right.
+    // SCAN_MODE_LOW_LATENCY (near-continuous listening), not Android's un-set default of
+    // SCAN_MODE_LOW_POWER (a short scan window over a long interval) — every phone running
+    // Mule Mode is simultaneously scanning *and* advertising/serving a GATT server on the same
+    // radio, and budget/older BLE chipsets time-share those roles poorly. Confirmed in the
+    // field on exactly this kind of hardware: a scan that's only "listening" for a small
+    // fraction of the time has far less chance of a window landing on a peer's advertisement
+    // burst while also fending off this device's own advertiser for airtime. This can't fix a
+    // controller that genuinely can't run both roles at once, but it meaningfully improves the
+    // odds on the (more common) chipsets that can, just inconsistently at low duty cycle.
+    @OptIn(ObsoleteKableApi::class)
     private val scanner = Scanner {
-        filters {
-            match {
-                services = listOf(MuleGattProfile.SERVICE_UUID.toKotlinUuid())
-            }
-        }
+        scanSettings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
     }
 
     // One Peripheral per device address, reused across calls — a fresh Peripheral(advertisement)
@@ -46,8 +68,17 @@ class MulePullClient {
         peripherals.getOrPut(advertisement.identifier) { Peripheral(advertisement) }
 
     fun scanForDevices(): Flow<Advertisement> = scanner.advertisements
+        .filter { advertisement -> MuleGattProfile.SERVICE_UUID.toKotlinUuid() in advertisement.uuids }
 
-    suspend fun readDeviceInfo(advertisement: Advertisement): DeviceInfo {
+    // Bounded so one unresponsive/stuck-mid-handshake device can never hang this call
+    // indefinitely — confirmed in the field: a GATT connect() with no timeout of its own can
+    // simply never return on some radios/OEM stacks, and since MuleSyncEngine.pullAllVisibleDevices
+    // processes devices in a plain sequential loop, one such hang used to wedge that device
+    // permanently in "Discovering…" (see DiscoveredDevice's own doc) *and* block every device
+    // after it in the same list forever, since the loop itself never moved on. A timeout here
+    // turns that into an ordinary, recoverable per-device failure — runCatching at the call
+    // site already treats it exactly like a failed read.
+    suspend fun readDeviceInfo(advertisement: Advertisement): DeviceInfo = withTimeout(CONNECT_TIMEOUT) {
         val peripheral = peripheralFor(advertisement)
         peripheral.connect()
         try {
@@ -56,7 +87,7 @@ class MulePullClient {
                 characteristic = MuleGattProfile.DEVICE_INFO_CHARACTERISTIC_UUID.toKotlinUuid(),
             )
             val bytes = peripheral.read(characteristic)
-            return json.decodeFromString(String(bytes, Charsets.UTF_8))
+            json.decodeFromString(String(bytes, Charsets.UTF_8))
         } finally {
             peripheral.disconnect()
         }
@@ -81,7 +112,10 @@ class MulePullClient {
         onReceived: suspend (List<SyncRecord>) -> Unit,
     ): Unit = coroutineScope {
         val peripheral = peripheralFor(advertisement)
-        peripheral.connect()
+        // Same reasoning as readDeviceInfo's own CONNECT_TIMEOUT — bounds just the connect
+        // phase so a stuck handshake can't hang this call forever; PULL_TIMEOUT below already
+        // separately bounds the actual data-collection phase once connected.
+        withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }
         try {
             // The un-negotiated default ATT MTU is only 23 bytes (20 usable per notification
             // after the ATT header) — without this, the peripheral's larger chunks would be
@@ -130,5 +164,6 @@ class MulePullClient {
 
     companion object {
         private val PULL_TIMEOUT = 15_000.milliseconds
+        private val CONNECT_TIMEOUT = 10_000.milliseconds
     }
 }

@@ -132,8 +132,8 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                     RaceHistoryScreen(
                         onBack = { navController.popBackStack() },
                         onRaceSelected = { raceId -> navController.navigate(Routes.raceHistoryDetail(raceId)) },
-                        onMuleSourceSelected = { raceLabel ->
-                            navController.navigate(Routes.muleSourceDetail(raceLabel))
+                        onMuleSourceSelected = { raceLabel, sourceDeviceId ->
+                            navController.navigate(Routes.muleSourceDetail(raceLabel, sourceDeviceId))
                         },
                     )
                 }
@@ -146,11 +146,16 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                 }
                 composable(
                     route = Routes.MULE_SOURCE_DETAIL,
-                    arguments = listOf(navArgument("raceLabel") { type = NavType.StringType }),
+                    arguments = listOf(
+                        navArgument("raceLabel") { type = NavType.StringType },
+                        navArgument("sourceDeviceId") { type = NavType.StringType },
+                    ),
                 ) { backStackEntry ->
                     val encodedRaceLabel = backStackEntry.arguments?.getString("raceLabel") ?: return@composable
+                    val encodedSourceDeviceId = backStackEntry.arguments?.getString("sourceDeviceId") ?: return@composable
                     MuleSourceDetailScreen(
                         raceLabel = URLDecoder.decode(encodedRaceLabel, "UTF-8"),
+                        sourceDeviceId = URLDecoder.decode(encodedSourceDeviceId, "UTF-8"),
                         onBack = { navController.popBackStack() },
                     )
                 }

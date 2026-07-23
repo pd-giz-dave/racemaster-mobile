@@ -36,11 +36,12 @@ import mobile.racemaster.util.withClickSound
 fun RaceHistoryScreen(
     onBack: () -> Unit,
     onRaceSelected: (Long) -> Unit,
-    onMuleSourceSelected: (raceLabel: String) -> Unit,
+    onMuleSourceSelected: (raceLabel: String, sourceDeviceId: String) -> Unit,
     viewModel: RaceHistoryViewModel = viewModel(factory = RaceHistoryViewModel.Factory),
 ) {
     val items by viewModel.historyItems.collectAsStateWithLifecycle()
     var pendingDelete by remember { mutableStateOf<HistoryItemUi.LocalRace?>(null) }
+    var pendingMuleSourceDelete by remember { mutableStateOf<HistoryItemUi.MuleSource?>(null) }
 
     Scaffold(
         topBar = {
@@ -65,7 +66,7 @@ fun RaceHistoryScreen(
                     key = {
                         when (it) {
                             is HistoryItemUi.LocalRace -> "race-${it.id}"
-                            is HistoryItemUi.MuleSource -> "mule-${it.raceLabel}"
+                            is HistoryItemUi.MuleSource -> "mule-${it.raceLabel}-${it.sourceDeviceId}"
                         }
                     },
                 ) { item ->
@@ -101,8 +102,21 @@ fun RaceHistoryScreen(
                             supportingContent = {
                                 if (item.deviceName.isNotBlank()) Text("From ${item.deviceName}")
                             },
+                            trailingContent = {
+                                // No active-race guard here (unlike LocalRace's delete above) —
+                                // a Mule source is just a relayed copy, safely re-pullable from
+                                // its origin device at any time; see
+                                // RaceHistoryViewModel.deleteMuleSource's own doc.
+                                IconButton(onClick = withClickSound { pendingMuleSourceDelete = item }) {
+                                    Icon(
+                                        Icons.Filled.Delete,
+                                        contentDescription = "Delete pulled records",
+                                        tint = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                            },
                             modifier = Modifier.clickable(
-                                onClick = withClickSound { onMuleSourceSelected(item.raceLabel) },
+                                onClick = withClickSound { onMuleSourceSelected(item.raceLabel, item.sourceDeviceId) },
                             ),
                         )
                     }
@@ -127,6 +141,32 @@ fun RaceHistoryScreen(
             },
             dismissButton = {
                 TextButton(onClick = withClickSound { pendingDelete = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    pendingMuleSourceDelete?.let { source ->
+        AlertDialog(
+            onDismissRequest = { pendingMuleSourceDelete = null },
+            title = { Text("Delete these pulled records?") },
+            text = {
+                Text(
+                    "This removes \"${source.raceLabel.ifEmpty { "Mule" }}\" (from ${source.deviceName}) " +
+                        "from this device only. If that device is still around, Mule will pull its " +
+                        "full history again automatically — nothing is deleted from the source device " +
+                        "or the server.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = withClickSound {
+                        viewModel.deleteMuleSource(source.raceLabel, source.sourceDeviceId)
+                        pendingMuleSourceDelete = null
+                    },
+                ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = withClickSound { pendingMuleSourceDelete = null }) { Text("Cancel") }
             },
         )
     }

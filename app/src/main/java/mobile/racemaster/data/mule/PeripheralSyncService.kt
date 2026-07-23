@@ -38,6 +38,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.isActive
@@ -156,11 +157,17 @@ class PeripheralSyncService : Service() {
             // indefinitely" concern.
             deviceId = container.settingsRepository.getOrCreateDeviceId()
             deviceName = container.settingsRepository.getOrCreateDeviceName()
-            var wasEnabled = false
+            var wasActive = false
             while (isActive) {
-                val enabled = container.bluetoothStateRepository.isEnabled()
-                if (enabled) {
-                    if (!wasEnabled) {
+                // bluetoothOff is an explicit operator choice to stop being discoverable/servable
+                // at all, distinct from the radio itself being off — unlike a disabled radio
+                // (which kills advertising/the GATT server at the OS level on its own), turning
+                // it off in-app leaves the system radio on, so this loop has to tear both down
+                // itself rather than just skipping the (re)start below.
+                val bluetoothOff = container.settingsRepository.bluetoothOff.first()
+                val shouldBeActive = !bluetoothOff && container.bluetoothStateRepository.isEnabled()
+                if (shouldBeActive) {
+                    if (!wasActive) {
                         // Just came on (or this is the first tick) — any earlier
                         // server/advertiser reference is stale once the radio's cycled, so
                         // tear down before rebuilding fresh rather than trusting it's still
@@ -170,8 +177,12 @@ class PeripheralSyncService : Service() {
                         gattServer = null
                     }
                     if (gattServer == null) startGattServerAndAdvertising()
+                } else if (wasActive) {
+                    stopAdvertisingIfPossible()
+                    closeGattServerIfPossible()
+                    gattServer = null
                 }
-                wasEnabled = enabled
+                wasActive = shouldBeActive
                 delay(BLUETOOTH_RECHECK_INTERVAL)
             }
         }

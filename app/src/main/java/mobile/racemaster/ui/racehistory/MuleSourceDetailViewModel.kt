@@ -5,7 +5,10 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.mule.MuleRepository
+import mobile.racemaster.data.mule.toHistoryAction
+import mobile.racemaster.data.repository.findDuplicateSplitRefsPerSegment
 import mobile.racemaster.di.appContainer
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -14,14 +17,17 @@ import kotlinx.coroutines.flow.stateIn
 
 data class MulePulledRecordUi(
     val recordUuid: String,
-    val action: String,
+    val action: HistoryAction,
     val number: Int?,
     val splitNumber: Int,
     val lineNumber: Long,
     val elapsedMillis: Long,
     val note: String?,
-    val deviceName: String,
     val synced: Boolean,
+    // Mirrors a local race's own HistoryLineRow.syncedToLabel exactly (same PulledRecordEntity
+    // column a local race's LineSyncEntity.targetName parallels) — see
+    // PulledRecordEntity.syncedTargetName's own doc.
+    val syncedToLabel: String?,
     // Per-record category signal (mirrors MuleRepository.pushToServer's own categorization):
     // SyncRecord.time is unconditionally non-null for every Time-category record (including
     // its markers) and unconditionally null for every Bibs-category record — a merged Mule
@@ -30,6 +36,11 @@ data class MulePulledRecordUi(
     val isTimeRecord: Boolean,
     val isUndoMarker: Boolean,
     val editedFromLineNumber: Long?,
+    // Only meaningful for a Bibs-category record — see findDuplicateSplitRefsPerSegment's own
+    // doc for the rule. Computed the exact same way a local race's own Race History
+    // (RaceHistoryDetailViewModel) computes it for its HistoryLineEntity rows, via that
+    // function's generic extractor-lambda core — not a hand-duplicated copy of the rule.
+    val dupSplitRefs: List<Int>,
 )
 
 data class MuleSourceDetailUiState(
@@ -43,28 +54,45 @@ data class MuleSourceDetailUiState(
 
 class MuleSourceDetailViewModel(
     raceLabel: String,
+    sourceDeviceId: String,
     muleRepository: MuleRepository,
 ) : ViewModel() {
 
-    val uiState: StateFlow<MuleSourceDetailUiState> = muleRepository.observeRecordsForSource(raceLabel)
+    val uiState: StateFlow<MuleSourceDetailUiState> = muleRepository.observeRecordsForSource(raceLabel, sourceDeviceId)
         .map { records ->
+            // Bibs-only, exactly like RaceHistoryDetailViewModel's own dup computation — a
+            // Time record's action is never in BIB_REQUIRED_ACTIONS so including it here would
+            // be harmless either way, but scoping to isTimeRecord == false keeps this an exact
+            // mirror of the local-race path.
+            val dupRefs = findDuplicateSplitRefsPerSegment(
+                records.filter { it.record.time == null },
+                lineNumberOf = { it.record.lineNumber },
+                refLineNumberOf = { it.record.refLineNumber },
+                isUndoMarker = { it.record.toHistoryAction() == HistoryAction.UNDO },
+                isReset = { it.record.toHistoryAction() == HistoryAction.RESET },
+                keyOf = { it.record.recordUuid },
+                bibNumberOf = { it.record.number },
+                actionOf = { it.record.toHistoryAction() },
+                splitNumberOf = { it.record.splitNumber ?: 0 },
+            )
             MuleSourceDetailUiState(
                 raceLabel = raceLabel,
                 deviceName = records.lastOrNull()?.deviceName.orEmpty(),
                 records = records.map {
                     MulePulledRecordUi(
                         recordUuid = it.record.recordUuid,
-                        action = it.record.action,
+                        action = it.record.toHistoryAction(),
                         number = it.record.number,
                         splitNumber = it.record.splitNumber ?: 0,
                         lineNumber = it.record.lineNumber,
                         elapsedMillis = parseElapsedClock(it.record.time),
                         note = it.record.note,
-                        deviceName = it.deviceName,
                         synced = it.syncedAtMillis != null,
+                        syncedToLabel = it.syncedToLabel,
                         isTimeRecord = it.record.time != null,
-                        isUndoMarker = it.record.action == "Undo",
+                        isUndoMarker = it.record.toHistoryAction() == HistoryAction.UNDO,
                         editedFromLineNumber = it.record.refLineNumber,
+                        dupSplitRefs = dupRefs[it.record.recordUuid].orEmpty(),
                     )
                 },
             )
@@ -72,9 +100,9 @@ class MuleSourceDetailViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MuleSourceDetailUiState())
 
     companion object {
-        fun factory(raceLabel: String): ViewModelProvider.Factory = viewModelFactory {
+        fun factory(raceLabel: String, sourceDeviceId: String): ViewModelProvider.Factory = viewModelFactory {
             initializer {
-                MuleSourceDetailViewModel(raceLabel, appContainer().muleRepository)
+                MuleSourceDetailViewModel(raceLabel, sourceDeviceId, appContainer().muleRepository)
             }
         }
     }

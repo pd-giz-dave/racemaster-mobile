@@ -1,9 +1,6 @@
 package mobile.racemaster.data.db.entity
 
-// Unified per-line action, replacing Time Mode's old note-based Start/Stop/Reset/Undo
-// convention (FinishSplitEntity had no typed column at all — those markers were reserved
-// strings written into the same `note` column used for genuine free-text operator notes) and
-// Bibs Mode's own BibEntryType.
+// Unified per-line action for bibs mode and time mode.
 //
 // START/STOP/RESET/UNDO are shared verbatim between the two families rather than each having
 // its own Time-prefixed variant (the old CLOCK_START/CLOCK_STOP/CLOCK_RESET) — every consumer

@@ -19,16 +19,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import mobile.racemaster.ui.components.HistoryLineRow
+import mobile.racemaster.ui.bibsmode.displayName
+import mobile.racemaster.ui.components.HistoryLineDisplay
+import mobile.racemaster.ui.components.HistoryLinesList
 import mobile.racemaster.util.withClickSound
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MuleSourceDetailScreen(
     raceLabel: String,
+    sourceDeviceId: String,
     onBack: () -> Unit,
 ) {
-    val viewModel: MuleSourceDetailViewModel = viewModel(factory = MuleSourceDetailViewModel.factory(raceLabel))
+    val viewModel: MuleSourceDetailViewModel = viewModel(factory = MuleSourceDetailViewModel.factory(raceLabel, sourceDeviceId))
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     Scaffold(
@@ -54,33 +57,27 @@ fun MuleSourceDetailScreen(
             if (uiState.deviceName.isNotBlank()) {
                 Text("From ${uiState.deviceName}", style = MaterialTheme.typography.titleMedium)
             }
-            if (uiState.records.isEmpty()) {
-                Text("No records", style = MaterialTheme.typography.bodyMedium)
-            } else {
-                uiState.records.forEach { record ->
-                    Column {
-                        // A Mule source can hold records pulled from more than one physical
-                        // phone under the same race label, unlike a local race's own history
-                        // (always one device) — so, unlike HistoryLineRow's other usage, the
-                        // device name is shown per record here rather than once for the whole
-                        // screen.
-                        HistoryLineRow(
-                            lineNumber = record.lineNumber,
-                            splitNumber = record.splitNumber,
-                            actionLabel = record.action,
-                            bibNumber = record.number,
-                            elapsedMillis = if (record.isTimeRecord) record.elapsedMillis else null,
-                            note = record.note,
-                            synced = record.synced,
-                            isUndoMarker = record.isUndoMarker,
-                            editedFromLineNumber = record.editedFromLineNumber,
-                        )
-                        if (record.deviceName.isNotBlank()) {
-                            Text(record.deviceName, style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-            }
+            // Rendered via HistoryLinesList — the same function Race History's own detail
+            // screen uses — so a pulled source's history looks exactly like a local race's:
+            // the source device is already named once above, not repeated per line.
+            HistoryLinesList(
+                lines = uiState.records.map {
+                    HistoryLineDisplay(
+                        lineNumber = it.lineNumber,
+                        splitNumber = it.splitNumber,
+                        actionLabel = it.action.displayName(),
+                        bibNumber = it.number,
+                        elapsedMillis = if (it.isTimeRecord) it.elapsedMillis else null,
+                        note = it.note,
+                        synced = it.synced,
+                        syncedToLabel = it.syncedToLabel,
+                        dupSplitRefs = it.dupSplitRefs,
+                        isUndoMarker = it.isUndoMarker,
+                        editedFromLineNumber = it.editedFromLineNumber,
+                    )
+                },
+                emptyMessage = "No records",
+            )
         }
     }
 }

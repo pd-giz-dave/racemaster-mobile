@@ -31,6 +31,8 @@ data class MuleModeUiState(
     val isBusy: Boolean = false,
     val autoSyncStopped: Boolean = false,
     val autoSyncArmed: Boolean = false,
+    val bluetoothOff: Boolean = false,
+    val serverSyncOff: Boolean = false,
 )
 
 /**
@@ -75,10 +77,14 @@ class MuleModeViewModel(
         muleRepository.autoSyncStopped,
         muleSyncEngine.bluetoothWarning,
         muleSyncEngine.selfDevice,
+        muleRepository.bluetoothOff,
+        muleRepository.serverSyncOff,
     ) { values ->
         val isLoggedIn = values[4] as Boolean
         val autoSyncStopped = values[8] as Boolean
         val selfDevice = values[10] as DiscoveredDevice
+        val bluetoothOff = values[11] as Boolean
+        val serverSyncOff = values[12] as Boolean
         MuleModeUiState(
             discoveredDevices = ((values[0] as Map<String, DiscoveredDevice>).values + selfDevice)
                 .sortedBy { it.raceLabel.ifEmpty { it.deviceKey } },
@@ -91,10 +97,14 @@ class MuleModeViewModel(
             bluetoothWarning = values[9] as String?,
             isBusy = values[7] as Boolean,
             autoSyncStopped = autoSyncStopped,
-            // Armed once logged in and auto-sync hasn't been explicitly stopped — no longer
-            // gated on any particular device being visible, since every device seen (plus
-            // self) is synced automatically each tick anyway.
-            autoSyncArmed = isLoggedIn && !autoSyncStopped,
+            // Armed once logged in, auto-sync hasn't been explicitly stopped, and server sync
+            // hasn't been explicitly turned off — no longer gated on any particular device
+            // being visible, since every device seen (plus self) is synced automatically each
+            // tick anyway. Deliberately not gated on bluetoothOff: that only affects the pull
+            // side (nothing to discover), not whether this device still pushes to the server.
+            autoSyncArmed = isLoggedIn && !autoSyncStopped && !serverSyncOff,
+            bluetoothOff = bluetoothOff,
+            serverSyncOff = serverSyncOff,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MuleModeUiState())
 
@@ -108,6 +118,22 @@ class MuleModeViewModel(
 
     fun resumeAutoSync() {
         viewModelScope.launch { muleRepository.setAutoSyncStopped(false) }
+    }
+
+    fun turnBluetoothOff() {
+        viewModelScope.launch { muleRepository.setBluetoothOff(true) }
+    }
+
+    fun turnBluetoothOn() {
+        viewModelScope.launch { muleRepository.setBluetoothOff(false) }
+    }
+
+    fun turnServerSyncOff() {
+        viewModelScope.launch { muleRepository.setServerSyncOff(true) }
+    }
+
+    fun turnServerSyncOn() {
+        viewModelScope.launch { muleRepository.setServerSyncOff(false) }
     }
 
     fun dismissStatusMessage() {

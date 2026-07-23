@@ -17,7 +17,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -35,16 +39,22 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
 import mobile.racemaster.MainActivity
 import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
 import mobile.racemaster.data.db.entity.HistoryAction
@@ -442,6 +452,20 @@ private fun EditBibEntryPanel(
     var showEventPicker by remember { mutableStateOf(false) }
     val needsBib = editType in BIB_REQUIRED_ACTIONS
 
+    // The keyboard has no physical Tab key, and the blanket "scroll to max on every ime
+    // inset change" above only ever reaches whatever's already at the very bottom (Save/
+    // Cancel) — it doesn't help the Bib field reach the Note field below it, and on a
+    // budget/older device the ime inset it's keyed on can settle too late or not fire at
+    // all. Each field bringing itself into view on focus, plus an explicit ImeAction.Next +
+    // KeyboardActions.onNext (Bib -> Note), together give the keyboard's own "next" arrow
+    // the same effect a physical Tab key would have — see RaceDetailsScreen's own doc for
+    // the fuller explanation of why this is needed alongside (not instead of) the scroll
+    // effect above.
+    val focusManager = LocalFocusManager.current
+    val scope = rememberCoroutineScope()
+    val bibFieldRequester = remember(entry.id) { BringIntoViewRequester() }
+    val noteFieldRequester = remember(entry.id) { BringIntoViewRequester() }
+
     Column(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -456,9 +480,15 @@ private fun EditBibEntryPanel(
                     singleLine = true,
                     label = { Text("Bib") },
                     // Full keyboard, not KeyboardType.Number — input is still digit-only via
-                    // the filter above. The keyboard covering Save/Cancel is fixed by the
-                    // ime-inset-reactive scroll above, not by the keyboard's type.
-                    modifier = Modifier.weight(1f),
+                    // the filter above.
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                    keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                    modifier = Modifier
+                        .weight(1f)
+                        .bringIntoViewRequester(bibFieldRequester)
+                        .onFocusEvent { state ->
+                            if (state.isFocused) scope.launch { bibFieldRequester.bringIntoView() }
+                        },
                 )
             }
         }
@@ -468,7 +498,15 @@ private fun EditBibEntryPanel(
                 onValueChange = { noteText = it },
                 singleLine = true,
                 label = { Text("Note") },
-                modifier = Modifier.weight(1f),
+                // Last field — "Done" dismisses the keyboard.
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                modifier = Modifier
+                    .weight(1f)
+                    .bringIntoViewRequester(noteFieldRequester)
+                    .onFocusEvent { state ->
+                        if (state.isFocused) scope.launch { noteFieldRequester.bringIntoView() }
+                    },
             )
             TextButton(onClick = withClickSound {
                 onSaveEntry(if (needsBib) bibText.toIntOrNull() else null, editType, noteText.trim().ifBlank { null })

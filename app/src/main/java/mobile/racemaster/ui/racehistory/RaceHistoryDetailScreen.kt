@@ -21,7 +21,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.ui.bibsmode.displayName
-import mobile.racemaster.ui.components.HistoryLineRow
+import mobile.racemaster.ui.components.HistoryLineDisplay
+import mobile.racemaster.ui.components.HistoryLinesList
 import mobile.racemaster.util.formatWallClock
 import mobile.racemaster.util.withClickSound
 
@@ -63,33 +64,31 @@ fun RaceHistoryDetailScreen(
             )
 
             Text("History", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
-            if (uiState.lines.isEmpty()) {
-                Text("No history recorded", style = MaterialTheme.typography.bodyMedium)
-            } else {
-                // One true chronology, sorted by lineNumber (not splitNumber, which restarts
-                // per segment and per mode and is no longer unique/orderable across either) —
-                // a race's Time and Bibs rows already shared one lineNumber sequence even
-                // before this screen rendered them together, so a normal single-mode race
-                // (the overwhelming common case) looks exactly as it always did; only a
-                // genuinely mixed-mode race now visibly interleaves both. Every line — a real
-                // split/entry, a Reset marker, or an Undo marker — renders through the one
-                // rationalized HistoryLineRow format; see its own doc for why.
-                uiState.lines.sortedBy { it.lineNumber }.forEach { line ->
-                    HistoryLineRow(
-                        lineNumber = line.lineNumber,
-                        splitNumber = line.splitNumber,
-                        actionLabel = line.action.displayName(),
-                        bibNumber = line.bibNumber,
-                        elapsedMillis = if (line.mode == HistoryMode.TIME) line.elapsedMillis else null,
-                        note = line.note,
-                        synced = line.synced,
-                        syncedToLabel = syncedToLabel(line.syncedTo),
-                        dupSplitRefs = line.dupSplitRefs,
-                        editedFromLineNumber = line.editedFromLineNumber,
-                        isUndoMarker = line.isUndoMarker,
+            // One true chronology, sorted by lineNumber (not splitNumber, which restarts per
+            // segment and per mode and is no longer unique/orderable across either) — a race's
+            // Time and Bibs rows already shared one lineNumber sequence even before this screen
+            // rendered them together, so a normal single-mode race (the overwhelming common
+            // case) looks exactly as it always did; only a genuinely mixed-mode race now
+            // visibly interleaves both. Rendered via HistoryLinesList — the same function a
+            // Mule source's own detail screen uses — so both look identical.
+            HistoryLinesList(
+                lines = uiState.lines.sortedBy { it.lineNumber }.map {
+                    HistoryLineDisplay(
+                        lineNumber = it.lineNumber,
+                        splitNumber = it.splitNumber,
+                        actionLabel = it.action.displayName(),
+                        bibNumber = it.bibNumber,
+                        elapsedMillis = if (it.mode == HistoryMode.TIME) it.elapsedMillis else null,
+                        note = it.note,
+                        synced = it.synced,
+                        syncedToLabel = syncedToLabel(it.syncedTo),
+                        dupSplitRefs = it.dupSplitRefs,
+                        editedFromLineNumber = it.editedFromLineNumber,
+                        isUndoMarker = it.isUndoMarker,
                     )
-                }
-            }
+                },
+                emptyMessage = "No history recorded",
+            )
         }
     }
 }

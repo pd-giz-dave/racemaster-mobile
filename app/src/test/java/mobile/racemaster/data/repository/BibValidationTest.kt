@@ -419,4 +419,49 @@ class BibValidationTest {
     fun outstandingBibsIsEmptyWithoutAConfiguredRange() {
         assertEquals(emptyList<Int>(), outstandingBibs(emptyList(), rangeStart = null, rangeCount = null))
     }
+
+    // Generic extractor-lambda core (findDuplicateSplitRefs/findDuplicateSplitRefsPerSegment
+    // overloads) — this is what MuleSourceDetailViewModel calls to share the exact same
+    // duplicate rule for pulled Mule records (keyed by recordUuid, a String) instead of a
+    // hand-duplicated copy of the HistoryLineEntity-specific logic above. A synthetic non-
+    // HistoryLineEntity row type here is what actually proves the generic core works for a
+    // different key type and shape, not just as a same-behavior wrapper.
+
+    private data class FakeRow(val uuid: String, val bibNumber: Int?, val action: HistoryAction, val splitNumber: Int, val lineNumber: Long)
+
+    @Test
+    fun genericCoreFlagsDuplicatesKeyedByAnArbitraryKeyType() {
+        val rows = listOf(
+            FakeRow("a", 101, HistoryAction.FINISH, 1, 1L),
+            FakeRow("b", 101, HistoryAction.FINISH, 2, 2L),
+        )
+        val dups = findDuplicateSplitRefs(rows, { it.uuid }, { it.bibNumber }, { it.action }, { it.splitNumber })
+        assertEquals(listOf(2), dups["a"])
+        assertEquals(listOf(1), dups["b"])
+    }
+
+    @Test
+    fun genericPerSegmentCoreRespectsResetAndUndoJustLikeTheHistoryLineEntityOverload() {
+        val rows = listOf(
+            FakeRow("a", 101, HistoryAction.FINISH, 1, 1L),
+            FakeRow("b", 101, HistoryAction.FINISH, 2, 2L),
+            FakeRow("undo-b", null, HistoryAction.UNDO, 2, 3L), // undoes "b"
+            FakeRow("reset", null, HistoryAction.RESET, 0, 4L),
+            FakeRow("c", 101, HistoryAction.FINISH, 1, 5L),
+        )
+        val dups = findDuplicateSplitRefsPerSegment(
+            rows,
+            lineNumberOf = { it.lineNumber },
+            refLineNumberOf = { if (it.uuid == "undo-b") 2L else null },
+            isUndoMarker = { it.action == HistoryAction.UNDO },
+            isReset = { it.action == HistoryAction.RESET },
+            keyOf = { it.uuid },
+            bibNumberOf = { it.bibNumber },
+            actionOf = { it.action },
+            splitNumberOf = { it.splitNumber },
+        )
+        // "b" is undone (excluded), "reset" starts a fresh segment, so "a" and "c" are each
+        // alone in their own segment — no duplicates anywhere.
+        assertTrue(dups.isEmpty())
+    }
 }

@@ -132,26 +132,65 @@ class PulledRecordDaoTest {
     }
 
     @Test
-    fun sourceSummaryDeviceNameIsTheMostRecentlyPulledDeviceForThatRaceLabel() = runTest {
+    fun sourceSummariesKeepDifferentDevicesSharingARaceLabelSeparate() = runTest {
+        // Two genuinely different phones (e.g. a Time phone and a Bibs phone) can end up with
+        // the same race label (name-course-date) when both work the same physical race — their
+        // records must never be folded into one summary, or the operator loses one device's
+        // history entirely from the list.
         dao.insertAll(
             listOf(
                 record("a", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", deviceName = "earlier-device", pulledAtMillis = 100L),
                 record("b", sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label", deviceName = "later-device", pulledAtMillis = 200L),
             ),
         )
-        val summary = dao.observeSourceSummaries(myDeviceId = "my-device-id").first().single()
-        assertEquals("later-device", summary.deviceName)
+        val summaries = dao.observeSourceSummaries(myDeviceId = "my-device-id").first()
+        assertEquals(
+            setOf("device-2" to "earlier-device", "device-3" to "later-device"),
+            summaries.map { it.sourceDeviceId to it.deviceName }.toSet(),
+        )
     }
 
     @Test
-    fun observeForSourceExcludesThisDevicesOwnSelfPulledRows() = runTest {
+    fun observeForSourceOnlyReturnsRowsFromTheGivenDevice() = runTest {
         dao.insertAll(
             listOf(
-                record("a", sourceDeviceId = "my-device-id", sourceRaceLabel = "Shared Label"),
-                record("b", sourceDeviceId = "another-device-id", sourceRaceLabel = "Shared Label"),
+                record("a", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
+                record("b", sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label"),
             ),
         )
-        val rows = dao.observeForSource("Shared Label", myDeviceId = "my-device-id").first()
+        val rows = dao.observeForSource("Shared Label", sourceDeviceId = "device-3").first()
         assertEquals(listOf("b"), rows.map { it.recordUuid })
+    }
+
+    @Test
+    fun deleteForSourceOnlyRemovesTheGivenDevicesRowsForThatRaceLabel() = runTest {
+        dao.insertAll(
+            listOf(
+                record("a", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
+                // Same device, different race label — must survive.
+                record("b", sourceDeviceId = "device-2", sourceRaceLabel = "Other Label"),
+                // Same race label, different device — must survive (see
+                // observeForSourceOnlyReturnsRowsFromTheGivenDevice's own reasoning).
+                record("c", sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label"),
+            ),
+        )
+        dao.deleteForSource("Shared Label", sourceDeviceId = "device-2")
+
+        assertEquals(emptyList<String>(), dao.observeForSource("Shared Label", sourceDeviceId = "device-2").first().map { it.recordUuid })
+        assertEquals(listOf("b"), dao.getUnsynced().filter { it.sourceDeviceId == "device-2" }.map { it.recordUuid })
+        assertEquals(listOf("c"), dao.observeForSource("Shared Label", sourceDeviceId = "device-3").first().map { it.recordUuid })
+    }
+
+    @Test
+    fun deleteForSourceResetsTheDeltaSyncCutoffToNothingPulledYet() = runTest {
+        // The whole point of allowing deletion mid-race: the next pull re-requests this
+        // device's full history from scratch rather than a delta, since there's nothing left
+        // locally to compute a cutoff from.
+        dao.insertAll(listOf(record("a", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", lineNumber = 5L)))
+        assertEquals(5L, dao.getLastPulledLineNumber("device-2", "Shared Label"))
+
+        dao.deleteForSource("Shared Label", sourceDeviceId = "device-2")
+
+        assertNull(dao.getLastPulledLineNumber("device-2", "Shared Label"))
     }
 }

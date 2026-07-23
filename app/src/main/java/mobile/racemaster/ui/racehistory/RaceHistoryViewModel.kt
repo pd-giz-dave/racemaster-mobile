@@ -32,14 +32,15 @@ sealed interface HistoryItemUi {
     data class LocalRace(val id: Long, val label: String, val createdByDeviceName: String, val isActive: Boolean) : HistoryItemUi
     // A race pulled via Mule from a genuinely different physical device — self-pulled rows are
     // excluded upstream (see PulledRecordDao), so this is never just an echo of a LocalRace
-    // entry above.
-    data class MuleSource(val raceLabel: String, val deviceName: String) : HistoryItemUi
+    // entry above. [sourceDeviceId] (not just [raceLabel]) identifies this entry, since more
+    // than one physical device can share a race label — see PulledSourceSummary's own doc.
+    data class MuleSource(val raceLabel: String, val sourceDeviceId: String, val deviceName: String) : HistoryItemUi
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RaceHistoryViewModel(
     private val raceRepository: RaceRepository,
-    muleRepository: MuleRepository,
+    private val muleRepository: MuleRepository,
     bibsModeRepository: BibsModeRepository,
 ) : ViewModel() {
 
@@ -48,7 +49,7 @@ class RaceHistoryViewModel(
         muleRepository.sourceSummaries,
     ) { races, sourceSummaries -> races to sourceSummaries }
         .flatMapLatest { (races, sourceSummaries) ->
-            val muleItems = sourceSummaries.map { HistoryItemUi.MuleSource(it.sourceRaceLabel, it.deviceName) }
+            val muleItems = sourceSummaries.map { HistoryItemUi.MuleSource(it.sourceRaceLabel, it.sourceDeviceId, it.deviceName) }
             if (races.isEmpty()) {
                 flowOf(muleItems)
             } else {
@@ -77,6 +78,13 @@ class RaceHistoryViewModel(
     // at all for an active race — see HistoryItemUi.LocalRace.isActive).
     fun deleteRace(raceId: Long) {
         viewModelScope.launch { raceRepository.deleteRace(raceId) }
+    }
+
+    // See MuleRepository.deleteSource's own doc for why a Mule source (a relayed copy, not the
+    // one true record of a race) is always deletable, with no active-race guard like deleteRace
+    // above has.
+    fun deleteMuleSource(raceLabel: String, sourceDeviceId: String) {
+        viewModelScope.launch { muleRepository.deleteSource(raceLabel, sourceDeviceId) }
     }
 
     companion object {
