@@ -2,6 +2,7 @@ package mobile.racemaster.ui.racehistory
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -78,7 +79,20 @@ fun RaceHistoryScreen(
                                     "From ${item.createdByDeviceName} (self)".takeIf { item.createdByDeviceName.isNotBlank() },
                                     "Active, can't be deleted".takeIf { item.isActive },
                                 )
-                                if (parts.isNotEmpty()) Text(parts.joinToString(" — "))
+                                Column {
+                                    if (parts.isNotEmpty()) Text(parts.joinToString(" — "))
+                                    // Doesn't mean this race's own data is unsynced — it means
+                                    // Mule has simply stopped re-checking it against the server
+                                    // (see MuleRepository.raceLabelLastTouchedAtMillis's own
+                                    // doc); everything up to whenever it was last touched is
+                                    // presumably already there.
+                                    if (item.serverSyncSkippedAsStale) {
+                                        Text(
+                                            "Too old for server sync — no longer checked against the server",
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                    }
+                                }
                             },
                             trailingContent = {
                                 // Never offered for the active race — RaceRepository.deleteRace
@@ -100,7 +114,17 @@ fun RaceHistoryScreen(
                         is HistoryItemUi.MuleSource -> ListItem(
                             headlineContent = { Text(item.raceLabel.ifEmpty { "Mule" }) },
                             supportingContent = {
-                                if (item.deviceName.isNotBlank()) Text("From ${item.deviceName}")
+                                Column {
+                                    if (item.deviceName.isNotBlank()) Text("From ${item.deviceName}")
+                                    // See the LocalRace branch above for what this does (and
+                                    // doesn't) mean.
+                                    if (item.serverSyncSkippedAsStale) {
+                                        Text(
+                                            "Too old for server sync — no longer checked against the server",
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                    }
+                                }
                             },
                             trailingContent = {
                                 // No active-race guard here (unlike LocalRace's delete above) —

@@ -18,6 +18,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -59,6 +60,7 @@ fun MuleServerSetupScreen(
     val currentServerUrl by viewModel.currentServerUrl.collectAsStateWithLifecycle()
     val isLoggedIn by viewModel.isLoggedIn.collectAsStateWithLifecycle()
     val credentialHistory by viewModel.credentialHistory.collectAsStateWithLifecycle()
+    val maxAgeDaysSetting by viewModel.maxAgeDays.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     // See RaceDetailsScreen's own doc for why this is needed: the keyboard has no physical
     // Tab key, so without an explicit ImeAction.Next + KeyboardActions.onNext there's no way
@@ -79,6 +81,7 @@ fun MuleServerSetupScreen(
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
+    var maxAgeDaysText by remember { mutableStateOf("") }
     // Pre-fill exactly once from whatever's already saved — later emissions must not stomp
     // on what the operator is already typing. draft starts as null before the underlying
     // DataStore read completes (distinct from a *loaded* draft with genuinely blank fields,
@@ -94,7 +97,7 @@ fun MuleServerSetupScreen(
     var hasInternet by remember { mutableStateOf<Boolean?>(null) }
     LaunchedEffect(Unit) { hasInternet = viewModel.hasInternetConnectivity() }
 
-    LaunchedEffect(draft, currentServerUrl) {
+    LaunchedEffect(draft, currentServerUrl, maxAgeDaysSetting) {
         if (prefilled) return@LaunchedEffect
         val loadedDraft = draft ?: return@LaunchedEffect
         // Falls back to the confirmed session's URL only when there's no draft URL yet — an
@@ -107,10 +110,13 @@ fun MuleServerSetupScreen(
         url = loadedDraft.url.ifBlank { currentServerUrl.orEmpty().ifBlank { BuildConfig.DEV_SERVER_URL } }
         username = loadedDraft.username.ifBlank { BuildConfig.DEV_SERVER_USERNAME }
         password = loadedDraft.password.ifBlank { BuildConfig.DEV_SERVER_PASSWORD }
+        maxAgeDaysText = maxAgeDaysSetting.toString()
         prefilled = true
     }
 
-    val canSave = !isSaving && url.isNotBlank() && username.isNotBlank() && password.isNotBlank()
+    val maxAgeDaysValue = maxAgeDaysText.toIntOrNull()
+    val canSave = !isSaving && url.isNotBlank() && username.isNotBlank() && password.isNotBlank() &&
+        maxAgeDaysValue != null && maxAgeDaysValue >= 1
 
     Scaffold(
         topBar = {
@@ -182,9 +188,8 @@ fun MuleServerSetupScreen(
                 label = "Password",
                 history = passwordHistory,
                 visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                // Last field — "Done" dismisses the keyboard.
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Next),
+                keyboardActions = nextFieldAction,
                 extraTrailingIcon = {
                     IconButton(onClick = withClickSound { passwordVisible = !passwordVisible }) {
                         Icon(
@@ -195,6 +200,17 @@ fun MuleServerSetupScreen(
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
+            OutlinedTextField(
+                value = maxAgeDaysText,
+                onValueChange = { maxAgeDaysText = it.filter(Char::isDigit).take(3) },
+                singleLine = true,
+                label = { Text("Server sync: skip races older than (days)") },
+                supportingText = { Text("Races Mule hasn't touched in this many days are no longer checked against the server.") },
+                // Last field — "Done" dismisses the keyboard.
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                modifier = Modifier.fillMaxWidth(),
+            )
             errorMessage?.let { message ->
                 Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
@@ -203,7 +219,7 @@ fun MuleServerSetupScreen(
                     isSaving = true
                     errorMessage = null
                     scope.launch {
-                        val result = runCatching { viewModel.save(url, username, password) }
+                        val result = runCatching { viewModel.save(url, username, password, requireNotNull(maxAgeDaysValue)) }
                         isSaving = false
                         result.fold(
                             onSuccess = { onDone() },

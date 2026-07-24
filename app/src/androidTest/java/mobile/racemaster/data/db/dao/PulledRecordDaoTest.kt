@@ -193,4 +193,20 @@ class PulledRecordDaoTest {
 
         assertNull(dao.getLastPulledLineNumber("device-2", "Shared Label"))
     }
+
+    @Test
+    fun lastTouchedByRaceLabelSpansEveryDeviceIncludingSelf() = runTest {
+        // Unlike observeSourceSummaries/observeForSource (scoped to one device), this must
+        // consider every row for a race label together — self-pulled rows included — since it
+        // mirrors MuleRepository.pushToServer's own `all.groupBy { it.sourceRaceLabel }`.
+        dao.insertAll(
+            listOf(
+                record("a", sourceDeviceId = "my-device-id", sourceRaceLabel = "Shared Label", pulledAtMillis = 100L),
+                record("b", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", pulledAtMillis = 300L),
+                record("c", sourceDeviceId = "device-3", sourceRaceLabel = "Other Label", pulledAtMillis = 200L),
+            ),
+        )
+        val activity = dao.observeLastTouchedByRaceLabel().first().associate { it.sourceRaceLabel to it.lastTouchedAtMillis }
+        assertEquals(mapOf("Shared Label" to 300L, "Other Label" to 200L), activity)
+    }
 }

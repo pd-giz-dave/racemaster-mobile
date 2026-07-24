@@ -28,6 +28,13 @@ data class PulledSourceSummary(
     val lastPulledAtMillis: Long,
 )
 
+// sourceRaceLabel here spans every device that's ever contributed to it (self included), unlike
+// PulledSourceSummary above (one row per source device) — this mirrors exactly how
+// MuleRepository.pushToServer's own `all.groupBy { it.sourceRaceLabel }` decides whether a
+// label is still worth checking against the server, so Race History can show that same
+// "skipped as too old" state.
+data class RaceLabelActivity(val sourceRaceLabel: String, val lastTouchedAtMillis: Long)
+
 @Dao
 interface PulledRecordDao {
     // IGNORE + the unique index on recordUuid makes re-pulling the same record from a
@@ -124,4 +131,11 @@ interface PulledRecordDao {
     // query second-guesses.
     @Query("DELETE FROM pulled_records WHERE sourceRaceLabel = :sourceRaceLabel AND sourceDeviceId = :sourceDeviceId")
     suspend fun deleteForSource(sourceRaceLabel: String, sourceDeviceId: String)
+
+    // See RaceLabelActivity's own doc for why this is grouped by race label alone, spanning
+    // every contributing device (self included) — not scoped to :myDeviceId like
+    // observeSourceSummaries above, since a local race's own self-pulled rows are exactly what
+    // this needs to consider too.
+    @Query("SELECT sourceRaceLabel, MAX(pulledAtMillis) AS lastTouchedAtMillis FROM pulled_records GROUP BY sourceRaceLabel")
+    fun observeLastTouchedByRaceLabel(): Flow<List<RaceLabelActivity>>
 }

@@ -4,6 +4,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
@@ -18,6 +19,9 @@ data class ServerSetupDraft(val url: String, val username: String, val password:
 // Capped so History picker menus stay a manageable length and DataStore doesn't accumulate an
 // unbounded JSON blob over a device's lifetime — most-recent-first, oldest entries drop off.
 private const val MAX_HISTORY_ENTRIES = 20
+
+// See SettingsRepository.serverSyncMaxAgeDays's own doc.
+const val DEFAULT_SERVER_SYNC_MAX_AGE_DAYS = 2
 
 class SettingsRepository(
     private val dataStore: DataStore<Preferences>,
@@ -38,6 +42,7 @@ class SettingsRepository(
         val RACE_NAME_HISTORY = stringPreferencesKey("race_name_history")
         val COURSE_HISTORY = stringPreferencesKey("course_history")
         val SERVER_CREDENTIAL_HISTORY = stringPreferencesKey("server_credential_history")
+        val SERVER_SYNC_MAX_AGE_DAYS = intPreferencesKey("server_sync_max_age_days")
     }
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -225,5 +230,18 @@ class SettingsRepository(
 
     suspend fun setServerSyncOff(off: Boolean) {
         dataStore.edit { prefs -> prefs[Keys.SERVER_SYNC_OFF] = off }
+    }
+
+    // Bounds MuleRepository.pushToServer's own per-tick reconciliation (see its own doc) to
+    // only races Mule has touched within this many days — without a cutoff, every sync
+    // attempt re-checks the server's stored state for every race label this device has ever
+    // held, forever, which is the deliberate trade that catches a server-side file
+    // disappearing (see MuleSyncEngine.pushIfNeeded's own doc) but has no reason to keep
+    // re-checking a race that wrapped up days ago. Exposed on the Setup Server form.
+    val serverSyncMaxAgeDays: Flow<Int> =
+        dataStore.data.map { prefs -> prefs[Keys.SERVER_SYNC_MAX_AGE_DAYS] ?: DEFAULT_SERVER_SYNC_MAX_AGE_DAYS }
+
+    suspend fun setServerSyncMaxAgeDays(days: Int) {
+        dataStore.edit { prefs -> prefs[Keys.SERVER_SYNC_MAX_AGE_DAYS] = days }
     }
 }

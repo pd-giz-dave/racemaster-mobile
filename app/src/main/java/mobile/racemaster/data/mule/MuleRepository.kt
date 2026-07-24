@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlin.time.Duration.Companion.days
 import kotlinx.serialization.json.Json
 import mobile.racemaster.data.db.dao.PulledRecordDao
 import mobile.racemaster.data.db.dao.PulledSourceSummary
@@ -60,6 +61,13 @@ class MuleRepository(
     val sourceSummaries: Flow<List<PulledSourceSummary>> =
         myDeviceIdFlow.flatMapLatest { myDeviceId -> pulledRecordDao.observeSourceSummaries(myDeviceId) }
     val deviceName: Flow<String?> = settingsRepository.deviceName
+
+    // Exposed for Race History to show a race as "too old, no longer checked against the
+    // server" — see PulledRecordDao.RaceLabelActivity's own doc and pushToServer's below for
+    // the exact rule this mirrors.
+    val serverSyncMaxAgeDays: Flow<Int> = settingsRepository.serverSyncMaxAgeDays
+    val raceLabelLastTouchedAtMillis: Flow<Map<String, Long>> = pulledRecordDao.observeLastTouchedByRaceLabel()
+        .map { rows -> rows.associate { it.sourceRaceLabel to it.lastTouchedAtMillis } }
 
     // See PulledRecordDao.deleteForSource's own doc for why this is always safe to offer,
     // unlike deleting a local race.
@@ -195,7 +203,13 @@ class MuleRepository(
      *  them, so a row that silently didn't land keeps getting retried instead of being falsely
      *  marked done. Returns how many were genuinely new on the server (summed `added` across
      *  every race-label group that needed a push), which is what's meaningful to show the
-     *  operator — not the full send size. */
+     *  operator — not the full send size. Skips any race-label group Mule hasn't touched
+     *  (pulled from or self-recorded into) within [SettingsRepository.serverSyncMaxAgeDays] —
+     *  see that setting's own doc for why: every sync attempt now always reconciles (no more
+     *  "nothing unsynced, skip" shortcut), which is what catches a server-side file
+     *  disappearing, but has no reason to keep re-checking a race that wrapped up days ago. A
+     *  skipped group's rows are simply left as they are; nothing about them is marked one way
+     *  or the other. */
     suspend fun pushToServer(): Int {
         val baseUrl = requireNotNull(settingsRepository.serverBaseUrl.first()) { "Not logged in" }
         val token = requireNotNull(settingsRepository.authToken.first()) { "Not logged in" }
@@ -203,9 +217,13 @@ class MuleRepository(
         val all = pulledRecordDao.getAll()
         if (all.isEmpty()) return 0
 
+        val maxAgeDays = settingsRepository.serverSyncMaxAgeDays.first()
+        val touchedSinceMillis = System.currentTimeMillis() - maxAgeDays.days.inWholeMilliseconds
+
         val myDeviceId = settingsRepository.getOrCreateDeviceId()
         var added = 0
         for ((raceLabel, rowsForRace) in all.groupBy { it.sourceRaceLabel }) {
+            if (rowsForRace.maxOf { it.pulledAtMillis } < touchedSinceMillis) continue
             val status = runCatching { syncClient.getSyncStatus(baseUrl, token, raceLabel) }.getOrDefault(emptyMap())
             val byDevice = rowsForRace.groupBy({ it.deviceName }) { json.decodeFromString<SyncRecord>(it.payloadJson) }
             val devicesToSend = recordsDueForDevices(byDevice, status)
@@ -218,13 +236,12 @@ class MuleRepository(
             // ones just sent. `response.added` is a bare count with no per-record ack, so a
             // record that didn't actually land (dropped mid-request, a server-side hiccup
             // silently swallowing just one row of a batch, ...) would otherwise get marked
-            // synced anyway and never retried: pushIfNeeded's cheap unsyncedCount gate stops
-            // this method being called again at all once every local row looks synced. Leaving
-            // just-sent rows unsynced means the *next* auto-sync tick's fresh status check is
-            // what actually confirms them, self-correcting instead of trusting this send
-            // blindly — previously a record that silently failed to land stayed permanently
-            // stuck until something unrelated (e.g. a stopwatch reset) created a new unsynced
-            // row and incidentally forced a full re-check.
+            // synced anyway and never retried. Leaving just-sent rows unsynced means the
+            // *next* auto-sync tick's fresh status check is what actually confirms them,
+            // self-correcting instead of trusting this send blindly — previously a record
+            // that silently failed to land stayed permanently stuck until something unrelated
+            // (e.g. a stopwatch reset) created a new unsynced row and incidentally forced a
+            // full re-check.
             val justSentUuids = devicesToSend.values.flatten().map { it.recordUuid }.toSet()
             val confirmedRows = rowsForRace.filter { it.recordUuid !in justSentUuids }
             if (confirmedRows.isNotEmpty()) {
