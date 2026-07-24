@@ -35,17 +35,6 @@ class BibsModeRepository(
 
     fun observeLastSyncedAtMillis(raceId: Long): Flow<Long?> = historyLineDao.observeLastSyncedAtMillis(raceId, HistoryMode.BIBS)
 
-    // One-shot snapshot for self-pull into this device's own Mule inbox, not a live
-    // subscription — this stays syncedAtMillis-driven (not lineNumber-based) since it's a
-    // purely local "what's new to add to my own inbox" decision, independent of what any
-    // remote puller has separately requested via delta.
-    suspend fun getUnsyncedEntries(raceId: Long): List<HistoryLineEntity> = historyLineDao.getUnsyncedForRace(raceId, HistoryMode.BIBS)
-
-    suspend fun markEntriesSyncedByUuid(recordUuids: List<String>, syncedAtMillis: Long = System.currentTimeMillis()) {
-        if (recordUuids.isEmpty()) return
-        historyLineDao.markSynced(recordUuids, syncedAtMillis)
-    }
-
     // Resolves a batch of acked recordUuids back to their permanent lineNumbers — used to
     // attribute a BLE ack to specific history lines for per-line "synced to" bookkeeping.
     suspend fun getLineNumbersForUuids(recordUuids: List<String>): List<Long> =

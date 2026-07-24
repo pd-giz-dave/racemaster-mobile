@@ -12,25 +12,23 @@ class RaceHistoryViewModelTest {
     // repository/Flow graph.
 
     @Test
-    fun aRaceLabelNeverTouchedByMuleIsNeverStale() {
-        // Absent entirely from lastTouchedAtMillis — a distinct, unrelated state (e.g.
-        // auto-sync simply hasn't run yet), not "too old".
-        assertFalse(isSkippedAsStale("Some Race", lastTouchedAtMillis = emptyMap(), maxAgeDays = 2))
+    fun noActivitySignalAtAllIsNeverStale() {
+        // null — a Mule-pulled label never seen, or a local race with no history yet — is a
+        // distinct, unrelated state, not "too old".
+        assertFalse(isSkippedAsStale(lastTouchedAtMillis = null, maxAgeDays = 2))
     }
 
     @Test
-    fun aRaceLabelTouchedWithinTheWindowIsNotStale() {
+    fun touchedWithinTheWindowIsNotStale() {
         val now = System.currentTimeMillis()
-        val lastTouched = mapOf("Some Race" to now - 1.days.inWholeMilliseconds)
 
-        assertFalse(isSkippedAsStale("Some Race", lastTouched, maxAgeDays = 2))
+        assertFalse(isSkippedAsStale(now - 1.days.inWholeMilliseconds, maxAgeDays = 2))
     }
 
     @Test
-    fun aRaceLabelUntouchedPastTheWindowIsStale() {
+    fun untouchedPastTheWindowIsStale() {
         val now = System.currentTimeMillis()
-        val lastTouched = mapOf("Some Race" to now - 3.days.inWholeMilliseconds)
 
-        assertTrue(isSkippedAsStale("Some Race", lastTouched, maxAgeDays = 2))
+        assertTrue(isSkippedAsStale(now - 3.days.inWholeMilliseconds, maxAgeDays = 2))
     }
 }

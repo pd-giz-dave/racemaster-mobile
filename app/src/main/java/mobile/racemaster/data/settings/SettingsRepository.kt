@@ -61,6 +61,18 @@ class SettingsRepository(
         dataStore.edit { prefs -> prefs[Keys.ACTIVE_RACE_ID] = id }
     }
 
+    // Unlike clearStaleSessionState below (a startup-only, whole-DB-wipe backstop), this is
+    // the in-session counterpart: called by RaceRepository.deleteRace when the race it just
+    // deleted was the operator's own selected one, so Time/Bibs Mode's own activeRaceId-driven
+    // state doesn't keep dangling on a now-nonexistent raceId for the rest of this process's
+    // life. appMode is deliberately left alone here (unlike clearStaleSessionState, which
+    // clears both) — the operator is still legitimately in whichever mode they were in, just
+    // without a race selected anymore, exactly the state a race deleted before ever picking a
+    // mode already renders correctly.
+    suspend fun clearActiveRaceId() {
+        dataStore.edit { prefs -> prefs.remove(Keys.ACTIVE_RACE_ID) }
+    }
+
     // A destructive Room migration (schema version bump with no explicit Migration, see
     // RacemasterDatabase) wipes every race — and every Mule-pulled record — but leaves all of
     // this DataStore-backed state untouched, since it's an entirely separate storage

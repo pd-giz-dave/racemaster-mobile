@@ -52,7 +52,6 @@ object MuleGattProfile {
 @Serializable
 data class DeviceInfo(
     val deviceId: String,
-    val deviceRole: String,
     val raceLabel: String,
     // The highest permanent history line number (RaceEntity.nextLineNumber - 1) this device
     // currently holds for its active race — 0 if it holds none. A puller compares this
@@ -81,10 +80,20 @@ data class AckPayload(val deviceId: String, val recordUuids: List<String>, val d
 /**
  * One transferable record — Time Mode splits and Bibs Mode entries both flatten into this
  * same shape. Lands in the racemaster server's own `mobile` array (kept distinct from its
- * existing `finishers` array, not merged into it) via `recordUuid` (for dedup). `time`
- * (elapsed-since-race-start, matching `finishers`' convention) is only meaningful for Time
- * Mode splits — Bibs Mode has no stopwatch of its own, so its records leave `time` null and
- * rely purely on `timestampMillis`, the raw wall-clock instant the record was created.
+ * existing `finishers` array, not merged into it) via `recordUuid` (for dedup). `splitTime`
+ * (elapsed-since-race-start) is only meaningful for Time Mode splits — Bibs Mode has no
+ * stopwatch of its own, so its records leave `splitTime` null and rely purely on
+ * `timestampMillis`, the raw wall-clock instant the record was created.
+ *
+ * `bibNumber` is a *string*, not an Int, and is null only for a genuine Time Mode record
+ * (which has no bib concept at all) — that's the signal the server's own discriminator uses
+ * to tell a Time record from a Bibs one (see server.js's own doc: `bibNumber == null` means
+ * Time, `splitTime == null` means Bibs). Every Bibs record therefore always carries a non-null
+ * `bibNumber`, even one with no bib of its own (Clock, Stop, Reset, ...) — those send the
+ * literal string `"n/a"` (matching how the app's own history list already displays them; see
+ * HistoryLineRow) rather than null, so a Bibs record can never accidentally read as
+ * wire-identical to a Time record (both `bibNumber` and `splitTime` null) just because it
+ * happens to have no bib of its own. See [toSyncRecord] for where this is computed.
  *
  * Deliberately carries no `deviceName`: every place this travels (a BLE pull stream, a
  * `PulledRecordEntity` row, a server push/status entry) is already scoped to one originating
@@ -96,8 +105,8 @@ data class AckPayload(val deviceId: String, val recordUuids: List<String>, val d
 data class SyncRecord(
     val recordUuid: String,
     val action: String,
-    val number: Int?,
-    val time: String?,
+    val bibNumber: String?,
+    val splitTime: String?,
     val splitNumber: Int?,
     // Permanent, ascending history position — see RaceEntity.nextLineNumber. What delta-sync
     // (both the BLE pull protocol and the server's mobile-sync endpoint) keys off.

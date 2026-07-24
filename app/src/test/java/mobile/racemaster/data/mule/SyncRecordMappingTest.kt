@@ -55,22 +55,22 @@ class SyncRecordMappingTest {
     @Test
     fun finishSplitMapsElapsedTimeRelativeToRaceStart() {
         val record = split(splitNumber = 3, timestampMillis = 90_000L).toSyncRecord(raceStartedAtMillis = 0L)
-        assertEquals("00:01:30.00", record.time)
+        assertEquals("00:01:30.00", record.splitTime)
         assertEquals(3, record.splitNumber)
-        assertEquals(null, record.number)
+        assertEquals(null, record.bibNumber)
         assertEquals("Split", record.action)
     }
 
     @Test
     fun finishSplitWithNullRaceStartFormatsAsZero() {
         val record = split(splitNumber = 1, timestampMillis = 12_345L).toSyncRecord(raceStartedAtMillis = null)
-        assertEquals("00:00:00.00", record.time)
+        assertEquals("00:00:00.00", record.splitTime)
     }
 
     @Test
     fun finishSplitCentisecondsCarryThrough() {
         val record = split(splitNumber = 1, timestampMillis = 1_530L).toSyncRecord(raceStartedAtMillis = 0L)
-        assertEquals("00:00:01.53", record.time)
+        assertEquals("00:00:01.53", record.splitTime)
     }
 
     @Test
@@ -83,7 +83,7 @@ class SyncRecordMappingTest {
     @Test
     fun finishSplitCarriesRawWallClockTimestampAlongsideElapsedTime() {
         // timestampMillis is the raw wall-clock time, independent of raceStartedAtMillis —
-        // only `time` is relative to race start.
+        // only `splitTime` is relative to race start.
         val record = split(splitNumber = 1, timestampMillis = 1_700_000_000_000L).toSyncRecord(raceStartedAtMillis = 999_000L)
         assertEquals(1_700_000_000_000L, record.timestampMillis)
     }
@@ -105,13 +105,14 @@ class SyncRecordMappingTest {
     fun finishTypeMapsToFinishAction() {
         val record = bibEntry(101, HistoryAction.FINISH, splitNumber = 1, timestampMillis = 60_000L).toSyncRecord(null)
         assertEquals("Finish", record.action)
-        assertEquals(101, record.number)
+        // Wire bibNumber is a string, not the raw Int — see SyncRecord's own doc.
+        assertEquals("101", record.bibNumber)
     }
 
     @Test
     fun bibEntryTimeIsAlwaysNullBibsModeHasNoStopwatchOfItsOwn() {
         val record = bibEntry(101, HistoryAction.FINISH, splitNumber = 1, timestampMillis = 360_000L).toSyncRecord(0L)
-        assertNull(record.time)
+        assertNull(record.splitTime)
     }
 
     @Test
@@ -121,11 +122,25 @@ class SyncRecordMappingTest {
     }
 
     @Test
-    fun clockTypeMapsToClockActionWithNullNumber() {
+    fun clockTypeMapsToClockActionWithNAOnTheWireNotNull() {
+        // A Bibs record must never send bibNumber = null — that's reserved to mean "this is a
+        // Time record" (see SyncRecord's own doc) — so an action with no bib of its own sends
+        // the sentinel "n/a" instead, same as the history list already displays it.
         val record = bibEntry(null, HistoryAction.CLOCK, splitNumber = 0, timestampMillis = 0L, note = "5:30").toSyncRecord(null)
         assertEquals("Clock", record.action)
-        assertNull(record.number)
+        assertEquals("n/a", record.bibNumber)
         assertEquals("5:30", record.note)
+    }
+
+    @Test
+    fun everyNonBibBibsActionSendsNAOnTheWireNotNull() {
+        // Not just Clock — every Bibs action outside BIB_REQUIRED_ACTIONS (Stop, Reset, Ignore,
+        // Seniors, Juniors, Male, Female, Undo) has a null bibNumber locally and must equally
+        // avoid a null wire bibNumber, for the same reason as clockTypeMapsToClockActionWithNAOnTheWireNotNull.
+        assertEquals("n/a", bibEntry(null, HistoryAction.STOP, 1, 0L).toSyncRecord(null).bibNumber)
+        assertEquals("n/a", bibEntry(null, HistoryAction.RESET, 1, 0L).toSyncRecord(null).bibNumber)
+        assertEquals("n/a", bibEntry(null, HistoryAction.IGNORE, 1, 0L).toSyncRecord(null).bibNumber)
+        assertEquals("n/a", bibEntry(null, HistoryAction.UNDO, 1, 0L).toSyncRecord(null).bibNumber)
     }
 
     @Test
@@ -199,16 +214,16 @@ class SyncRecordMappingTest {
     fun splitAndFinishAreDistinctUnambiguousWireValues() {
         // A Time split is sent as its own honest "Split" (see toServerAction's own doc), so
         // "Finish" on the wire now means exactly one thing — a genuine Bibs Finish — regardless
-        // of whether `time` happens to be set.
-        assertEquals(HistoryAction.SPLIT, SyncRecord(recordUuid = "u", action = "Split", number = null, time = "00:00:00.00", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
-        assertEquals(HistoryAction.FINISH, SyncRecord(recordUuid = "u", action = "Finish", number = 101, time = null, splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
+        // of whether `splitTime` happens to be set.
+        assertEquals(HistoryAction.SPLIT, SyncRecord(recordUuid = "u", action = "Split", bibNumber = null, splitTime = "00:00:00.00", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
+        assertEquals(HistoryAction.FINISH, SyncRecord(recordUuid = "u", action = "Finish", bibNumber = "101", splitTime = null, splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
     }
 
     @Test
     fun unrecognizedWireActionFallsBackToIgnoreRatherThanThrowing() {
         assertEquals(
             HistoryAction.IGNORE,
-            SyncRecord(recordUuid = "u", action = "SomeFutureAction", number = null, time = null, splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction(),
+            SyncRecord(recordUuid = "u", action = "SomeFutureAction", bibNumber = null, splitTime = null, splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction(),
         )
     }
 }

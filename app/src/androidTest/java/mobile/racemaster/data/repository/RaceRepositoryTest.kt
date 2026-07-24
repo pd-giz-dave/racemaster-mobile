@@ -56,7 +56,6 @@ class RaceRepositoryTest {
             db.raceDao(),
             db.historyLineDao(),
             db.lineSyncDao(),
-            db.pulledRecordDao(),
             settingsRepository,
             bibsModeRepository,
         )
@@ -124,88 +123,15 @@ class RaceRepositoryTest {
         assertNull(repository.getRaceByLabel("Some other race entirely"))
     }
 
-    // updateRaceDetails re-homing Mule-inbox rows onto a renamed race's new label — see
-    // PulledRecordDao.retagSourceRaceLabel's doc for why this matters: without it,
-    // MuleRepository.pushToServer would keep grouping this race's already-pulled history
-    // under its old name forever, so the new name's server file would only ever get whatever
-    // was recorded after the rename.
-
     @Test
-    fun renamingARaceRetagsThisDevicesOwnPulledRecordsOntoTheNewLabel() = runTest {
-        val myDeviceId = settingsRepository.getOrCreateDeviceId()
-        db.pulledRecordDao().insertAll(
-            listOf(
-                PulledRecordEntity(
-                    recordUuid = "self-1",
-                    sourceDeviceId = myDeviceId,
-                    sourceDeviceRole = "TIME",
-                    sourceRaceLabel = "Test Race",
-                    lineNumber = 1L,
-                    payloadJson = "{}",
-                    pulledAtMillis = 0L,
-                ),
-            ),
-        )
-
-        repository.updateRaceDetails(raceId, name = "Renamed", course = "Course", bibsRangeStart = null, bibsRangeCount = null)
-        val newLabel = repository.getRace(raceId)?.label
-        assertEquals(buildRaceLabel("Renamed", "Course", 0L), newLabel)
-
-        val allRecords = db.pulledRecordDao().getAll()
-        assertEquals(listOf(newLabel), allRecords.map { it.sourceRaceLabel })
-    }
-
-    @Test
-    fun renamingARaceNeverTouchesAnotherDevicesPulledRecordsForTheSameOldLabel() = runTest {
-        db.pulledRecordDao().insertAll(
-            listOf(
-                PulledRecordEntity(
-                    recordUuid = "other-device-1",
-                    sourceDeviceId = "some-other-device-id",
-                    sourceDeviceRole = "TIME",
-                    sourceRaceLabel = "Test Race",
-                    lineNumber = 1L,
-                    payloadJson = "{}",
-                    pulledAtMillis = 0L,
-                ),
-            ),
-        )
-
+    fun renamingARaceNeedsNoPulledRecordsBookkeeping() = runTest {
+        // Unlike the old design (which had to retag a separately-staged mirror of this
+        // device's own data onto the new label), MuleRepository.pushToServer now reads this
+        // race's own current label fresh from RaceEntity every attempt — a rename just takes
+        // effect on the very next push, nothing else needs updating.
         repository.updateRaceDetails(raceId, name = "Renamed", course = "Course", bibsRangeStart = null, bibsRangeCount = null)
 
-        val allRecords = db.pulledRecordDao().getAll()
-        assertEquals("Test Race", allRecords.single().sourceRaceLabel)
-    }
-
-    @Test
-    fun editingDetailsWithoutActuallyChangingTheComputedLabelLeavesPulledRecordsAlone() = runTest {
-        // "Test Race" wasn't produced by buildRaceLabel in the first place (see setUp), so
-        // this covers updateRaceDetails's own no-op guard directly: a genuine no-rename edit
-        // (label unchanged) must not touch sourceRaceLabel at all. First call establishes a
-        // stable buildRaceLabel-derived label; the second repeats the exact same name/course,
-        // so the recomputed label is identical and no retag should happen.
-        repository.updateRaceDetails(raceId, name = "Same", course = "Course", bibsRangeStart = null, bibsRangeCount = null)
-        val stableLabel = requireNotNull(repository.getRace(raceId)?.label)
-
-        db.pulledRecordDao().insertAll(
-            listOf(
-                PulledRecordEntity(
-                    recordUuid = "self-1",
-                    sourceDeviceId = settingsRepository.getOrCreateDeviceId(),
-                    sourceDeviceRole = "TIME",
-                    sourceRaceLabel = stableLabel,
-                    lineNumber = 1L,
-                    payloadJson = "{}",
-                    pulledAtMillis = 0L,
-                ),
-            ),
-        )
-
-        repository.updateRaceDetails(raceId, name = "Same", course = "Course", bibsRangeStart = 1, bibsRangeCount = 10)
-
-        assertEquals(stableLabel, repository.getRace(raceId)?.label)
-        val allRecords = db.pulledRecordDao().getAll()
-        assertEquals(stableLabel, allRecords.single().sourceRaceLabel)
+        assertEquals(buildRaceLabel("Renamed", "Course", 0L), repository.getRace(raceId)?.label)
     }
 
     // deleteRace — irreversible, gated behind RaceHistoryScreen's own confirmation dialog.
@@ -242,6 +168,30 @@ class RaceRepositoryTest {
         repository.deleteRace(raceId)
 
         assertEquals(emptyList<LineSyncEntity>(), repository.observeLineSyncs(raceId).first())
+    }
+
+    @Test
+    fun deleteRaceNeedsNoPulledRecordsCleanup() = runTest {
+        // This device's own data is never mirrored into pulled_records at all (see
+        // PulledRecordEntity's own doc), so deleting a race must never touch that table —
+        // whatever's genuinely pulled from other devices under any label (including this
+        // race's own) is left completely alone.
+        db.pulledRecordDao().insertAll(
+            listOf(
+                PulledRecordEntity(
+                    recordUuid = "other-device-1",
+                    sourceDeviceId = "some-other-device-id",
+                    sourceRaceLabel = "Test Race",
+                    lineNumber = 1L,
+                    payloadJson = "{}",
+                    pulledAtMillis = 0L,
+                ),
+            ),
+        )
+
+        repository.deleteRace(raceId)
+
+        assertEquals(listOf("other-device-1"), db.pulledRecordDao().getAll().map { it.recordUuid })
     }
 
     @Test
@@ -288,5 +238,31 @@ class RaceRepositoryTest {
         repository.deleteRace(raceId)
 
         assertNull(repository.getRace(raceId))
+    }
+
+    // deleteRace also clearing a dangling settingsRepository.activeRaceId — without this,
+    // Time/Bibs Mode's own raceIdFlow (settingsRepository.activeRaceId, read with no
+    // existence check) keeps pointing at the just-deleted row, rendering a "race" with blank
+    // details that still looks active enough to enable Start — and crashes the moment an
+    // action tries to write to it (confirmed in the field via
+    // TimeModeRepository.startStopwatch's own requireNotNull(raceDao.getById(raceId))).
+
+    @Test
+    fun deletingTheCurrentlySelectedRaceClearsActiveRaceId() = runTest {
+        settingsRepository.setActiveRaceId(raceId)
+
+        repository.deleteRace(raceId)
+
+        assertNull(settingsRepository.activeRaceId.first())
+    }
+
+    @Test
+    fun deletingARaceThatIsNotTheSelectedOneLeavesActiveRaceIdAlone() = runTest {
+        val otherRaceId = db.raceDao().insert(RaceEntity(label = "Other Race", createdAtMillis = 0L))
+        settingsRepository.setActiveRaceId(otherRaceId)
+
+        repository.deleteRace(raceId)
+
+        assertEquals(otherRaceId, settingsRepository.activeRaceId.first())
     }
 }

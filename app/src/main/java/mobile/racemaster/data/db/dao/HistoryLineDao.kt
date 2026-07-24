@@ -59,36 +59,56 @@ interface HistoryLineDao {
     @Insert
     suspend fun insert(entry: HistoryLineEntity): Long
 
-    // One-shot (not a Flow) snapshot for Mule's BLE pull: it needs a fixed list to serialize
-    // and stream out, not a live subscription. Scoped to one mode — this is the "what's new to
-    // add to my own inbox" self-pull path, which each thin repository still owns separately.
-    @Query("SELECT * FROM history_lines WHERE raceId = :raceId AND mode = :mode AND syncedAtMillis IS NULL ORDER BY id")
-    suspend fun getUnsyncedForRace(raceId: Long, mode: HistoryMode): List<HistoryLineEntity>
-
-    // Unscoped (both modes) — delta-sync snapshot for a Mule pull request, spanning every
-    // segment of every mode this device has recorded. Deliberately NOT scoped to whichever
-    // AppMode screen happens to be showing: a mixed-mode race must still sync everything it
-    // holds over BLE regardless of which mode the operator currently has open.
+    // Unscoped (both modes) — delta-sync snapshot spanning every segment of every mode this
+    // device has recorded, past whatever the requester already has. Deliberately NOT scoped
+    // to whichever AppMode screen happens to be showing: a mixed-mode race must still sync
+    // everything it holds regardless of which mode the operator currently has open. Two
+    // callers: a genuine BLE pull request from another Mule (PeripheralSyncService.
+    // streamRecords), and MuleRepository.pushToServer building this device's own self-push
+    // payload fresh on every tick — the two are otherwise identical from this query's own
+    // point of view, since "what's new since line N" means the same thing either way.
     @Query("SELECT * FROM history_lines WHERE raceId = :raceId AND lineNumber > :sinceLineNumber ORDER BY lineNumber")
     suspend fun getSinceLineNumber(raceId: Long, sinceLineNumber: Long): List<HistoryLineEntity>
 
     @Query("SELECT COUNT(*) FROM history_lines WHERE raceId = :raceId AND mode = :mode AND syncedAtMillis IS NULL")
     fun observeUnsyncedCountForRace(raceId: Long, mode: HistoryMode): Flow<Int>
 
-    // Most recent time a Mule pulled (and ack'd) any of this race's rows for THIS mode —
-    // distinct from Mule's own "pushed to the server" bookkeeping, which lives on the Mule
-    // device instead.
+    // Most recent time this race's rows for THIS mode were confirmed synced somewhere — either
+    // a genuinely different physical Mule acking a BLE pull (PeripheralSyncService.markSynced),
+    // or (for this device's own self-push) MuleRepository.pushToServer's own server-status
+    // check confirming a line actually landed, not merely being handed off locally.
     @Query("SELECT MAX(syncedAtMillis) FROM history_lines WHERE raceId = :raceId AND mode = :mode")
     fun observeLastSyncedAtMillis(raceId: Long, mode: HistoryMode): Flow<Long?>
 
-    // Keyed by recordUuid, not local id or mode: that's the identifier Mule's BLE ack carries
-    // back, and a batch of acked uuids is inherently already scoped to whatever was actually
-    // streamed out, regardless of mode.
+    // The same signal as observeUnsyncedCountForRace/observeLastSyncedAtMillis above, but
+    // unscoped to any one race or mode — every row this device has ever recorded, across every
+    // race. Feeds Mule Mode's own aggregate status line (MuleRepository.unsyncedCount/
+    // lastSyncedAtMillis), which needs to reflect this device's own outstanding pushes
+    // alongside whatever it's holding for other devices, now that self-push builds its payload
+    // fresh from this table each tick rather than staging a copy into pulled_records.
+    @Query("SELECT COUNT(*) FROM history_lines WHERE syncedAtMillis IS NULL")
+    fun observeUnsyncedCountAcrossAllRaces(): Flow<Int>
+
+    @Query("SELECT MAX(syncedAtMillis) FROM history_lines")
+    fun observeLastSyncedAtMillisAcrossAllRaces(): Flow<Long?>
+
+    // How recently this race's own history was actually edited — used by
+    // MuleRepository.pushToServer to decide whether a race with no pulled_records activity of
+    // its own (i.e. every race, now that self-push no longer touches that table) is still
+    // worth re-checking against the server, and by Race History to show a local race as "too
+    // old for server sync" the same way a Mule-pulled source already does. Deliberately sourced
+    // from the real data's own timestamps, not a sync-bookkeeping proxy.
+    @Query("SELECT MAX(timestampMillis) FROM history_lines WHERE raceId = :raceId")
+    fun observeLastActivityAtMillis(raceId: Long): Flow<Long?>
+
+    // Keyed by recordUuid, not local id or mode: that's the identifier a BLE ack (or this
+    // device's own self-push confirmation) carries back, and a batch of confirmed uuids is
+    // inherently already scoped to whatever was actually sent, regardless of mode.
     @Query("UPDATE history_lines SET syncedAtMillis = :syncedAtMillis WHERE recordUuid IN (:recordUuids)")
     suspend fun markSynced(recordUuids: List<String>, syncedAtMillis: Long)
 
-    // lineNumbers for a batch of acked recordUuids — used to attribute a BLE ack to specific
-    // history lines for per-line "synced to" bookkeeping (see LineSyncEntity).
+    // lineNumbers for a batch of confirmed recordUuids — used to attribute a confirmation to
+    // specific history lines for per-line "synced to" bookkeeping (see LineSyncEntity).
     @Query("SELECT lineNumber FROM history_lines WHERE recordUuid IN (:recordUuids)")
     suspend fun getLineNumbersForUuids(recordUuids: List<String>): List<Long>
 }

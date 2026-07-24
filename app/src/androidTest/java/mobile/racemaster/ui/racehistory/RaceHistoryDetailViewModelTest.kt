@@ -56,7 +56,6 @@ class RaceHistoryDetailViewModelTest {
             db.raceDao(),
             db.historyLineDao(),
             db.lineSyncDao(),
-            db.pulledRecordDao(),
             settingsRepository,
             bibsModeRepository,
         )

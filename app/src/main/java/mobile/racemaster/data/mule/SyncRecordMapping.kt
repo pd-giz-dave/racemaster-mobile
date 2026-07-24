@@ -7,26 +7,30 @@ import mobile.racemaster.data.db.entity.HistoryMode
 
 /**
  * Maps a unified history line into the wire/server record shape. [raceStartedAtMillis] is the
- * race's `timeModeStartedAtMillis` (a Time-mode row's own t=0 reference) — `time` is formatted
- * elapsed-since-start to match the racemaster server's existing finisher time convention
- * (confirmed against real data, e.g. `"00:26:51"`), only for Time-mode rows; a Bibs-mode row
- * has no stopwatch of its own, so its `time` stays null and it relies purely on
- * `timestampMillis`, the raw wall-clock instant the record was created. No device name is
- * attached here — the caller already knows (and separately threads through) which device this
- * batch of records belongs to; see [SyncRecord]'s own doc for why that's not repeated per line.
+ * race's `timeModeStartedAtMillis` (a Time-mode row's own t=0 reference) — `splitTime` is
+ * formatted elapsed-since-start to match the racemaster server's existing finisher time
+ * convention (confirmed against real data, e.g. `"00:26:51"`), only for Time-mode rows; a
+ * Bibs-mode row has no stopwatch of its own, so its `splitTime` stays null and it relies purely
+ * on `timestampMillis`, the raw wall-clock instant the record was created. `bibNumber` is the
+ * mirror image — see [SyncRecord]'s own doc for why every Bibs row sends a non-null string
+ * (the bib itself, or `"n/a"` for an action with no bib of its own) while a Time row always
+ * sends null. No device name is attached here — the caller already knows (and separately
+ * threads through) which device this batch of records belongs to; see [SyncRecord]'s own doc
+ * for why that's not repeated per line.
  */
 fun HistoryLineEntity.toSyncRecord(raceStartedAtMillis: Long?): SyncRecord {
-    val time = if (mode == HistoryMode.TIME) {
+    val splitTime = if (mode == HistoryMode.TIME) {
         val elapsedMillis = raceStartedAtMillis?.let { timestampMillis - it } ?: 0L
         formatElapsedAsClock(elapsedMillis)
     } else {
         null
     }
+    val wireBibNumber = if (mode == HistoryMode.BIBS) bibNumber?.toString() ?: "n/a" else null
     return SyncRecord(
         recordUuid = recordUuid,
         action = action.toServerAction(),
-        number = bibNumber,
-        time = time,
+        bibNumber = wireBibNumber,
+        splitTime = splitTime,
         splitNumber = splitNumber,
         lineNumber = lineNumber,
         refLineNumber = refLineNumber,
@@ -85,12 +89,13 @@ fun SyncRecord.toHistoryAction(): HistoryAction = when (action) {
 
 // Centisecond precision, matching util/ElapsedTimeFormat.kt's on-screen convention exactly —
 // previously truncated to whole seconds here, discarding precision the app already tracks and
-// displays internally. No server-side change needed: both server.js and the companion web
-// app's finishers.js treat this field as an opaque passthrough string. NOTE: if a future
-// integration ever feeds this value into finishers.js's own parseFinishTime() (which splits on
-// any non-digit run, including '.', and rejects more than 3 numeric parts), a trailing ".CC"
-// would push it to 4 parts and be rejected — not a concern for any integration that exists
-// today, but worth knowing before wiring one up.
+// displays internally. server.js's own coerce() (mobile-sync's `splitTime` field, formerly
+// `time`) treats this as an opaque passthrough string either way, so this needs no
+// server-side change beyond the field-name rename itself. finishers.js's own, unrelated
+// `time` field (see SyncRecord's own doc — a separate, non-mobile-fed dataset) is untouched by
+// any of this; its own parseFinishTime() (which splits on any non-digit run, including '.',
+// and rejects more than 3 numeric parts) would reject a trailing ".CC" as a 4th part — not a
+// concern for any integration that exists today, but worth knowing before ever wiring one up.
 private fun formatElapsedAsClock(elapsedMillis: Long): String {
     val totalMillis = elapsedMillis.coerceAtLeast(0)
     val hours = totalMillis / 3_600_000

@@ -36,11 +36,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -48,7 +48,6 @@ import kotlinx.serialization.json.Json
 import kotlin.time.Duration.Companion.milliseconds
 import mobile.racemaster.MainActivity
 import mobile.racemaster.RacemasterApplication
-import mobile.racemaster.data.settings.AppMode
 
 /**
  * Runs on every device (Time, Bibs, and Mule) regardless of which screen is showing, so a
@@ -98,7 +97,6 @@ class PeripheralSyncService : Service() {
     private var servingState = ServingState()
 
     private data class ServingState(
-        val mode: AppMode? = null,
         val raceId: Long? = null,
         val raceLabel: String = "",
         val lastLineNumber: Long = 0,
@@ -218,12 +216,8 @@ class PeripheralSyncService : Service() {
                     if (raceId == null) {
                         flowOf(ServingState())
                     } else {
-                        combine(
-                            container.settingsRepository.appMode,
-                            container.raceRepository.observeRace(raceId),
-                        ) { mode, race ->
+                        container.raceRepository.observeRace(raceId).map { race ->
                             ServingState(
-                                mode = mode,
                                 raceId = raceId,
                                 raceLabel = race?.label.orEmpty(),
                                 lastLineNumber = (race?.nextLineNumber ?: 1) - 1,
@@ -345,7 +339,6 @@ class PeripheralSyncService : Service() {
             }
             val info = DeviceInfo(
                 deviceId = deviceId,
-                deviceRole = servingState.mode?.name.orEmpty(),
                 raceLabel = servingState.raceLabel,
                 lastLineNumber = servingState.lastLineNumber,
                 deviceName = deviceName,

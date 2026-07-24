@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -151,7 +151,82 @@ class HistoryLineDaoTest {
 
         val lineNumbers = dao.getLineNumbersForUuids(listOf("uuid-1", "uuid-2"))
         assertEquals(setOf(1L, 2L), lineNumbers.toSet())
-        assertTrue(dao.getUnsyncedForRace(raceId, HistoryMode.BIBS).isEmpty())
-        assertTrue(dao.getUnsyncedForRace(raceId, HistoryMode.TIME).isEmpty())
+        assertEquals(0, dao.observeUnsyncedCountForRace(raceId, HistoryMode.BIBS).first())
+        assertEquals(0, dao.observeUnsyncedCountForRace(raceId, HistoryMode.TIME).first())
+    }
+
+    // observeUnsyncedCountAcrossAllRaces/observeLastSyncedAtMillisAcrossAllRaces — the
+    // device-wide counterparts to the per-race/per-mode queries above, feeding Mule Mode's own
+    // aggregate status line now that self-push builds its payload fresh from this table each
+    // tick rather than staging a copy elsewhere (see MuleRepository.unsyncedCount's own doc).
+
+    @Test
+    fun unsyncedCountAcrossAllRacesSpansEveryRaceNotJustOne() = runTest {
+        val otherRaceId = db.raceDao().insert(RaceEntity(label = "Other Race", createdAtMillis = 0L))
+        dao.insert(line(HistoryMode.TIME, HistoryAction.SPLIT, lineNumber = 1))
+        dao.insert(
+            HistoryLineEntity(
+                raceId = otherRaceId,
+                mode = HistoryMode.BIBS,
+                action = HistoryAction.FINISH,
+                splitNumber = 1,
+                lineNumber = 1L,
+                timestampMillis = 0L,
+                recordUuid = "other-race-uuid",
+            ),
+        )
+
+        assertEquals(2, dao.observeUnsyncedCountAcrossAllRaces().first())
+
+        dao.markSynced(listOf("uuid-1"), syncedAtMillis = 1_000L)
+        assertEquals(1, dao.observeUnsyncedCountAcrossAllRaces().first())
+    }
+
+    @Test
+    fun lastSyncedAtMillisAcrossAllRacesIsTheMostRecentRegardlessOfRace() = runTest {
+        val otherRaceId = db.raceDao().insert(RaceEntity(label = "Other Race", createdAtMillis = 0L))
+        dao.insert(line(HistoryMode.TIME, HistoryAction.SPLIT, lineNumber = 1))
+        dao.insert(
+            HistoryLineEntity(
+                raceId = otherRaceId,
+                mode = HistoryMode.BIBS,
+                action = HistoryAction.FINISH,
+                splitNumber = 1,
+                lineNumber = 1L,
+                timestampMillis = 0L,
+                recordUuid = "other-race-uuid",
+            ),
+        )
+        assertNull(dao.observeLastSyncedAtMillisAcrossAllRaces().first())
+
+        dao.markSynced(listOf("uuid-1"), syncedAtMillis = 1_000L)
+        dao.markSynced(listOf("other-race-uuid"), syncedAtMillis = 5_000L)
+        assertEquals(5_000L, dao.observeLastSyncedAtMillisAcrossAllRaces().first())
+    }
+
+    @Test
+    fun lastActivityAtMillisIsTheMostRecentTimestampForThatRaceOnly() = runTest {
+        val otherRaceId = db.raceDao().insert(RaceEntity(label = "Other Race", createdAtMillis = 0L))
+        dao.insert(line(HistoryMode.TIME, HistoryAction.SPLIT, lineNumber = 1, timestampMillis = 1_000L))
+        dao.insert(line(HistoryMode.TIME, HistoryAction.SPLIT, lineNumber = 2, timestampMillis = 2_000L))
+        dao.insert(
+            HistoryLineEntity(
+                raceId = otherRaceId,
+                mode = HistoryMode.TIME,
+                action = HistoryAction.SPLIT,
+                splitNumber = 1,
+                lineNumber = 1L,
+                timestampMillis = 9_000L,
+                recordUuid = "other-race-uuid",
+            ),
+        )
+
+        assertEquals(2_000L, dao.observeLastActivityAtMillis(raceId).first())
+        assertEquals(9_000L, dao.observeLastActivityAtMillis(otherRaceId).first())
+    }
+
+    @Test
+    fun lastActivityAtMillisIsNullForARaceWithNoHistoryYet() = runTest {
+        assertNull(dao.observeLastActivityAtMillis(raceId).first())
     }
 }

@@ -18,7 +18,7 @@ import kotlinx.coroutines.flow.stateIn
 data class MulePulledRecordUi(
     val recordUuid: String,
     val action: HistoryAction,
-    val number: Int?,
+    val bibNumber: Int?,
     val splitNumber: Int,
     val lineNumber: Long,
     val elapsedMillis: Long,
@@ -29,10 +29,11 @@ data class MulePulledRecordUi(
     // PulledRecordEntity.syncedTargetName's own doc.
     val syncedToLabel: String?,
     // Per-record category signal (mirrors MuleRepository.pushToServer's own categorization):
-    // SyncRecord.time is unconditionally non-null for every Time-category record (including
-    // its markers) and unconditionally null for every Bibs-category record — a merged Mule
-    // source can now hold both categories under one race label, so this decides per record
-    // whether HistoryLineRow's elapsedMillis (vs its bib number) is the meaningful column.
+    // SyncRecord.splitTime is unconditionally non-null for every Time-category record
+    // (including its markers) and unconditionally null for every Bibs-category record — a
+    // merged Mule source can now hold both categories under one race label, so this decides
+    // per record whether HistoryLineRow's elapsedMillis (vs its bib number) is the meaningful
+    // column.
     val isTimeRecord: Boolean,
     val isUndoMarker: Boolean,
     val editedFromLineNumber: Long?,
@@ -65,13 +66,16 @@ class MuleSourceDetailViewModel(
             // be harmless either way, but scoping to isTimeRecord == false keeps this an exact
             // mirror of the local-race path.
             val dupRefs = findDuplicateSplitRefsPerSegment(
-                records.filter { it.record.time == null },
+                records.filter { it.record.splitTime == null },
                 lineNumberOf = { it.record.lineNumber },
                 refLineNumberOf = { it.record.refLineNumber },
                 isUndoMarker = { it.record.toHistoryAction() == HistoryAction.UNDO },
                 isReset = { it.record.toHistoryAction() == HistoryAction.RESET },
                 keyOf = { it.record.recordUuid },
-                bibNumberOf = { it.record.number },
+                // Wire bibNumber is a String ("101"/"n/a"/null — see SyncRecord's own doc);
+                // toIntOrNull() collapses both "n/a" and a genuinely absent value back to the
+                // same null this function (and the rest of the app) already treats as "no bib".
+                bibNumberOf = { it.record.bibNumber?.toIntOrNull() },
                 actionOf = { it.record.toHistoryAction() },
                 splitNumberOf = { it.record.splitNumber ?: 0 },
             )
@@ -82,14 +86,14 @@ class MuleSourceDetailViewModel(
                     MulePulledRecordUi(
                         recordUuid = it.record.recordUuid,
                         action = it.record.toHistoryAction(),
-                        number = it.record.number,
+                        bibNumber = it.record.bibNumber?.toIntOrNull(),
                         splitNumber = it.record.splitNumber ?: 0,
                         lineNumber = it.record.lineNumber,
-                        elapsedMillis = parseElapsedClock(it.record.time),
+                        elapsedMillis = parseElapsedClock(it.record.splitTime),
                         note = it.record.note,
                         synced = it.syncedAtMillis != null,
                         syncedToLabel = it.syncedToLabel,
-                        isTimeRecord = it.record.time != null,
+                        isTimeRecord = it.record.splitTime != null,
                         isUndoMarker = it.record.toHistoryAction() == HistoryAction.UNDO,
                         editedFromLineNumber = it.record.refLineNumber,
                         dupSplitRefs = dupRefs[it.record.recordUuid].orEmpty(),
@@ -114,8 +118,8 @@ class MuleSourceDetailViewModel(
 // "SS.CC".toIntOrNull() returns null (Kotlin rejects decimals), which used to silently zero
 // out every Mule-pulled Time record's displayed elapsed time once centiseconds were added.
 // Also tolerates the older centiseconds-free "HH:MM:SS" format (no trailing "." component).
-internal fun parseElapsedClock(time: String?): Long {
-    val parts = time?.split(":") ?: return 0L
+internal fun parseElapsedClock(splitTime: String?): Long {
+    val parts = splitTime?.split(":") ?: return 0L
     if (parts.size != 3) return 0L
     val hours = parts[0].toIntOrNull() ?: return 0L
     val minutes = parts[1].toIntOrNull() ?: return 0L

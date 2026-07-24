@@ -31,7 +31,6 @@ class PulledRecordDaoTest {
     ) = PulledRecordEntity(
         recordUuid = recordUuid,
         sourceDeviceId = sourceDeviceId,
-        sourceDeviceRole = "BIBS",
         sourceRaceLabel = sourceRaceLabel,
         lineNumber = lineNumber,
         deviceName = deviceName,
@@ -117,21 +116,6 @@ class PulledRecordDaoTest {
     }
 
     @Test
-    fun sourceSummariesExcludeThisDevicesOwnSelfPulledRows() = runTest {
-        // MuleSyncEngine.pullSelfRecords tags this device's own records with its own
-        // deviceId purely for push-to-server bookkeeping — those must never surface as a
-        // separate "From Mule" entry, since the same race is already shown as a local race.
-        dao.insertAll(
-            listOf(
-                record("a", sourceDeviceId = "my-device-id", sourceRaceLabel = "My Own Race"),
-                record("b", sourceDeviceId = "another-device-id", sourceRaceLabel = "Their Race"),
-            ),
-        )
-        val summaries = dao.observeSourceSummaries(myDeviceId = "my-device-id").first()
-        assertEquals(listOf("Their Race"), summaries.map { it.sourceRaceLabel })
-    }
-
-    @Test
     fun sourceSummariesKeepDifferentDevicesSharingARaceLabelSeparate() = runTest {
         // Two genuinely different phones (e.g. a Time phone and a Bibs phone) can end up with
         // the same race label (name-course-date) when both work the same physical race — their
@@ -143,7 +127,7 @@ class PulledRecordDaoTest {
                 record("b", sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label", deviceName = "later-device", pulledAtMillis = 200L),
             ),
         )
-        val summaries = dao.observeSourceSummaries(myDeviceId = "my-device-id").first()
+        val summaries = dao.observeSourceSummaries().first()
         assertEquals(
             setOf("device-2" to "earlier-device", "device-3" to "later-device"),
             summaries.map { it.sourceDeviceId to it.deviceName }.toSet(),
@@ -195,13 +179,13 @@ class PulledRecordDaoTest {
     }
 
     @Test
-    fun lastTouchedByRaceLabelSpansEveryDeviceIncludingSelf() = runTest {
+    fun lastTouchedByRaceLabelSpansEveryContributingDevice() = runTest {
         // Unlike observeSourceSummaries/observeForSource (scoped to one device), this must
-        // consider every row for a race label together — self-pulled rows included — since it
-        // mirrors MuleRepository.pushToServer's own `all.groupBy { it.sourceRaceLabel }`.
+        // consider every row for a race label together — mirrors MuleRepository.pushToServer's
+        // own pulled-from-others staleness check for that label.
         dao.insertAll(
             listOf(
-                record("a", sourceDeviceId = "my-device-id", sourceRaceLabel = "Shared Label", pulledAtMillis = 100L),
+                record("a", sourceDeviceId = "device-1", sourceRaceLabel = "Shared Label", pulledAtMillis = 100L),
                 record("b", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", pulledAtMillis = 300L),
                 record("c", sourceDeviceId = "device-3", sourceRaceLabel = "Other Label", pulledAtMillis = 200L),
             ),

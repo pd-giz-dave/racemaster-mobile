@@ -30,11 +30,16 @@ import mobile.racemaster.data.settings.SettingsRepository
 /** A single physical phone Mule has seen — keyed by its stable [deviceId] once known (a
  *  phone can advertise under more than one BLE address over time, e.g. address rotation or
  *  restarting Bluetooth, so address alone isn't a reliable identity), falling back to the
- *  raw BLE address as a placeholder key before the first successful [DeviceInfo] read. A
- *  phone that's run both Bibs mode and Time mode at different points accumulates *both*
- *  roles' counts here rather than appearing as two separate devices — only one of them is
- *  "live" at once (whichever mode the phone is currently in), the other reflects the last
- *  time it was seen in that role.
+ *  raw BLE address as a placeholder key before the first successful [DeviceInfo] read. Which
+ *  mode screen a phone currently has open is irrelevant here and deliberately not tracked at
+ *  all — from a puller's point of view a device is just "how much pending data does it have"
+ *  ([unsyncedCount]), a single whole-race count regardless of Time/Bibs, since both share one
+ *  lineNumber sequence (see [DeviceInfo.lastLineNumber]'s own doc). An earlier version tracked
+ *  that count per currently-reported role and summed the roles for display — which
+ *  double-counted the moment the same phone was later read under a *different* role while the
+ *  previous role's now-stale entry was still cached (confirmed in the field: the unsynced
+ *  badge for a phone that switched from Bibs to Time roughly doubled instead of just
+ *  reflecting its one true outstanding count).
  *
  *  This device's own unsynced data is folded into the same list as one more entry
  *  ([isSelf] = true) rather than shown separately — it's just as much a sync candidate as
@@ -69,7 +74,7 @@ data class DiscoveredDevice(
     val deviceId: String? = null,
     val deviceName: String = "",
     val raceLabel: String = "",
-    val roleCounts: Map<String, Int> = emptyMap(),
+    val unsyncedCount: Int = 0,
     val isSelf: Boolean = false,
     val lastReachableAtMillis: Long = System.currentTimeMillis(),
     val consecutiveFailures: Int = 0,
@@ -104,7 +109,7 @@ class MuleSyncEngine(
     private val raceRepository: RaceRepository,
     private val timeModeRepository: TimeModeRepository,
     private val bibsModeRepository: BibsModeRepository,
-    private val settingsRepository: SettingsRepository,
+    settingsRepository: SettingsRepository,
 ) {
     // A background engine that talks to arbitrary other phones over BLE regardless of what
     // screen (if any) is currently showing must never let a stray uncaught exception take
@@ -143,8 +148,8 @@ class MuleSyncEngine(
     // This device's own unsynced data, shaped as one more DiscoveredDevice (isSelf = true) so
     // it can be folded straight into the same list real BLE-discovered devices render in —
     // "self" is exactly as much a sync candidate as anything found over the radio. Always
-    // shown, with an empty raceLabel/roleCounts while there's no active race — same as any
-    // other device Mule can see that hasn't got a race defined either (see
+    // shown, with an empty raceLabel and zero unsyncedCount while there's no active race —
+    // same as any other device Mule can see that hasn't got a race defined either (see
     // MuleModeScreen.NearbyDevicesSection's "no race" label), never hidden entirely just
     // because this device itself has nothing recorded right now.
     val selfDevice: Flow<DiscoveredDevice> = settingsRepository.activeRaceId
@@ -157,7 +162,7 @@ class MuleSyncEngine(
                         deviceId = SELF_DEVICE_KEY,
                         deviceName = deviceName.orEmpty(),
                         raceLabel = "",
-                        roleCounts = emptyMap(),
+                        unsyncedCount = 0,
                         isSelf = true,
                     )
                 }
@@ -174,7 +179,11 @@ class MuleSyncEngine(
                         deviceId = SELF_DEVICE_KEY,
                         deviceName = deviceName.orEmpty(),
                         raceLabel = race?.label.orEmpty(),
-                        roleCounts = mapOf(DEVICE_ROLE_TIME to unsyncedSplits, DEVICE_ROLE_BIBS to unsyncedEntries),
+                        // Time and Bibs are independently-scoped counts (a HistoryLineEntity
+                        // row has exactly one mode), so summing them is safe here — unlike the
+                        // BLE-pulled path below, there's no risk of double-counting the same
+                        // line under two different reads.
+                        unsyncedCount = unsyncedSplits + unsyncedEntries,
                         isSelf = true,
                     )
                 }
@@ -299,12 +308,13 @@ class MuleSyncEngine(
 
     /** Folds a freshly-read [DeviceInfo] into [discoveredFlow], keyed by the stable
      *  `deviceId` rather than [oldKey] (a BLE address) — merging into any entry already
-     *  tracked under that deviceId instead of creating a duplicate, and accumulating this
-     *  role's outstanding-line count (info.lastLineNumber minus [lastPulledLineNumber], the
-     *  delta already computed by the caller) alongside whatever the other role's last-known
-     *  count was. A successful read is by definition proof of reachability, so it always
-     *  clears [DiscoveredDevice.unreachable] and [DiscoveredDevice.consecutiveFailures], and
-     *  bumps [DiscoveredDevice.lastReachableAtMillis] to now. */
+     *  tracked under that deviceId instead of creating a duplicate, and overwriting (not
+     *  accumulating — see [DiscoveredDevice]'s own doc for why) its outstanding-line count
+     *  with this fresh one (info.lastLineNumber minus [lastPulledLineNumber], the delta
+     *  already computed by the caller). A successful read is by definition proof of
+     *  reachability, so it always clears [DiscoveredDevice.unreachable] and
+     *  [DiscoveredDevice.consecutiveFailures], and bumps [DiscoveredDevice.lastReachableAtMillis]
+     *  to now. */
     private fun mergeDeviceInfo(oldKey: String, device: DiscoveredDevice, info: DeviceInfo, lastPulledLineNumber: Long) {
         val newKey = info.deviceId
         val current = discoveredFlow.value
@@ -316,7 +326,7 @@ class MuleSyncEngine(
             deviceId = newKey,
             deviceName = info.deviceName,
             raceLabel = info.raceLabel,
-            roleCounts = base.roleCounts + (info.deviceRole to outstanding),
+            unsyncedCount = outstanding,
             lastReachableAtMillis = System.currentTimeMillis(),
             consecutiveFailures = 0,
             unreachable = false,
@@ -361,18 +371,18 @@ class MuleSyncEngine(
 
     private suspend fun autoPullAndPushIfArmed() {
         if (busyFlow.value) return
-        // Deliberately *not* gated on bluetoothOff or login here — pulling is a purely local
-        // operation into Mule's own inbox (BLE when there's something visible, always
-        // including this phone's own unsynced data regardless — see pullSelfRecords), and
-        // every device visible should end up captured there (and colored green once caught
-        // up) regardless of whether *this* phone is logged in to push anywhere yet, or has
-        // Bluetooth turned off (in which case discoveredFlow is simply empty and this loop
-        // does nothing on the BLE side, self-pull still runs). Only the push phase below
-        // needs the login/server-sync gates, and pushIfNeeded() already no-ops quietly if it
-        // isn't configured. Without this split, an unlogged-in phone would never auto-pull
-        // from anyone — including itself — and its nearby-devices list would stay red forever
-        // no matter how caught up it really was, which is exactly the inconsistency this is
-        // fixing.
+        // Deliberately *not* gated on bluetoothOff or login here — pulling from another device
+        // over BLE is a purely local operation into Mule's own inbox, and every such device
+        // visible should end up captured there (and colored green once caught up) regardless
+        // of whether *this* phone is logged in to push anywhere yet (in which case
+        // discoveredFlow is simply empty and this loop does nothing). Only the push phase
+        // below needs the login/server-sync gates, and pushIfNeeded() already no-ops quietly
+        // if it isn't configured. This device's own "self" status (see selfDevice) is a
+        // different story now: since pushToServer builds and confirms self's own data directly
+        // against the server rather than staging it into a local inbox first, self's own
+        // green/red genuinely does depend on being logged in and reachable — an honest change
+        // from the old design, where self could show green the instant it was merely handed
+        // off locally, before ever actually reaching the server.
         if (muleRepository.autoSyncStopped.first()) return
 
         // try/finally, not a bare set-true/set-false either side of the call: MulePullClient's
@@ -397,8 +407,10 @@ class MuleSyncEngine(
     }
 
     /** Pulls from every currently-visible BLE device — no attach step, no per-role limit, no
-     *  race-label matching: anything Mule can see, it pulls from — plus this phone's own
-     *  unsynced data. Folds fresh [DeviceInfo] into [discoveredFlow] as it goes so the
+     *  race-label matching: anything Mule can see, it pulls from. This device's own data is
+     *  never "pulled" at all (see [MuleRepository.pushToServer]'s own doc) — pushIfNeeded's own
+     *  push call reads it fresh straight from the source, so there's nothing self-specific to
+     *  do here. Folds fresh [DeviceInfo] into [discoveredFlow] as it goes so the
      *  nearby-devices list's red/green status stays current even on ticks that don't end up
      *  pulling anything. A device that simply couldn't be reached this tick doesn't set the
      *  returned failure message — that's tracked per-device instead (see [markUnreachable] /
@@ -422,7 +434,6 @@ class MuleSyncEngine(
             val result = runCatching {
                 muleRepository.pullFrom(
                     device.requiredAdvertisement,
-                    freshInfo.deviceRole,
                     freshInfo.raceLabel,
                     freshInfo.deviceId,
                     freshInfo.deviceName,
@@ -439,42 +450,7 @@ class MuleSyncEngine(
                 }
             }
         }
-        runCatching { pullSelfRecords() }.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
         return tickFailure
-    }
-
-    /** The self-entry's counterpart to a BLE pull — no radio involved, so this reads the
-     *  active race's own unsynced splits/entries straight from the local database and drops
-     *  them into the same Mule inbox a BLE pull would have, tagged with this device's own
-     *  role(s)/race label exactly like a genuinely pulled source. From there they're
-     *  indistinguishable from anything pulled from a real nearby device — same push-to-server
-     *  path, same "Mule source" history entry. Also marks the source splits/entries synced
-     *  locally, mirroring what a remote Mule's BLE ack would otherwise have done — without
-     *  this, self's own unsynced count (and the Bibs/Time screens' own red/green rows) would
-     *  never reflect having been pulled. Since this engine runs continuously regardless of
-     *  which screen is showing (see class doc), this is what lets a phone actively recording
-     *  Time or Bibs mode sync its own data to the server at the same time, with no separate
-     *  physical Mule and no direct self-push path needed. */
-    private suspend fun pullSelfRecords(): Int {
-        val raceId = settingsRepository.activeRaceId.first() ?: return 0
-        val race = raceRepository.getRace(raceId)
-        val raceLabel = race?.label.orEmpty()
-        val deviceName = race?.createdByDeviceName.orEmpty()
-        val myDeviceId = settingsRepository.getOrCreateDeviceId()
-        var total = 0
-        val splits = timeModeRepository.getUnsyncedSplits(raceId)
-        if (splits.isNotEmpty()) {
-            val records = splits.map { it.toSyncRecord(race?.timeModeStartedAtMillis) }
-            total += muleRepository.pullFromSelf(DEVICE_ROLE_TIME, raceLabel, myDeviceId, deviceName, records)
-            timeModeRepository.markSplitsSyncedByUuid(records.map { it.recordUuid })
-        }
-        val entries = bibsModeRepository.getUnsyncedEntries(raceId)
-        if (entries.isNotEmpty()) {
-            val records = entries.map { it.toSyncRecord(race?.timeModeStartedAtMillis) }
-            total += muleRepository.pullFromSelf(DEVICE_ROLE_BIBS, raceLabel, myDeviceId, deviceName, records)
-            bibsModeRepository.markEntriesSyncedByUuid(records.map { it.recordUuid })
-        }
-        return total
     }
 
     /** Immediate one-off pull-from-everything-visible + push, regardless of the stopped

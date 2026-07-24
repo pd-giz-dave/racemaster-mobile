@@ -9,8 +9,8 @@ class MuleRepositoryTest {
     private fun timeRecord(lineNumber: Long) = SyncRecord(
         recordUuid = "time-$lineNumber",
         action = "Finish",
-        number = null,
-        time = "00:01:30.00",
+        bibNumber = null,
+        splitTime = "00:01:30.00",
         splitNumber = 1,
         lineNumber = lineNumber,
         note = null,
@@ -20,8 +20,8 @@ class MuleRepositoryTest {
     private fun bibRecord(lineNumber: Long) = SyncRecord(
         recordUuid = "bib-$lineNumber",
         action = "Finish",
-        number = 101,
-        time = null,
+        bibNumber = "101",
+        splitTime = null,
         splitNumber = 1,
         lineNumber = lineNumber,
         note = null,

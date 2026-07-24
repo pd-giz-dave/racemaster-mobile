@@ -4,11 +4,17 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
-// Mule's inbox: a record pulled from a Time/Bibs phone over BLE, held until it's pushed on
-// to the racemaster server. Mule has no race of its own, so this is a flat holding table
-// rather than something hung off a RaceEntity — payloadJson is already in the exact
-// {recordUuid, action, number, time, splitNumber, note, timestampMillis} shape the server's
-// mobile-append endpoint expects, so it can be pushed on as-is with no further mapping.
+// Mule's inbox: a record pulled from a genuinely different Time/Bibs phone over BLE, held
+// until it's pushed on to the racemaster server. This device's own data is deliberately never
+// staged in here — MuleRepository.pushToServer builds this device's own self-push payload
+// fresh from its real HistoryLineEntity rows on every attempt instead of maintaining a second,
+// driftable copy of it (a mirrored self-copy caused real bugs in the field: a deleted-and-
+// recreated race under the same label resent stale data alongside the new race's, since
+// nothing kept this table's copy in sync with the actual source of truth). Mule has no race of
+// its own, so this is a flat holding table rather than something hung off a RaceEntity —
+// payloadJson is already in the exact {recordUuid, action, bibNumber, splitTime, splitNumber,
+// note, timestampMillis} shape the server's mobile-append endpoint expects, so it can be pushed
+// on as-is with no further mapping.
 @Entity(
     tableName = "pulled_records",
     indices = [
@@ -20,12 +26,10 @@ data class PulledRecordEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val recordUuid: String,
     // The specific physical phone this record was pulled from — distinct from
-    // sourceDeviceRole/sourceRaceLabel (which only identify a role+race combination, not a
-    // specific device): needed to look up "the last line number already pulled from THIS
-    // device" for delta-sync, since line numbers are only meaningful within one originating
-    // device's own counter sequence.
+    // sourceRaceLabel (which only identifies a race, not a specific device): needed to look up
+    // "the last line number already pulled from THIS device" for delta-sync, since line
+    // numbers are only meaningful within one originating device's own counter sequence.
     val sourceDeviceId: String,
-    val sourceDeviceRole: String,
     val sourceRaceLabel: String,
     // The source device's own permanent line number for this record — see
     // RaceEntity.nextLineNumber. Used to compute the delta to request on the next pull.

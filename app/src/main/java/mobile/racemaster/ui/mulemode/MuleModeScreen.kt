@@ -188,13 +188,13 @@ private fun BluetoothAndServerSyncToggles(uiState: MuleModeUiState, viewModel: M
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         if (uiState.bluetoothOff) {
             Text(
-                "Bluetooth: OFF — not scanning, not advertising, not visible to nearby devices",
+                "Bluetooth: OFF — not visible to nearby devices",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
         } else {
             Text(
-                "Bluetooth: ON — scanning, advertising, pulling data from nearby devices",
+                "Bluetooth: ON — pulling data from visible nearby devices",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
             )
@@ -251,12 +251,26 @@ private fun AutoSyncStatus(uiState: MuleModeUiState, viewModel: MuleModeViewMode
         uiState.autoWarning?.let { warning ->
             Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
+        // Nearby device count is always worth showing alongside "Last pull" — it's the one
+        // piece of context that explains a persistent "never" (nothing nearby to pull from,
+        // not a malfunction) without the operator having to cross-reference the list below.
+        val nearbyDeviceCount = uiState.discoveredDevices.count { !it.isSelf }
         Text(
-            "Last pull: ${uiState.lastPulledAtMillis?.let { formatWallClock(it) } ?: "never"}",
+            "Last pull: ${uiState.lastPulledAtMillis?.let { formatWallClock(it) } ?: "never"} " +
+                "(from $nearbyDeviceCount device${if (nearbyDeviceCount == 1) "" else "s"})",
             style = MaterialTheme.typography.bodySmall,
         )
+        // Unlike a pull, a push doesn't depend on any nearby device being visible at all — this
+        // device's own data pushes on its own the moment it's logged in, so a genuine "never"
+        // here only ever means one thing: not logged in. Once something has actually pushed,
+        // the qualifier drops — pairing a real timestamp with "(no server)" would read as a
+        // contradiction rather than an explanation.
         Text(
-            "Last push: ${uiState.lastSyncedAtMillis?.let { formatWallClock(it) } ?: "never"}",
+            if (uiState.lastSyncedAtMillis == null && !uiState.isLoggedIn) {
+                "Last push: never (no server)"
+            } else {
+                "Last push: ${uiState.lastSyncedAtMillis?.let { formatWallClock(it) } ?: "never"}"
+            },
             style = MaterialTheme.typography.bodySmall,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -292,14 +306,19 @@ private fun NearbyDevicesSection(uiState: MuleModeUiState) {
             Text("Scanning…", style = MaterialTheme.typography.bodyMedium)
         }
         uiState.discoveredDevices.forEach { device ->
-            val hasReported = device.deviceName.isNotEmpty() || device.raceLabel.isNotEmpty() || device.roleCounts.isNotEmpty()
+            // deviceName is always non-blank the moment any device (self or a genuinely
+            // different BLE peer) has actually resolved — see PeripheralSyncService's own
+            // advertise gate — so that alone would already suffice; raceLabel is the one
+            // remaining case it doesn't cover: self, resolved, but with no active race and no
+            // device name ever chosen yet.
+            val hasReported = device.deviceName.isNotEmpty() || device.raceLabel.isNotEmpty()
             if (!hasReported) {
                 Text(
                     "${device.deviceKey.take(8)} — Discovering…",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             } else {
-                val unsynced = device.roleCounts.values.sum()
+                val unsynced = device.unsyncedCount
                 // Below UNREACHABLE_FAILURE_THRESHOLD, a missed read is still just ordinary
                 // BLE noise (see DiscoveredDevice's own doc) — naming the running count here
                 // rather than staying silent lets the operator see a device is having trouble

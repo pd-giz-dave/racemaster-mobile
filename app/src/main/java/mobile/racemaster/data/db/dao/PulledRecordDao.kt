@@ -7,17 +7,18 @@ import androidx.room.Query
 import mobile.racemaster.data.db.entity.PulledRecordEntity
 import kotlinx.coroutines.flow.Flow
 
-// One row per distinct (source race, source device) pair Mule has ever pulled from — the
-// accumulated history view, not just what's currently sitting unsynced. Grouped by race label
-// AND sourceDeviceId (not also by sourceDeviceRole): a single physical phone that's run both
-// Time and Bibs mode for the same race label still shows as one combined source, like a local
-// race's own history does — but two genuinely different phones that happen to share a race
-// label (e.g. a Time phone and a Bibs phone both working the same physical race under the same
-// name/course/date) now show as two separate sources, each under its own device's name.
-// Records pulled from different devices must never be merged into one source just because they
-// share a race label. Always excludes this device's own self-pulled rows (see the DAO queries
-// below) — those are purely push-to-server bookkeeping, not something to show the operator as
-// a distinct "source" when it's already visible as one of their own local races.
+// One row per distinct (source race, source device) pair Mule has ever pulled from a genuinely
+// different physical device — the accumulated history view, not just what's currently sitting
+// unsynced. This device's own data is never staged in here at all (see PulledRecordEntity's own
+// doc): MuleRepository.pushToServer builds this device's own self-push payload fresh from its
+// real HistoryLineEntity rows on every attempt instead, so there's never a second, driftable
+// copy of it to keep in sync. Grouped by race label AND sourceDeviceId: a single physical phone
+// that's run both Time and Bibs mode for the same race label still shows as one combined
+// source, like a local race's own history does — but two genuinely different phones that
+// happen to share a race label (e.g. a Time phone and a Bibs
+// phone both working the same physical race under the same name/course/date) show as two
+// separate sources, each under its own device's name. Records pulled from different devices
+// must never be merged into one source just because they share a race label.
 data class PulledSourceSummary(
     val sourceRaceLabel: String,
     val sourceDeviceId: String,
@@ -28,11 +29,12 @@ data class PulledSourceSummary(
     val lastPulledAtMillis: Long,
 )
 
-// sourceRaceLabel here spans every device that's ever contributed to it (self included), unlike
-// PulledSourceSummary above (one row per source device) — this mirrors exactly how
-// MuleRepository.pushToServer's own `all.groupBy { it.sourceRaceLabel }` decides whether a
-// label is still worth checking against the server, so Race History can show that same
-// "skipped as too old" state.
+// One row per distinct race label this Mule has ever pulled a genuinely different device's data
+// for — mirrors exactly how MuleRepository.pushToServer's own staleness check decides whether a
+// pulled-from-others race label is still worth checking against the server, so Race History can
+// show that same "skipped as too old" state for a Mule source. A local race's own staleness
+// uses a separate signal instead (HistoryLineDao.observeLastActivityAtMillis) — its own history
+// is real data with its own timestamps, not something this table has any visibility into.
 data class RaceLabelActivity(val sourceRaceLabel: String, val lastTouchedAtMillis: Long)
 
 @Dao
@@ -43,13 +45,9 @@ interface PulledRecordDao {
     suspend fun insertAll(records: List<PulledRecordEntity>)
 
     // Once pulled, a record sticks around until either synced-and-forgotten-about or
-    // explicitly deleted via deleteForSource (see that query's own doc) — so absent an
-    // operator deletion, this is a genuine running history across every race Mule has ever
-    // visited, not just the current one. Excludes :myDeviceId's own rows
-    // (MuleSyncEngine.pullSelfRecords tags them with this device's own id purely so
-    // push-to-server can treat "self" as a sync candidate like any other device) — without
-    // this filter, every local race would also show up a second time here as a
-    // confusingly-duplicated "From Mule" entry.
+    // explicitly deleted via deleteForSource (see that query's own doc) — so this is a genuine
+    // running history across every other device's race Mule has ever visited, not just the
+    // current one.
     @Query(
         """
         SELECT sourceRaceLabel,
@@ -59,12 +57,11 @@ interface PulledRecordDao {
                 WHERE p2.sourceRaceLabel = p.sourceRaceLabel AND p2.sourceDeviceId = p.sourceDeviceId
                 ORDER BY p2.pulledAtMillis DESC LIMIT 1) AS deviceName
         FROM pulled_records p
-        WHERE sourceDeviceId != :myDeviceId
         GROUP BY sourceRaceLabel, sourceDeviceId
         ORDER BY lastPulledAtMillis DESC
         """,
     )
-    fun observeSourceSummaries(myDeviceId: String): Flow<List<PulledSourceSummary>>
+    fun observeSourceSummaries(): Flow<List<PulledSourceSummary>>
 
     // Scoped to one specific device's rows (the sourceDeviceId a PulledSourceSummary above
     // named), not just the race label — a race label alone can be shared by more than one
@@ -105,37 +102,19 @@ interface PulledRecordDao {
     @Query("SELECT MAX(lineNumber) FROM pulled_records WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel")
     suspend fun getLastPulledLineNumber(sourceDeviceId: String, sourceRaceLabel: String): Long?
 
-    // Re-homes every one of this device's own self-pulled rows (see
-    // MuleSyncEngine.pullSelfRecords) from a race's old label to its new one after a rename
-    // (see RaceRepository.updateRaceDetails) — sourceRaceLabel is otherwise frozen forever at
-    // pull time, so without this a renamed race's history stays permanently split across two
-    // label groups: everything pulled before the rename under the old label, everything after
-    // under the new one. pushToServer groups by sourceRaceLabel and only ever pushes what a
-    // fresh server status check says that *specific* label is still missing — since the new
-    // label has never been seen by the server, retagging every row (already-synced ones
-    // included) onto it is what makes the next push send this race's *complete* history under
-    // its current name, rather than only whatever's new since the rename.
-    @Query("UPDATE pulled_records SET sourceRaceLabel = :newLabel WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :oldLabel")
-    suspend fun retagSourceRaceLabel(sourceDeviceId: String, oldLabel: String, newLabel: String)
-
-    // Unlike a local race (a device's own recorded history, and the only copy of it — see
-    // RaceRepository.deleteRace's own doc for why that one is guarded against an active race),
-    // a Mule source is purely a relayed copy: the real ground truth still lives on the
-    // originating device. Deleting it here is always safe to offer, at any time, including
-    // mid-race — getLastPulledLineNumber falls back to "nothing pulled yet" for this
-    // (sourceDeviceId, sourceRaceLabel) pair the moment its rows are gone, so if that device is
-    // still around, the very next pull just re-requests its entire history from scratch rather
-    // than a delta. Deleting a source with rows that were pulled but never yet pushed to the
-    // server does lose that data for good if the source device is no longer reachable (out of
-    // range, powered off, race already over) — an operator's call to make, not something this
-    // query second-guesses.
+    // Purely a relayed copy of a genuinely different device's data — the real ground truth
+    // still lives on the originating device. Deleting it here is always safe to offer, at any
+    // time, including mid-race — getLastPulledLineNumber falls back to "nothing pulled yet" for
+    // this (sourceDeviceId, sourceRaceLabel) pair the moment its rows are gone, so if that
+    // device is still around, the very next pull just re-requests its entire history from
+    // scratch rather than a delta. Deleting a source with rows that were pulled but never yet
+    // pushed to the server does lose that data for good if the source device is no longer
+    // reachable (out of range, powered off, race already over) — an operator's call to make,
+    // not something this query second-guesses.
     @Query("DELETE FROM pulled_records WHERE sourceRaceLabel = :sourceRaceLabel AND sourceDeviceId = :sourceDeviceId")
     suspend fun deleteForSource(sourceRaceLabel: String, sourceDeviceId: String)
 
-    // See RaceLabelActivity's own doc for why this is grouped by race label alone, spanning
-    // every contributing device (self included) — not scoped to :myDeviceId like
-    // observeSourceSummaries above, since a local race's own self-pulled rows are exactly what
-    // this needs to consider too.
+    // See RaceLabelActivity's own doc.
     @Query("SELECT sourceRaceLabel, MAX(pulledAtMillis) AS lastTouchedAtMillis FROM pulled_records GROUP BY sourceRaceLabel")
     fun observeLastTouchedByRaceLabel(): Flow<List<RaceLabelActivity>>
 }

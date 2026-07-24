@@ -62,9 +62,19 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
             NavHost(navController = navController, startDestination = Routes.MODE_PICKER, modifier = modifier) {
                 composable(Routes.MODE_PICKER) {
                     LaunchedEffect(Unit) {
-                        if (!hasAutoForwarded && state.mode != null) {
+                        // The one-shot opportunity is spent the first time this runs at all —
+                        // not only when state.mode happened to be non-null that first time.
+                        // On a genuinely fresh install (no mode ever selected yet), the very
+                        // first composition sees state.mode == null; setting the flag only
+                        // inside the navigate branch left it unconsumed, so the *next* time
+                        // Mode Picker was reached (e.g. pressing "Mode" from Time/Bibs Mode
+                        // after the operator had since picked one) this fired for the first
+                        // time then instead, immediately forwarding right back into the mode
+                        // just being left — needing a second press to actually land here
+                        // (confirmed in the field, fresh-install only).
+                        if (!hasAutoForwarded) {
                             hasAutoForwarded = true
-                            navController.navigate(state.mode.toRoute())
+                            state.mode?.let { navController.navigate(it.toRoute()) }
                         }
                     }
                     ModePickerScreen(

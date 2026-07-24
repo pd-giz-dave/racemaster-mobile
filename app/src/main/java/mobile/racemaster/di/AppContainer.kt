@@ -46,7 +46,6 @@ class DefaultAppContainer(context: Context) : AppContainer {
             database.raceDao(),
             database.historyLineDao(),
             database.lineSyncDao(),
-            database.pulledRecordDao(),
             settingsRepository,
             bibsModeRepository,
         )
