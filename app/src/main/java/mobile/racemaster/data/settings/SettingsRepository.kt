@@ -41,6 +41,7 @@ class SettingsRepository(
         val DRAFT_PASSWORD = stringPreferencesKey("draft_password")
         val RACE_NAME_HISTORY = stringPreferencesKey("race_name_history")
         val COURSE_HISTORY = stringPreferencesKey("course_history")
+        val LOCATION_HISTORY = stringPreferencesKey("location_history")
         val SERVER_CREDENTIAL_HISTORY = stringPreferencesKey("server_credential_history")
         val SERVER_SYNC_MAX_AGE_DAYS = intPreferencesKey("server_sync_max_age_days")
     }
@@ -197,6 +198,13 @@ class SettingsRepository(
     val courseHistory: Flow<List<String>> = stringHistoryFlow(Keys.COURSE_HISTORY)
 
     suspend fun addCourseToHistory(course: String) = addToStringHistory(Keys.COURSE_HISTORY, course)
+
+    // Every location ever saved from the Race Details form, most-recent-first — same
+    // independent-field behavior as raceNameHistory/courseHistory above: picking one only
+    // ever fills the location field itself.
+    val locationHistory: Flow<List<String>> = stringHistoryFlow(Keys.LOCATION_HISTORY)
+
+    suspend fun addLocationToHistory(location: String) = addToStringHistory(Keys.LOCATION_HISTORY, location)
 
     private fun stringHistoryFlow(key: Preferences.Key<String>): Flow<List<String>> =
         dataStore.data.map { prefs -> decodeList(prefs[key]) }

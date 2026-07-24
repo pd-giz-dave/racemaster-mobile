@@ -129,9 +129,43 @@ class RaceRepositoryTest {
         // device's own data onto the new label), MuleRepository.pushToServer now reads this
         // race's own current label fresh from RaceEntity every attempt — a rename just takes
         // effect on the very next push, nothing else needs updating.
-        repository.updateRaceDetails(raceId, name = "Renamed", course = "Course", bibsRangeStart = null, bibsRangeCount = null)
+        repository.updateRaceDetails(raceId, name = "Renamed", course = "Course", location = "Finish", bibsRangeStart = null, bibsRangeCount = null)
 
         assertEquals(buildRaceLabel("Renamed", "Course", 0L), repository.getRace(raceId)?.label)
+    }
+
+    // location — see RaceEntity.location's own doc. Not part of the label (unlike name/course),
+    // so it's the one field here that both persists and can be edited freely without touching
+    // buildRaceLabel at all.
+
+    @Test
+    fun startNewRacePersistsTheGivenLocation() = runTest {
+        val newRaceId = repository.startNewRace(name = "Other Race", course = "Course", location = "Start", createdAtMillis = 0L)
+
+        assertEquals("Start", repository.getRace(newRaceId)?.location)
+    }
+
+    @Test
+    fun startNewRaceDefaultsLocationToFinish() = runTest {
+        val newRaceId = repository.startNewRace(name = "Other Race", course = "Course", createdAtMillis = 0L)
+
+        assertEquals("Finish", repository.getRace(newRaceId)?.location)
+    }
+
+    @Test
+    fun updateRaceDetailsChangesLocationWithoutAffectingTheLabel() = runTest {
+        // "Test Race"/"" (see setUp) wasn't produced by buildRaceLabel in the first place, so
+        // this establishes a stable buildRaceLabel-derived label first, then changes only
+        // location — the label recomputed from the *same* name/course a second time must come
+        // out identical, proving location plays no part in it.
+        repository.updateRaceDetails(raceId, name = "Same", course = "Course", location = "Finish", bibsRangeStart = null, bibsRangeCount = null)
+        val stableLabel = requireNotNull(repository.getRace(raceId)?.label)
+
+        repository.updateRaceDetails(raceId, name = "Same", course = "Course", location = "Checkpoint 2", bibsRangeStart = null, bibsRangeCount = null)
+
+        val updated = repository.getRace(raceId)
+        assertEquals("Checkpoint 2", updated?.location)
+        assertEquals(stableLabel, updated?.label)
     }
 
     // deleteRace — irreversible, gated behind RaceHistoryScreen's own confirmation dialog.

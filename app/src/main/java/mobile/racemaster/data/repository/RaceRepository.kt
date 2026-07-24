@@ -23,6 +23,7 @@ class RaceRepository(
     suspend fun startNewRace(
         name: String,
         course: String,
+        location: String = "Finish",
         createdAtMillis: Long = System.currentTimeMillis(),
         deviceRole: String? = null,
         serverUrl: String? = null,
@@ -33,6 +34,7 @@ class RaceRepository(
             RaceEntity(
                 name = name,
                 course = course,
+                location = location,
                 label = buildRaceLabel(name, course, createdAtMillis),
                 createdAtMillis = createdAtMillis,
                 deviceRole = deviceRole,
@@ -51,17 +53,20 @@ class RaceRepository(
     // RaceDao.updateDetails). No Mule-inbox retagging needed on a rename (there used to be one
     // here) — MuleRepository.pushToServer now reads this race's own current label fresh from
     // RaceEntity on every attempt rather than tracking a separately-labeled mirrored copy, so a
-    // rename just takes effect on the very next push with nothing else to keep in sync.
+    // rename just takes effect on the very next push with nothing else to keep in sync. location
+    // is deliberately NOT part of the label (see RaceEntity.location's own doc) — a change here
+    // just takes effect the same way, on the next record this device pushes.
     suspend fun updateRaceDetails(
         raceId: Long,
         name: String,
         course: String,
+        location: String,
         bibsRangeStart: Int?,
         bibsRangeCount: Int?,
     ) {
         val race = raceDao.getById(raceId) ?: return
         val label = buildRaceLabel(name, course, race.createdAtMillis)
-        raceDao.updateDetails(raceId, name, course, label, bibsRangeStart, bibsRangeCount)
+        raceDao.updateDetails(raceId, name, course, location, label, bibsRangeStart, bibsRangeCount)
     }
 
     fun observeRace(id: Long): Flow<RaceEntity?> = raceDao.observeById(id)

@@ -58,6 +58,7 @@ fun RaceDetailsScreen(
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     val raceNameHistory by viewModel.raceNameHistory.collectAsStateWithLifecycle()
     val courseHistory by viewModel.courseHistory.collectAsStateWithLifecycle()
+    val locationHistory by viewModel.locationHistory.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     // The on-screen keyboard has no physical Tab key, and without an explicit ImeAction.Next
     // + KeyboardActions.onNext every field here defaults to a plain "Done" action that just
@@ -72,6 +73,10 @@ fun RaceDetailsScreen(
 
     var name by remember { mutableStateOf("") }
     var course by remember { mutableStateOf("") }
+    // "Finish" out of the box for a new race (most stations recording a race are at the
+    // finish line) — an existing race's own saved value overrides this below, same as
+    // name/course's own (blank) defaults get overridden once the real race loads.
+    var location by remember { mutableStateOf("Finish") }
     var startText by remember { mutableStateOf("") }
     var countText by remember { mutableStateOf("") }
     // Pre-fill exactly once from the loaded race, when editing — later emissions (e.g. a
@@ -84,6 +89,7 @@ fun RaceDetailsScreen(
         if (prefilled) return@LaunchedEffect
         name = race.name
         course = race.course
+        location = race.location
         race.bibsRangeStart?.let { startText = it.toString() }
         race.bibsRangeCount?.let { countText = it.toString() }
         prefilled = true
@@ -109,7 +115,7 @@ fun RaceDetailsScreen(
     val rangeEnd = if (start != null && count != null) start + count - 1 else null
     val countFieldsValid = !showRunnerFields || !countFieldsEnabled ||
         (start != null && start in MIN_BIB_NUMBER..MAX_BIB_NUMBER && count != null && count >= 1 && rangeEnd != null && rangeEnd <= MAX_BIB_NUMBER)
-    val canSave = prefilled && !isSaving && name.isNotBlank() && course.isNotBlank() && countFieldsValid
+    val canSave = prefilled && !isSaving && name.isNotBlank() && course.isNotBlank() && location.isNotBlank() && countFieldsValid
 
     Scaffold(
         topBar = {
@@ -143,7 +149,7 @@ fun RaceDetailsScreen(
                 .imePadding()
                 .verticalScroll(scrollState)
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             if (!deviceName.isNullOrBlank()) {
                 Text("Device name: $deviceName", style = MaterialTheme.typography.labelMedium)
@@ -168,8 +174,20 @@ fun RaceDetailsScreen(
                 // Same independent-field behavior as the Race name field above — picking a
                 // previous course only ever fills this field.
                 history = courseHistory,
+                // Always followed by Location, so always "Next" — see nextFieldAction's own doc.
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                keyboardActions = nextFieldAction,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            HistoryTextField(
+                value = location,
+                onValueChange = { location = it },
+                label = "Location (e.g. Finish, CP1, CP2, et al)",
+                // Same independent-field behavior as Race name/Course above — picking a
+                // previous location only ever fills this field.
+                history = locationHistory,
                 // The last field gets "Done" (dismisses the keyboard); every other field gets
-                // "Next" — Course is last exactly when the runner fields aren't shown.
+                // "Next" — Location is last exactly when the runner fields aren't shown.
                 keyboardOptions = KeyboardOptions(imeAction = if (showRunnerFields) ImeAction.Next else ImeAction.Done),
                 keyboardActions = if (showRunnerFields) nextFieldAction else KeyboardActions(onDone = { focusManager.clearFocus() }),
                 modifier = Modifier.fillMaxWidth(),
@@ -222,7 +240,7 @@ fun RaceDetailsScreen(
                 onClick = withClickSound {
                     isSaving = true
                     scope.launch {
-                        val raceId = viewModel.save(name, course, start, count)
+                        val raceId = viewModel.save(name, course, location, start, count)
                         onSaved(raceId)
                     }
                 },

@@ -17,6 +17,7 @@ done
 - [ ] treat 404 as an expected response when ping'ing or post/put a server that is not a race master server
       and just invalidate the server (with app header feedback), put keep re-trying
 - [ ] Update readme.md and structure.md
+- [ ] add a location name field to race details, default is "Finish"
 
 ## Bugs
 
@@ -31,6 +32,3 @@ done
   peripheral and the browser the central, with an unavoidable manual "Connect" click) or a
   separate small receiver app writing a file for later import (racemaster's own `ToDo.MD`
   already lists CSV import as planned separately, so this could piggyback on that)
-- [ ] Add CP mode (checkpoint) like BIBS mode but has a CP name, also logs time as well as bib 
-  (2-in-1), time not so critical at CP but useful for runners to compare, also needs a 
-  Racemaster tweak to show CP times in results, also logs location (via GPS)

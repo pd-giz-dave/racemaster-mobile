@@ -60,7 +60,6 @@ fun ModePickerScreen(
     // pressing back here is the one place that would otherwise exit the app outright —
     // worth a confirmation rather than a stray tap closing everything.
     var showExitConfirm by remember { mutableStateOf(false) }
-    var showCpModeInfo by remember { mutableStateOf(false) }
     val activity = LocalActivity.current
     BackHandler { showExitConfirm = true }
 
@@ -86,7 +85,6 @@ fun ModePickerScreen(
         ModeButton("Time Mode") { handleModeTap(AppMode.TIME) }
         ModeButton("Bibs Mode") { handleModeTap(AppMode.BIBS) }
         ModeButton("Mule Mode") { handleModeTap(AppMode.MULE) }
-        ModeButton("CP Mode (coming soon)") { showCpModeInfo = true }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = withClickSound(onReviewPastRaces),
@@ -124,22 +122,6 @@ fun ModePickerScreen(
             },
             dismissButton = {
                 TextButton(onClick = withClickSound { showExitConfirm = false }) { Text("Cancel") }
-            },
-        )
-    }
-
-    if (showCpModeInfo) {
-        AlertDialog(
-            onDismissRequest = { showCpModeInfo = false },
-            title = { Text("CP Mode") },
-            text = {
-                Text(
-                    "CP Mode is for use at checkpoints, to record the passing of runners at " +
-                        "that checkpoint. This mode is coming soon.",
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = withClickSound { showCpModeInfo = false }) { Text("OK") }
             },
         )
     }

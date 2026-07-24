@@ -128,7 +128,7 @@ private fun TimeModeContent(
     BoxWithConstraints(modifier = modifier) {
         val minListHeight = 140.dp
         val headerMaxHeight = (maxHeight - minListHeight).coerceAtLeast(0.dp)
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             // Tracks which single split (if any) is showing its label editor. The editor is
             // pinned above the list — not inline in the row being edited — for two reasons:
             // it stays put (and visible) even as new splits get added above where that row
@@ -158,12 +158,13 @@ private fun TimeModeContent(
                 } else {
                     Modifier.verticalScroll(headerScrollState)
                 },
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 if (!deviceName.isNullOrBlank()) {
                     Text(text = "Device name: $deviceName", style = MaterialTheme.typography.labelMedium)
                 }
                 Text(text = "Race name: ${uiState.raceLabel}", style = MaterialTheme.typography.labelMedium)
+                Text(text = "Location: ${uiState.raceLocation}", style = MaterialTheme.typography.labelMedium)
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
                         text = "Next: ${formatSplitRef(uiState.nextSplitNumber)}",

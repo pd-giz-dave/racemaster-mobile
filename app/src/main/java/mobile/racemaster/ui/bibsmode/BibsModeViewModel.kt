@@ -54,6 +54,7 @@ data class BibEntryUi(
 data class BibsModeUiState(
     val raceId: Long? = null,
     val raceLabel: String = "",
+    val raceLocation: String = "",
     // Whether this segment's Clock marker (split #0) has been logged yet — false for a fresh
     // race, a race just switched into from a different mode, or one just Reset, in which case
     // the screen shows a Start button instead of the entry keypad/list (see BibsModeScreen).
@@ -136,6 +137,7 @@ class BibsModeViewModel(
         BibsModeUiState(
             raceId = race?.id,
             raceLabel = race?.label.orEmpty(),
+            raceLocation = race?.location.orEmpty(),
             started = entries.isNotEmpty(),
             currentDigits = digits,
             pendingEventType = pendingType,

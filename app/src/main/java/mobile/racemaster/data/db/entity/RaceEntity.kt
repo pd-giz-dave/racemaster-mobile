@@ -10,6 +10,15 @@ data class RaceEntity(
     // details can be re-edited later without having to parse them back out of it.
     val name: String = "",
     val course: String = "",
+    // Which physical point on the course this device's own records represent (e.g. "Finish",
+    // "Start", "Checkpoint 2") — lets more than one device contribute different stations'
+    // worth of data for what's otherwise the same race. Not part of `label`: two devices
+    // stationed differently for the same physical race must still land under the one shared
+    // server-side race folder, not be split into separate ones just because of where they're
+    // standing. Carried on every outgoing SyncRecord instead (see SyncRecordMapping's own
+    // doc) — the wire protocol has no separate per-race metadata channel to send it through
+    // just once.
+    val location: String = "Finish",
     val label: String,
     val createdAtMillis: Long,
     val timeModeNextSplit: Int = 1,

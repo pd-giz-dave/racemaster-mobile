@@ -175,7 +175,7 @@ private fun BibsModeContent(
     BoxWithConstraints(modifier = modifier) {
         val minListHeight = 140.dp
         val headerMaxHeight = (maxHeight - minListHeight).coerceAtLeast(0.dp)
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             var editingEntryId by remember { mutableStateOf<Long?>(null) }
             val editingEntry = uiState.entries.firstOrNull { it.id == editingEntryId }
             var showEventPicker by remember { mutableStateOf(false) }
@@ -210,12 +210,13 @@ private fun BibsModeContent(
                 // just stays its natural size, so the list gets whatever's left over exactly
                 // as before.
                 modifier = Modifier.heightIn(max = headerMaxHeight).verticalScroll(headerScrollState),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 if (!deviceName.isNullOrBlank()) {
                     Text(text = "Device name: $deviceName", style = MaterialTheme.typography.labelMedium)
                 }
                 Text(text = "Race name: ${uiState.raceLabel}", style = MaterialTheme.typography.labelMedium)
+                Text(text = "Location: ${uiState.raceLocation}", style = MaterialTheme.typography.labelMedium)
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
                         text = "Next: ${formatSplitRef(uiState.nextSplitNumber)}",

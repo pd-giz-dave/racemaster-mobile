@@ -251,7 +251,7 @@ class MuleRepository(
             // despite the server genuinely having the data).
             val selfRecords = if (localRace != null) {
                 raceRepository.getHistorySinceLineNumber(localRace.id, 0L)
-                    .map { it.toSyncRecord(localRace.timeModeStartedAtMillis) }
+                    .map { it.toSyncRecord(localRace.timeModeStartedAtMillis, location = localRace.location) }
             } else {
                 emptyList()
             }

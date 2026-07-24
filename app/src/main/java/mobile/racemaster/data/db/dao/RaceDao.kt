@@ -86,13 +86,14 @@ interface RaceDao {
     // serverUrl is deliberately NOT touched here — it's not exposed on this screen (it'll
     // live under Mule Mode setup eventually), so an edit here must never clobber it.
     @Query(
-        "UPDATE races SET name = :name, course = :course, label = :label, " +
+        "UPDATE races SET name = :name, course = :course, location = :location, label = :label, " +
             "bibsRangeStart = :bibsRangeStart, bibsRangeCount = :bibsRangeCount WHERE id = :raceId",
     )
     suspend fun updateDetails(
         raceId: Long,
         name: String,
         course: String,
+        location: String,
         label: String,
         bibsRangeStart: Int?,
         bibsRangeCount: Int?,

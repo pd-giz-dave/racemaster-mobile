@@ -37,6 +37,7 @@ data class FinishSplitUi(
 data class TimeModeUiState(
     val raceId: Long? = null,
     val raceLabel: String = "",
+    val raceLocation: String = "",
     val stopwatchStarted: Boolean = false,
     val stopwatchStopped: Boolean = false,
     val liveElapsedMillis: Long = 0L,
@@ -96,6 +97,7 @@ class TimeModeViewModel(
                     TimeModeUiState(
                         raceId = raceId,
                         raceLabel = race?.label.orEmpty(),
+                        raceLocation = race?.location.orEmpty(),
                         stopwatchStarted = startedAt != null,
                         stopwatchStopped = stoppedAt != null,
                         liveElapsedMillis = liveElapsed,

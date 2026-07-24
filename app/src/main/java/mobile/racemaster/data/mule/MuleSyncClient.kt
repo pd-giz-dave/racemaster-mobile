@@ -13,6 +13,9 @@ import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import java.net.URLEncoder
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -22,6 +25,39 @@ data class LoginRequest(val username: String, val password: String)
 @Serializable
 data class LoginResponse(val token: String, val username: String, val isAdmin: Boolean)
 
+// Identical to SyncRecord except timestampMillis is formatted as "yyyy/MM/dd HH:mm:ss" (the
+// device's own local time) rather than sent as a raw epoch value — purely a server-side
+// display convenience, requested once the server started surfacing this field to humans. The
+// BLE wire (SyncRecord itself, between phones/mules) keeps the raw Long: an unambiguous
+// instant every device can safely reconstruct elapsed times from, which a formatted string
+// isn't (especially once devices in different time zones are involved).
+@Serializable
+private data class ServerSyncRecord(
+    val recordUuid: String,
+    val action: String,
+    val bibNumber: String?,
+    val splitTime: String?,
+    val location: String,
+    val splitNumber: Int?,
+    val lineNumber: Long,
+    val refLineNumber: Long? = null,
+    val note: String?,
+    val timestampMillis: String,
+)
+
+private fun SyncRecord.toServerSyncRecord() = ServerSyncRecord(
+    recordUuid = recordUuid,
+    action = action,
+    bibNumber = bibNumber,
+    splitTime = splitTime,
+    location = location,
+    splitNumber = splitNumber,
+    lineNumber = lineNumber,
+    refLineNumber = refLineNumber,
+    note = note,
+    timestampMillis = SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.getDefault()).format(Date(timestampMillis)),
+)
+
 // Body for POST .../mobile — one flat, chronological line array per device (deviceName ->
 // lines), mirroring the server's own one-JSON-file-per-device storage exactly. A single
 // request can still carry more than one device's lines at once (a Mule pushing data pulled
@@ -30,8 +66,8 @@ data class LoginResponse(val token: String, val username: String, val isAdmin: B
 // list (lineLabel's B/T prefix already carries it) and device no longer needs repeating per
 // line (this map's key already does).
 @Serializable
-data class MobileSyncPayload(
-    val devices: Map<String, List<SyncRecord>>,
+private data class MobileSyncPayload(
+    val devices: Map<String, List<ServerSyncRecord>>,
 )
 
 // Only `added` is ever actually read (see MuleRepository.pushToServer) — the rest of what the
@@ -113,7 +149,7 @@ class MuleSyncClient {
         client.post("${baseUrl.trimEnd('/')}/api/mobile/${encodePathSegment(raceLabel)}") {
             bearerAuth(token)
             contentType(ContentType.Application.Json)
-            setBody(MobileSyncPayload(devices))
+            setBody(MobileSyncPayload(devices.mapValues { (_, records) -> records.map { it.toServerSyncRecord() } }))
         }.body()
 
     fun close() {

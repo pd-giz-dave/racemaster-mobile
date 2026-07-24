@@ -89,6 +89,23 @@ class SyncRecordMappingTest {
     }
 
     @Test
+    fun locationIsStampedOntoEveryRecordRegardlessOfMode() {
+        // Constant for the whole race, repeated on every line — see SyncRecord's own doc for
+        // why there's no separate once-per-race channel to send it through instead.
+        val splitRecord = split(splitNumber = 1, timestampMillis = 0L).toSyncRecord(0L, location = "Checkpoint 2")
+        assertEquals("Checkpoint 2", splitRecord.location)
+
+        val bibRecord = bibEntry(101, HistoryAction.FINISH, splitNumber = 1, timestampMillis = 0L).toSyncRecord(null, location = "Start")
+        assertEquals("Start", bibRecord.location)
+    }
+
+    @Test
+    fun locationDefaultsToFinishWhenNotSpecified() {
+        val record = split(splitNumber = 1, timestampMillis = 0L).toSyncRecord(0L)
+        assertEquals("Finish", record.location)
+    }
+
+    @Test
     fun clockMarkersMapToTheirOwnHonestActionsNotHardcodedFinish() {
         // Previously every Time row hardcoded action = "Finish" regardless of whether it was
         // really a Start/Stop/Reset/Undo marker — the real type only ever reached `note`. Now
@@ -215,15 +232,15 @@ class SyncRecordMappingTest {
         // A Time split is sent as its own honest "Split" (see toServerAction's own doc), so
         // "Finish" on the wire now means exactly one thing — a genuine Bibs Finish — regardless
         // of whether `splitTime` happens to be set.
-        assertEquals(HistoryAction.SPLIT, SyncRecord(recordUuid = "u", action = "Split", bibNumber = null, splitTime = "00:00:00.00", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
-        assertEquals(HistoryAction.FINISH, SyncRecord(recordUuid = "u", action = "Finish", bibNumber = "101", splitTime = null, splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
+        assertEquals(HistoryAction.SPLIT, SyncRecord(recordUuid = "u", action = "Split", bibNumber = null, splitTime = "00:00:00.00", location = "Finish", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
+        assertEquals(HistoryAction.FINISH, SyncRecord(recordUuid = "u", action = "Finish", bibNumber = "101", splitTime = null, location = "Finish", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
     }
 
     @Test
     fun unrecognizedWireActionFallsBackToIgnoreRatherThanThrowing() {
         assertEquals(
             HistoryAction.IGNORE,
-            SyncRecord(recordUuid = "u", action = "SomeFutureAction", bibNumber = null, splitTime = null, splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction(),
+            SyncRecord(recordUuid = "u", action = "SomeFutureAction", bibNumber = null, splitTime = null, location = "Finish", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction(),
         )
     }
 }

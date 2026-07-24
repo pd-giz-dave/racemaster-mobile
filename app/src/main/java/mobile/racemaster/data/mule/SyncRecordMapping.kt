@@ -14,11 +14,13 @@ import mobile.racemaster.data.db.entity.HistoryMode
  * on `timestampMillis`, the raw wall-clock instant the record was created. `bibNumber` is the
  * mirror image — see [SyncRecord]'s own doc for why every Bibs row sends a non-null string
  * (the bib itself, or `"n/a"` for an action with no bib of its own) while a Time row always
- * sends null. No device name is attached here — the caller already knows (and separately
- * threads through) which device this batch of records belongs to; see [SyncRecord]'s own doc
- * for why that's not repeated per line.
+ * sends null. [location] is the race's own `RaceEntity.location`, stamped onto every record the
+ * same way regardless of mode — see [SyncRecord]'s own doc for why it's repeated per line
+ * rather than sent once. No device name is attached here — the caller already knows (and
+ * separately threads through) which device this batch of records belongs to; see [SyncRecord]'s
+ * own doc for why that's not repeated per line either.
  */
-fun HistoryLineEntity.toSyncRecord(raceStartedAtMillis: Long?): SyncRecord {
+fun HistoryLineEntity.toSyncRecord(raceStartedAtMillis: Long?, location: String = "Finish"): SyncRecord {
     val splitTime = if (mode == HistoryMode.TIME) {
         val elapsedMillis = raceStartedAtMillis?.let { timestampMillis - it } ?: 0L
         formatElapsedAsClock(elapsedMillis)
@@ -31,6 +33,7 @@ fun HistoryLineEntity.toSyncRecord(raceStartedAtMillis: Long?): SyncRecord {
         action = action.toServerAction(),
         bibNumber = wireBibNumber,
         splitTime = splitTime,
+        location = location,
         splitNumber = splitNumber,
         lineNumber = lineNumber,
         refLineNumber = refLineNumber,

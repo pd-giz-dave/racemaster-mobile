@@ -422,7 +422,7 @@ class PeripheralSyncService : Service() {
         // whichever category matched the currently displayed screen.
         val race = container.raceRepository.getRace(raceId)
         val records = container.raceRepository.getHistorySinceLineNumber(raceId, sinceLineNumber)
-            .map { it.toSyncRecord(race?.timeModeStartedAtMillis) }
+            .map { it.toSyncRecord(race?.timeModeStartedAtMillis, location = race?.location ?: "Finish") }
         // ATT header is 3 bytes, so the usable notification payload is (MTU - 3). Sizing to
         // whatever actually got negotiated (see onMtuChanged) is what fixed real truncation
         // corruption in the field: a fixed chunk size larger than the un-negotiated default
