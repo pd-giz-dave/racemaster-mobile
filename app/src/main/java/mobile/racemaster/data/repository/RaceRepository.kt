@@ -6,6 +6,7 @@ import mobile.racemaster.data.db.dao.RaceDao
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.LineSyncEntity
 import mobile.racemaster.data.db.entity.RaceEntity
+import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -110,6 +111,29 @@ class RaceRepository(
     // Resolves a race label back to this device's own local race — see
     // MuleRepository.pushToServer's own self-push path.
     suspend fun getRaceByLabel(label: String): RaceEntity? = raceDao.getByLabel(label)
+
+    // Bibs and CP are mutually exclusive for the same race — both are alternate ways of
+    // logging the same physical station, so switching from one to the other while it still
+    // holds live, un-reset activity would leave both writing independently into what's meant
+    // to be one station's log. Requires the *other* of the two to be Stopped AND Reset first —
+    // merely Stopped isn't enough, same "still counts as active" reasoning as [isRaceActive]
+    // (cpModeStartedAtMillis/bibsHasRealEntries only clear on Reset, not on Stop). Every other
+    // switch (into or out of Time/Mule, or re-selecting the same mode) is always allowed.
+    // Returns null when the switch is fine, or a message to show the operator when it isn't.
+    // Called from ModePickerViewModel.selectModeForExistingRace, the one place a mode switch
+    // for an already-active race actually happens.
+    suspend fun blockedModeSwitchReason(raceId: Long, targetMode: AppMode): String? {
+        if (targetMode != AppMode.BIBS && targetMode != AppMode.CP) return null
+        val race = raceDao.getById(raceId) ?: return null
+        if (targetMode == AppMode.BIBS && race.cpModeStartedAtMillis != null) {
+            return "CP Mode still has an active race — Stop and Reset it before switching to Bibs Mode."
+        }
+        if (targetMode == AppMode.CP) {
+            val bibsActive = bibsModeRepository.observeCurrentSegmentEntries(raceId).first().hasRealEntries()
+            if (bibsActive) return "Bibs Mode still has an active race — Stop and Reset it before switching to CP Mode."
+        }
+        return null
+    }
 
     // Cross-mode facade: the only two places that need to see a race's Time AND Bibs rows
     // together, rather than through TimeModeRepository/BibsModeRepository's per-mode views.

@@ -12,6 +12,7 @@ import mobile.racemaster.data.db.entity.LineSyncEntity
 import mobile.racemaster.data.db.entity.PulledRecordEntity
 import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.db.entity.SERVER_TARGET_ID
+import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -298,5 +299,90 @@ class RaceRepositoryTest {
         repository.deleteRace(raceId)
 
         assertEquals(otherRaceId, settingsRepository.activeRaceId.first())
+    }
+
+    // blockedModeSwitchReason — Bibs and CP are mutually exclusive for the same race; see the
+    // function's own doc for why (both are alternate ways of logging the same station).
+
+    @Test
+    fun blockedModeSwitchReasonAllowsSwitchingToBibsWhenCpWasNeverStarted() = runTest {
+        assertNull(repository.blockedModeSwitchReason(raceId, AppMode.BIBS))
+    }
+
+    @Test
+    fun blockedModeSwitchReasonAllowsSwitchingToCpWhenBibsHasNoRealEntries() = runTest {
+        // A fixed Clock marker alone (no real activity) must not count as "active" — same
+        // hasRealEntries() rule isRaceActive itself relies on.
+        db.historyLineDao().insert(
+            HistoryLineEntity(raceId = raceId, mode = HistoryMode.BIBS, action = HistoryAction.CLOCK, splitNumber = 0, lineNumber = 1L, timestampMillis = 0L),
+        )
+
+        assertNull(repository.blockedModeSwitchReason(raceId, AppMode.CP))
+    }
+
+    @Test
+    fun blockedModeSwitchReasonRefusesSwitchingToBibsWhileCpIsStarted() = runTest {
+        db.raceDao().setCpModeStartedAt(raceId, 1_000L)
+
+        assertEquals(
+            "CP Mode still has an active race — Stop and Reset it before switching to Bibs Mode.",
+            repository.blockedModeSwitchReason(raceId, AppMode.BIBS),
+        )
+    }
+
+    @Test
+    fun blockedModeSwitchReasonRefusesSwitchingToBibsWhileCpIsStoppedButNotReset() = runTest {
+        // Stopping alone must not clear CP's active status — only Reset (which clears
+        // cpModeStartedAtMillis) does, same reasoning as isRaceActive.
+        db.raceDao().setCpModeStartedAt(raceId, 1_000L)
+        db.raceDao().setCpModeStoppedAt(raceId, 2_000L)
+
+        assertEquals(
+            "CP Mode still has an active race — Stop and Reset it before switching to Bibs Mode.",
+            repository.blockedModeSwitchReason(raceId, AppMode.BIBS),
+        )
+    }
+
+    @Test
+    fun blockedModeSwitchReasonAllowsSwitchingToBibsOnceCpHasBeenStoppedAndReset() = runTest {
+        db.raceDao().setCpModeStartedAt(raceId, 1_000L)
+        db.raceDao().setCpModeStoppedAt(raceId, 2_000L)
+        db.raceDao().resetCpMode(raceId)
+
+        assertNull(repository.blockedModeSwitchReason(raceId, AppMode.BIBS))
+    }
+
+    @Test
+    fun blockedModeSwitchReasonRefusesSwitchingToCpWhileBibsHasRealEntries() = runTest {
+        db.historyLineDao().insert(
+            HistoryLineEntity(raceId = raceId, mode = HistoryMode.BIBS, action = HistoryAction.FINISH, bibNumber = 101, splitNumber = 1, lineNumber = 1L, timestampMillis = 0L),
+        )
+
+        assertEquals(
+            "Bibs Mode still has an active race — Stop and Reset it before switching to CP Mode.",
+            repository.blockedModeSwitchReason(raceId, AppMode.CP),
+        )
+    }
+
+    @Test
+    fun blockedModeSwitchReasonAllowsSwitchingToCpOnceBibsHasBeenReset() = runTest {
+        db.historyLineDao().insert(
+            HistoryLineEntity(raceId = raceId, mode = HistoryMode.BIBS, action = HistoryAction.FINISH, bibNumber = 101, splitNumber = 1, lineNumber = 1L, timestampMillis = 0L),
+        )
+        val bibsModeRepository = BibsModeRepository(db, db.raceDao(), db.historyLineDao())
+        bibsModeRepository.resetBibsMode(raceId, resetAtMillis = 2_000L)
+
+        assertNull(repository.blockedModeSwitchReason(raceId, AppMode.CP))
+    }
+
+    @Test
+    fun blockedModeSwitchReasonNeverBlocksSwitchingToTimeOrMule() = runTest {
+        db.raceDao().setCpModeStartedAt(raceId, 1_000L)
+        db.historyLineDao().insert(
+            HistoryLineEntity(raceId = raceId, mode = HistoryMode.BIBS, action = HistoryAction.FINISH, bibNumber = 101, splitNumber = 1, lineNumber = 1L, timestampMillis = 0L),
+        )
+
+        assertNull(repository.blockedModeSwitchReason(raceId, AppMode.TIME))
+        assertNull(repository.blockedModeSwitchReason(raceId, AppMode.MULE))
     }
 }

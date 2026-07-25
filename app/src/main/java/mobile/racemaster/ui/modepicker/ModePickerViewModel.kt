@@ -16,9 +16,12 @@ import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -85,15 +88,30 @@ class ModePickerViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    private val modeSwitchErrorFlow = MutableStateFlow<String?>(null)
+    val modeSwitchError: StateFlow<String?> = modeSwitchErrorFlow.asStateFlow()
+
     /** Mode switch when a race is already active — no new race needed. Switching into Bibs
      *  Mode for a race started in a different mode lands on an empty Bibs segment, same as a
      *  freshly created one — its own Start button (see BibsModeScreen) is what begins it,
-     *  nothing needed here. */
+     *  nothing needed here. Blocked (see [RaceRepository.blockedModeSwitchReason]) rather than
+     *  performed when Bibs and CP are being switched between each other and the one being left
+     *  still has live, un-Reset activity. */
     fun selectModeForExistingRace(mode: AppMode, onComplete: () -> Unit) {
         viewModelScope.launch {
+            val raceId = settingsRepository.activeRaceId.first()
+            val blockedReason = raceId?.let { raceRepository.blockedModeSwitchReason(it, mode) }
+            if (blockedReason != null) {
+                modeSwitchErrorFlow.value = blockedReason
+                return@launch
+            }
             settingsRepository.setAppMode(mode)
             onComplete()
         }
+    }
+
+    fun dismissModeSwitchError() {
+        modeSwitchErrorFlow.value = null
     }
 
     companion object {

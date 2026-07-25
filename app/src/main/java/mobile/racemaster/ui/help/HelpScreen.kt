@@ -87,14 +87,16 @@ fun HelpScreen(onBack: () -> Unit) {
                 body = "RaceMaster Mobile is a companion app for timing races on the day, used " +
                     "alongside the RaceMaster web app that a race director runs to manage entries and " +
                     "produce results. Rather than one person juggling both a stopwatch and a bib list " +
-                    "as runners cross the line, two phones can run this app side by side: one in Time " +
-                    "Mode acting as a stopwatch (recording exactly when each finisher crossed the " +
-                    "line, in order), and one in Bibs Mode recording which bib number each finisher " +
-                    "was wearing, in the same order. The two logs are later matched up by position to " +
-                    "produce finishing times per runner. The screen is kept on and (where supported) " +
-                    "pinned in place for the whole race so it can't be bumped into another app, and an " +
-                    "external clicker can be used instead of tapping the screen so the operator can " +
-                    "keep their eyes on the finish line.",
+                    "as runners cross the line, any number of phones can run this app side by side, " +
+                    "each logging its own station: Time Mode acts as a stopwatch (recording exactly " +
+                    "when each finisher crossed the line, in order), Bibs Mode records which bib " +
+                    "number each finisher was wearing in the same order, and CP Mode is a lighter " +
+                    "Pass/Retire checkpoint variant of Bibs Mode for stations out on the course. " +
+                    "Every race also records a location (e.g. \"Finish\", \"CP1\") so logs from " +
+                    "different stations can be told apart, and matched up by position afterwards to " +
+                    "produce finishing times per runner. The screen is kept on for the whole race, " +
+                    "and an external clicker can be used instead of tapping the screen so the " +
+                    "operator can keep their eyes on the finish line.",
             )
             HelpSection(
                 title = "Time Mode",
@@ -147,6 +149,17 @@ fun HelpScreen(onBack: () -> Unit) {
                     "Race — this records a \"Stop\" marker that can be undone to resume logging. Once " +
                     "stopped, the same button becomes RESET, which wipes every bib entry back to just " +
                     "a fresh Clock marker (with confirmation).",
+            )
+            HelpSection(
+                title = "CP Mode",
+                body = "CP Mode is a lighter checkpoint variant of Bibs Mode, for a station out on " +
+                    "the course rather than at the finish line — same keypad, entry list, duplicate " +
+                    "flagging, and row editing, but with a fixed Pass/Retire button pair in place of " +
+                    "Bibs' Event picker, and no Clock marker: START just begins logging, with no " +
+                    "extra split recorded for it. Type a bib number and tap Pass (the normal case) or " +
+                    "Retire, tap any row to correct it, and STOP/RESET/Undo last all work exactly as " +
+                    "in Bibs Mode. Set the race's Location (e.g. \"CP1\") on the race details screen " +
+                    "so its entries can be told apart from other stations recording the same race.",
             )
             HelpSection(
                 title = "Mule Mode",

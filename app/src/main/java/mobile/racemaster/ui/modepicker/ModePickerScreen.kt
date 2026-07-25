@@ -43,6 +43,7 @@ fun ModePickerScreen(
     val hasActiveRace by viewModel.hasActiveRace.collectAsStateWithLifecycle()
     val activeRaceStatus by viewModel.activeRaceStatus.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
+    val modeSwitchError by viewModel.modeSwitchError.collectAsStateWithLifecycle()
 
     fun handleModeTap(mode: AppMode) {
         // Mule Mode never creates a race of its own (it pulls/pushes other devices' race
@@ -123,6 +124,17 @@ fun ModePickerScreen(
             },
             dismissButton = {
                 TextButton(onClick = withClickSound { showExitConfirm = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    modeSwitchError?.let { message ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissModeSwitchError,
+            title = { Text("Can't switch mode") },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = withClickSound(viewModel::dismissModeSwitchError)) { Text("OK") }
             },
         )
     }
