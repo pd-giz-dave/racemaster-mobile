@@ -20,6 +20,14 @@ data class ServerSetupDraft(val url: String, val username: String, val password:
 // unbounded JSON blob over a device's lifetime — most-recent-first, oldest entries drop off.
 private const val MAX_HISTORY_ENTRIES = 20
 
+// Offered in the Course field's history dropdown even before the operator has ever typed one —
+// common recurring categories, not tied to any particular race. See courseHistory's own doc.
+private val DEFAULT_COURSES = listOf("Seniors", "Juniors", "Pairs")
+
+// Offered in the Location field's history dropdown even before the operator has ever typed
+// one — the common finish/start/checkpoint stations. See locationHistory's own doc.
+private val DEFAULT_LOCATIONS = listOf("Finish", "Start") + (1..9).map { "CP$it" }
+
 // See SettingsRepository.serverSyncMaxAgeDays's own doc.
 const val DEFAULT_SERVER_SYNC_MAX_AGE_DAYS = 2
 
@@ -222,22 +230,28 @@ class SettingsRepository(
 
     suspend fun addRaceNameToHistory(name: String) = addToStringHistory(Keys.RACE_NAME_HISTORY, name)
 
-    // Every course ever saved from the Race Details form, most-recent-first — same
+    // Every course ever saved from the Race Details form, most-recent-first, followed by
+    // [DEFAULT_COURSES] (only once each — a default the operator has since typed for real
+    // graduates to the top of the real history instead of being listed twice) — same
     // independent-field behavior as raceNameHistory above: picking one only ever fills the
     // course field itself.
-    val courseHistory: Flow<List<String>> = stringHistoryFlow(Keys.COURSE_HISTORY)
+    val courseHistory: Flow<List<String>> = stringHistoryFlow(Keys.COURSE_HISTORY, DEFAULT_COURSES)
 
     suspend fun addCourseToHistory(course: String) = addToStringHistory(Keys.COURSE_HISTORY, course)
 
-    // Every location ever saved from the Race Details form, most-recent-first — same
+    // Every location ever saved from the Race Details form, most-recent-first, followed by
+    // [DEFAULT_LOCATIONS] (same once-each behavior as courseHistory above) — same
     // independent-field behavior as raceNameHistory/courseHistory above: picking one only
     // ever fills the location field itself.
-    val locationHistory: Flow<List<String>> = stringHistoryFlow(Keys.LOCATION_HISTORY)
+    val locationHistory: Flow<List<String>> = stringHistoryFlow(Keys.LOCATION_HISTORY, DEFAULT_LOCATIONS)
 
     suspend fun addLocationToHistory(location: String) = addToStringHistory(Keys.LOCATION_HISTORY, location)
 
-    private fun stringHistoryFlow(key: Preferences.Key<String>): Flow<List<String>> =
-        dataStore.data.map { prefs -> decodeList(prefs[key]) }
+    private fun stringHistoryFlow(key: Preferences.Key<String>, defaults: List<String> = emptyList()): Flow<List<String>> =
+        dataStore.data.map { prefs ->
+            val stored = decodeList<String>(prefs[key])
+            stored + defaults.filterNot { it in stored }
+        }
 
     private suspend fun addToStringHistory(key: Preferences.Key<String>, value: String) {
         val trimmed = value.trim()

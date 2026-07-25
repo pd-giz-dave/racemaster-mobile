@@ -117,6 +117,65 @@ class SettingsRepositoryTest {
         scope.cancel()
     }
 
+    // courseHistory/locationHistory — see RaceDetailsScreen's Course/Location fields. Both
+    // offer a fixed set of defaults even before the operator has ever typed anything, appended
+    // after whatever's actually been saved for real.
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun courseHistoryOffersItsDefaultsBeforeAnythingHasBeenSaved() = runTest {
+        val file = tempFolder.newFile("test.preferences_pb")
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = SettingsRepository(dataStoreOverFile(file, scope))
+
+        assertEquals(listOf("Seniors", "Juniors", "Pairs"), repository.courseHistory.first())
+        scope.cancel()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun courseHistoryListsRealEntriesBeforeDefaultsWithoutDuplicatingAMatchingDefault() = runTest {
+        val file = tempFolder.newFile("test.preferences_pb")
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = SettingsRepository(dataStoreOverFile(file, scope))
+
+        repository.addCourseToHistory("10K")
+        // Saving a default for real must not list it twice.
+        repository.addCourseToHistory("Seniors")
+
+        assertEquals(listOf("Seniors", "10K", "Juniors", "Pairs"), repository.courseHistory.first())
+        scope.cancel()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun locationHistoryOffersItsDefaultsBeforeAnythingHasBeenSaved() = runTest {
+        val file = tempFolder.newFile("test.preferences_pb")
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = SettingsRepository(dataStoreOverFile(file, scope))
+
+        assertEquals(
+            listOf("Finish", "Start", "CP1", "CP2", "CP3", "CP4", "CP5", "CP6", "CP7", "CP8", "CP9"),
+            repository.locationHistory.first(),
+        )
+        scope.cancel()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun locationHistoryListsRealEntriesBeforeDefaultsWithoutDuplicatingAMatchingDefault() = runTest {
+        val file = tempFolder.newFile("test.preferences_pb")
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = SettingsRepository(dataStoreOverFile(file, scope))
+
+        repository.addLocationToHistory("CP1")
+
+        val history = repository.locationHistory.first()
+        assertEquals("CP1", history.first())
+        assertEquals(1, history.count { it == "CP1" })
+        scope.cancel()
+    }
+
     // serverCredentialHistory — see MuleServerSetupScreen's url/username/password fields.
 
     @OptIn(ExperimentalCoroutinesApi::class)
