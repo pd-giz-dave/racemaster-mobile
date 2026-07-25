@@ -96,6 +96,17 @@ class MuleRepository(
 
     suspend fun readDeviceInfo(advertisement: Advertisement): DeviceInfo = pullClient.readDeviceInfo(advertisement)
 
+    // Lets MuleSyncEngine self-loop-guard a relay manifest entry (never pull my own data back
+    // from a mule that happens to be relaying it) without reaching into SettingsRepository
+    // directly.
+    suspend fun myDeviceId(): String = settingsRepository.getOrCreateDeviceId()
+
+    // Answers a mule-to-mule relay pull request — the pulled-inbox equivalent of
+    // RaceRepository.getHistorySinceLineNumber, called from PeripheralSyncService.streamRelayedRecords
+    // when a neighbor asks for a specific origin's data rather than this device's own race.
+    suspend fun relayedRecordsSince(sourceDeviceId: String, sourceRaceLabel: String, sinceLineNumber: Long): List<SyncRecord> =
+        pulledRecordDao.getRecordsSince(sourceDeviceId, sourceRaceLabel, sinceLineNumber).mapNotNull { decodeSyncRecord(it, json) }
+
     suspend fun setAutoSyncStopped(stopped: Boolean) {
         settingsRepository.setAutoSyncStopped(stopped)
     }
@@ -119,17 +130,27 @@ class MuleRepository(
     // [sourceDeviceName] comes from the same DeviceInfo read that already supplied
     // sourceRaceLabel/sourceDeviceId (see MuleSyncEngine.pullAllVisibleDevices) — SyncRecord
     // itself carries no per-line device name (see its own doc for why).
+    //
+    // [requestOriginDeviceId]/[requestOriginRaceLabel] are what turn this into a mule-to-mule
+    // relay pull rather than a direct one: left null (the default), the wire request asks the
+    // peer for its own race, exactly as before this parameter pair existed. Set, they ask the
+    // peer to relay a specific RelayManifestEntry instead — [sourceDeviceId]/[sourceRaceLabel]
+    // above must then be that entry's true origin (not the peer's own identity), which is what
+    // keeps origin attribution intact across arbitrary hop depth once storePulledRecords writes
+    // these rows. See MuleSyncEngine.pullAllVisibleDevices for the call site that sets these.
     suspend fun pullFrom(
         advertisement: Advertisement,
         sourceRaceLabel: String,
         sourceDeviceId: String,
         sourceDeviceName: String,
         sinceLineNumber: Long,
+        requestOriginDeviceId: String? = null,
+        requestOriginRaceLabel: String? = null,
     ): Int {
         var count = 0
         val myDeviceId = settingsRepository.getOrCreateDeviceId()
         val myDeviceName = settingsRepository.getOrCreateDeviceName()
-        pullClient.pull(advertisement, myDeviceId, myDeviceName, sinceLineNumber) { records ->
+        pullClient.pull(advertisement, myDeviceId, myDeviceName, sinceLineNumber, requestOriginDeviceId, requestOriginRaceLabel) { records ->
             count = storePulledRecords(sourceRaceLabel, sourceDeviceId, sourceDeviceName, records)
         }
         return count
@@ -263,14 +284,9 @@ class MuleRepository(
             // function's own doc), so one bad row left uncaught here would otherwise wedge
             // sync shut permanently instead of just leaving that one row stuck unsynced
             // (visible via the operator's own unsynced count) while everything else keeps
-            // flowing.
+            // flowing. See decodeSyncRecord's own doc.
             val pulledByDevice = pulledForRace
-                .mapNotNull { row ->
-                    runCatching { json.decodeFromString<SyncRecord>(row.payloadJson) }
-                        .onFailure { Log.w(TAG, "Dropping unparseable pulled record ${row.recordUuid} — stale wire format?", it) }
-                        .getOrNull()
-                        ?.let { row.deviceName to it }
-                }
+                .mapNotNull { row -> decodeSyncRecord(row, json)?.let { row.deviceName to it } }
                 .groupBy({ it.first }) { it.second }
 
             val byDevice = if (selfRecords.isEmpty()) pulledByDevice else pulledByDevice + (myDeviceName to selfRecords)
@@ -321,6 +337,18 @@ class MuleRepository(
         return added
     }
 }
+
+// A single row whose payloadJson no longer matches SyncRecord's current shape (e.g. stored
+// before a wire field's type changed) must not take down the rest of whatever's decoding it —
+// dropped (and logged) rather than thrown, so one bad row leaves itself stuck rather than
+// wedging a whole push or relay-serve attempt shut. Shared by pushToServer's own per-device
+// decode and relayedRecordsSince, so this tolerance never has to be reimplemented (or drift) a
+// second time. Pulled out as a top-level function (like recordsDueForDevices below) so it's
+// directly testable without standing up MuleRepository's full dependency graph.
+internal fun decodeSyncRecord(row: PulledRecordEntity, json: Json): SyncRecord? =
+    runCatching { json.decodeFromString<SyncRecord>(row.payloadJson) }
+        .onFailure { Log.w(TAG, "Dropping unparseable pulled record ${row.recordUuid} — stale wire format?", it) }
+        .getOrNull()
 
 // null-safe maxOf for two independently-nullable timestamps, where "one side has no signal at
 // all" should defer entirely to the other rather than being treated as smaller/earlier — see

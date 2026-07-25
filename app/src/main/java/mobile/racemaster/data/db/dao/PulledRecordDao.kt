@@ -27,6 +27,10 @@ data class PulledSourceSummary(
     // device mid-race). Drives Race History's "From {name}" entry for this source.
     val deviceName: String,
     val lastPulledAtMillis: Long,
+    // The highest lineNumber held for this source — what a mule-to-mule relay manifest reports
+    // as this source's own DeviceInfo.lastLineNumber would, letting another mule pulling this
+    // one apply the exact same delta-sync comparison it already uses for a direct leaf pull.
+    val lastLineNumber: Long,
 )
 
 // One row per distinct race label this Mule has ever pulled a genuinely different device's data
@@ -53,6 +57,7 @@ interface PulledRecordDao {
         SELECT sourceRaceLabel,
                sourceDeviceId,
                MAX(pulledAtMillis) AS lastPulledAtMillis,
+               MAX(lineNumber) AS lastLineNumber,
                (SELECT deviceName FROM pulled_records p2
                 WHERE p2.sourceRaceLabel = p.sourceRaceLabel AND p2.sourceDeviceId = p.sourceDeviceId
                 ORDER BY p2.pulledAtMillis DESC LIMIT 1) AS deviceName
@@ -75,6 +80,14 @@ interface PulledRecordDao {
     // `sortedBy { it.lineNumber }`).
     @Query("SELECT * FROM pulled_records WHERE sourceRaceLabel = :sourceRaceLabel AND sourceDeviceId = :sourceDeviceId ORDER BY lineNumber")
     fun observeForSource(sourceRaceLabel: String, sourceDeviceId: String): Flow<List<PulledRecordEntity>>
+
+    // Serves a mule-to-mule relay pull: everything this device holds for a given true origin,
+    // after sinceLineNumber — the same delta-sync shape RaceRepository.getHistorySinceLineNumber
+    // already serves for a device's own race, just backed by the pulled-inbox table instead. Not
+    // reactive (suspend, not Flow) — this only ever runs once per incoming BLE pull request, not
+    // observed continuously.
+    @Query("SELECT * FROM pulled_records WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel AND lineNumber > :sinceLineNumber ORDER BY lineNumber")
+    suspend fun getRecordsSince(sourceDeviceId: String, sourceRaceLabel: String, sinceLineNumber: Long): List<PulledRecordEntity>
 
     @Query("SELECT * FROM pulled_records WHERE syncedAtMillis IS NULL ORDER BY pulledAtMillis")
     suspend fun getUnsynced(): List<PulledRecordEntity>

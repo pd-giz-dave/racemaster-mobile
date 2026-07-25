@@ -49,6 +49,12 @@ class MuleServerSetupViewModel(
     val maxAgeDays: StateFlow<Int> = settingsRepository.serverSyncMaxAgeDays
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DEFAULT_SERVER_SYNC_MAX_AGE_DAYS)
 
+    // See SettingsRepository.revertServerSetupDraft's own doc — undoes the sticky-draft side
+    // effect of a failed save() above when the operator cancels out instead of retrying.
+    suspend fun revertDraft(lastKnownGood: ServerSetupDraft) {
+        settingsRepository.revertServerSetupDraft(lastKnownGood.url, lastKnownGood.username, lastKnownGood.password)
+    }
+
     suspend fun save(url: String, username: String, password: String, maxAgeDays: Int) {
         // Saved before attempting login, not after — so a failed attempt (e.g. a password
         // typo) still leaves the form sticky for a quick retry rather than losing everything

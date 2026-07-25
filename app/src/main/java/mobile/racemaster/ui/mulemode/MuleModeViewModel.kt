@@ -79,14 +79,16 @@ class MuleModeViewModel(
         muleSyncEngine.selfDevice,
         muleRepository.bluetoothOff,
         muleRepository.serverSyncOff,
+        muleSyncEngine.relayDevices,
     ) { values ->
         val isLoggedIn = values[4] as Boolean
         val autoSyncStopped = values[8] as Boolean
         val selfDevice = values[10] as DiscoveredDevice
         val bluetoothOff = values[11] as Boolean
         val serverSyncOff = values[12] as Boolean
+        val relayDevices = values[13] as Map<String, DiscoveredDevice>
         MuleModeUiState(
-            discoveredDevices = ((values[0] as Map<String, DiscoveredDevice>).values + selfDevice)
+            discoveredDevices = ((values[0] as Map<String, DiscoveredDevice>).values + relayDevices.values + selfDevice)
                 .sortedBy { it.raceLabel.ifEmpty { it.deviceKey } },
             unsyncedCount = values[1] as Int,
             lastSyncedAtMillis = values[2] as Long?,

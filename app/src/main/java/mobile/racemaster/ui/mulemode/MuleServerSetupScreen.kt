@@ -43,6 +43,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import mobile.racemaster.BuildConfig
+import mobile.racemaster.data.settings.ServerSetupDraft
 import mobile.racemaster.ui.components.HistoryTextField
 import mobile.racemaster.ui.theme.ServerOfflineRed
 import mobile.racemaster.ui.theme.SyncedGreen
@@ -88,6 +89,12 @@ fun MuleServerSetupScreen(
     // e.g. a fresh install) — returning early on that lets the real values land once they
     // arrive, rather than permanently locking in blank fields the instant this composes.
     var prefilled by remember { mutableStateOf(false) }
+    // The raw persisted draft exactly as it stood the moment this screen opened, before any
+    // BuildConfig dev-default fallback and before anything typed/saved this visit — "last known
+    // good" for Cancel to restore to (see its own onClick below). Deliberately the raw loaded
+    // draft, not the possibly-fallback-filled url/username/password state below: an empty draft
+    // (nothing ever saved) must revert to genuinely empty, not to the dev-default auto-fill.
+    var lastKnownGoodDraft by remember { mutableStateOf<ServerSetupDraft?>(null) }
     var isSaving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     // null while the one-shot check is still resolving (renders nothing that one frame,
@@ -111,6 +118,7 @@ fun MuleServerSetupScreen(
         username = loadedDraft.username.ifBlank { BuildConfig.DEV_SERVER_USERNAME }
         password = loadedDraft.password.ifBlank { BuildConfig.DEV_SERVER_PASSWORD }
         maxAgeDaysText = maxAgeDaysSetting.toString()
+        lastKnownGoodDraft = loadedDraft
         prefilled = true
     }
 
@@ -122,7 +130,27 @@ fun MuleServerSetupScreen(
         topBar = {
             TopAppBar(
                 title = { Text("Setup Server") },
-                navigationIcon = { TextButton(onClick = withClickSound(onDone)) { Text("Cancel") } },
+                navigationIcon = {
+                    TextButton(
+                        onClick = withClickSound {
+                            // A failed "Save & Log In" still updates the sticky draft (see
+                            // MuleServerSetupViewModel.save's own doc — deliberate, for a quick
+                            // in-place retry) while leaving the actually-active session
+                            // untouched. Cancelling out instead of retrying must not leave that
+                            // bad/half-edited draft behind masking the credentials sync is still
+                            // really using — revert it back to what it held on entry first.
+                            val snapshot = lastKnownGoodDraft
+                            if (snapshot == null) {
+                                onDone()
+                            } else {
+                                scope.launch {
+                                    viewModel.revertDraft(snapshot)
+                                    onDone()
+                                }
+                            }
+                        },
+                    ) { Text("Cancel") }
+                },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },

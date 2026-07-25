@@ -148,12 +148,28 @@ class SettingsRepository(
     }
 
     suspend fun saveServerSetupDraft(url: String, username: String, password: String) {
+        writeServerSetupDraft(url, username, password)
+        addServerCredentialToHistory(url, username, password)
+    }
+
+    // Restores the sticky draft to a specific earlier state (e.g. whatever it held before the
+    // operator started editing this time) without logging a new attempt to serverCredentialHistory
+    // — unlike saveServerSetupDraft above, a revert isn't itself something the operator typed
+    // and submitted. Exists for Cancel after a failed "Save & Log In": that failure still
+    // updates the draft (see saveServerSetupDraft's own doc — sticky-on-failure is deliberate,
+    // for a quick in-place retry), but if the operator cancels out instead of retrying, that
+    // half-edited/bad state must not be left behind masking the credentials actually still
+    // active for sync — see MuleServerSetupScreen's own Cancel handling.
+    suspend fun revertServerSetupDraft(url: String, username: String, password: String) {
+        writeServerSetupDraft(url, username, password)
+    }
+
+    private suspend fun writeServerSetupDraft(url: String, username: String, password: String) {
         dataStore.edit { prefs ->
             prefs[Keys.DRAFT_SERVER_URL] = url
             prefs[Keys.DRAFT_USERNAME] = username
             prefs[Keys.DRAFT_PASSWORD] = password
         }
-        addServerCredentialToHistory(url, username, password)
     }
 
     // Every url/username/password combination ever submitted on the Setup Server form (see

@@ -254,10 +254,19 @@ private fun AutoSyncStatus(uiState: MuleModeUiState, viewModel: MuleModeViewMode
         // Nearby device count is always worth showing alongside "Last pull" — it's the one
         // piece of context that explains a persistent "never" (nothing nearby to pull from,
         // not a malfunction) without the operator having to cross-reference the list below.
-        val nearbyDeviceCount = uiState.discoveredDevices.count { !it.isSelf }
+        // Split direct (real BLE visibility) from relayed (known only transitively, via
+        // another Mule) once any relaying is actually happening — a raw combined count would
+        // overstate how many devices are genuinely in range right now. Falls back to today's
+        // exact wording while relayCount is 0, so this is a visual no-op until a chain forms.
+        val directDeviceCount = uiState.discoveredDevices.count { !it.isSelf && it.relayedViaDeviceName == null }
+        val relayDeviceCount = uiState.discoveredDevices.count { it.relayedViaDeviceName != null }
+        val fromSuffix = if (relayDeviceCount > 0) {
+            "$directDeviceCount nearby, $relayDeviceCount relayed"
+        } else {
+            "$directDeviceCount device${if (directDeviceCount == 1) "" else "s"}"
+        }
         Text(
-            "Last pull: ${uiState.lastPulledAtMillis?.let { formatWallClock(it) } ?: "never"} " +
-                "(from $nearbyDeviceCount device${if (nearbyDeviceCount == 1) "" else "s"})",
+            "Last pull: ${uiState.lastPulledAtMillis?.let { formatWallClock(it) } ?: "never"} (from $fromSuffix)",
             style = MaterialTheme.typography.bodySmall,
         )
         // Unlike a pull, a push doesn't depend on any nearby device being visible at all — this
@@ -326,6 +335,10 @@ private fun NearbyDevicesSection(uiState: MuleModeUiState) {
                 // only ever name one device at a time.
                 val suffix = when {
                     device.isSelf -> " (self)"
+                    // A relay-only row has no direct BLE link of its own to be unreachable/missing
+                    // reads on — those track this phone's own connection to a peer, meaningless
+                    // for an origin only ever known transitively (see DiscoveredDevice's own doc).
+                    device.relayedViaDeviceName != null -> " (via ${device.relayedViaDeviceName})"
                     device.unreachable -> " (unreachable)"
                     device.consecutiveFailures > 0 -> " (missed ${device.consecutiveFailures})"
                     else -> ""

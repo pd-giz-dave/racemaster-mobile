@@ -14,13 +14,12 @@ done
 
 ## Random ToDo's
 
-- [ ] treat 404 as an expected response when ping'ing or post/put a server that is not a race master server
-      and just invalidate the server (with app header feedback), put keep re-trying
 - [ ] Update readme.md and structure.md
-- [ ] add a location name field to race details, default is "Finish"
+- [ ] sync needs to show data has either got to the server or the web-app,
+      so web-app must advertise itself as a 'sink' for data,
+      make server do that too so its all the same
 
 ## Bugs
-
 
 ## Later phases (not started)
 

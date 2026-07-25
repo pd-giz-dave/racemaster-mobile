@@ -2,6 +2,7 @@ package mobile.racemaster.data.mule
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MuleSyncEngineTest {
@@ -47,5 +48,79 @@ class MuleSyncEngineTest {
             "Push failed: boom",
             pushResultMessage(auto = false, result = Result.failure(RuntimeException("boom"))),
         )
+    }
+
+    // relevantRelayEntries — the one loop-prevention guard this device's own relay-pull loop
+    // needs beyond the delta-cursor comparison itself (see pullAllVisibleDevices' own doc):
+    // never treat my own data, handed back to me by a mule relaying it, as worth pulling.
+
+    private fun relayEntry(originDeviceId: String, lastLineNumber: Long = 10L) = RelayManifestEntry(
+        originDeviceId = originDeviceId,
+        originDeviceName = "device-$originDeviceId",
+        originRaceLabel = "race-$originDeviceId",
+        lastLineNumber = lastLineNumber,
+    )
+
+    @Test
+    fun myOwnOriginIsFilteredOutOfARelayManifest() {
+        val entries = listOf(relayEntry("me"), relayEntry("someone-else"))
+
+        val relevant = relevantRelayEntries(myDeviceId = "me", relayEntries = entries)
+
+        assertEquals(listOf("someone-else"), relevant.map { it.originDeviceId })
+    }
+
+    @Test
+    fun everyGenuinelyOtherOriginPassesThrough() {
+        val entries = listOf(relayEntry("device-a"), relayEntry("device-b"))
+
+        val relevant = relevantRelayEntries(myDeviceId = "me", relayEntries = entries)
+
+        assertEquals(entries, relevant)
+    }
+
+    @Test
+    fun anEmptyManifestStaysEmpty() {
+        assertTrue(relevantRelayEntries(myDeviceId = "me", relayEntries = emptyList()).isEmpty())
+    }
+
+    // dedupRelayRows — a relay-only row must drop the instant its origin becomes directly
+    // BLE-visible, so the same source never shows twice in the Mule Mode device list.
+
+    private fun relayRow(originDeviceId: String) = DiscoveredDevice(
+        deviceKey = "relay:$originDeviceId:race",
+        advertisement = null,
+        deviceId = originDeviceId,
+        relayedViaDeviceName = "some-mule",
+    )
+
+    @Test
+    fun aRelayRowIsDroppedOnceItsOriginIsDirectlyVisible() {
+        val relayRows = mapOf("relay:phone-a:race" to relayRow("phone-a"))
+
+        val deduped = dedupRelayRows(directDeviceIds = setOf("phone-a"), relayRows = relayRows)
+
+        assertTrue(deduped.isEmpty())
+    }
+
+    @Test
+    fun aRelayRowSurvivesWhenNoDirectEntryMatchesItsOrigin() {
+        val relayRows = mapOf("relay:phone-a:race" to relayRow("phone-a"))
+
+        val deduped = dedupRelayRows(directDeviceIds = setOf("phone-b"), relayRows = relayRows)
+
+        assertEquals(relayRows, deduped)
+    }
+
+    @Test
+    fun onlyTheMatchingRelayRowIsDroppedNotOthers() {
+        val relayRows = mapOf(
+            "relay:phone-a:race" to relayRow("phone-a"),
+            "relay:phone-b:race" to relayRow("phone-b"),
+        )
+
+        val deduped = dedupRelayRows(directDeviceIds = setOf("phone-a"), relayRows = relayRows)
+
+        assertEquals(setOf("phone-b"), deduped.values.map { it.deviceId }.toSet())
     }
 }

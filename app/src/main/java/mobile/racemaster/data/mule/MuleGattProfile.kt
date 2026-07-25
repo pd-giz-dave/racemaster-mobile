@@ -2,6 +2,7 @@ package mobile.racemaster.data.mule
 
 import java.util.UUID
 import kotlinx.serialization.Serializable
+import mobile.racemaster.data.db.entity.PulledRecordEntity
 
 /**
  * GATT profile shared by both sides of a Mule pull: every device (Time, Bibs, and Mule
@@ -49,6 +50,23 @@ object MuleGattProfile {
     const val END_OF_STREAM_MARKER: Byte = 0
 }
 
+/** One other, genuinely different device this one is holding relayable data for — everything
+ *  currently in its own `pulled_records` inbox, grouped by true origin (never this device's own
+ *  race; a mule's own race is already covered by [DeviceInfo.raceLabel]/[DeviceInfo.lastLineNumber]
+ *  directly). Lets a mule-to-mule chain form without a separate sync mechanism: a puller reading
+ *  this list treats each entry exactly like a direct leaf pull's own [DeviceInfo] — same
+ *  [MuleRepository.lastPulledLineNumber] delta comparison, same resume cursor, just requested via
+ *  [PullRequest.originDeviceId] instead of implicitly. [originDeviceId]/[originDeviceName] are the
+ *  data's true creator, never the device being connected to right now — that's what keeps origin
+ *  identity intact across arbitrary hop depth (see [PeripheralSyncService]'s relay manifest doc). */
+@Serializable
+data class RelayManifestEntry(
+    val originDeviceId: String,
+    val originDeviceName: String,
+    val originRaceLabel: String,
+    val lastLineNumber: Long,
+)
+
 @Serializable
 data class DeviceInfo(
     val deviceId: String,
@@ -61,12 +79,26 @@ data class DeviceInfo(
     // unsyncedCount-based "pull everything currently unsynced" model.
     val lastLineNumber: Long,
     val deviceName: String = "",
+    // Everything else this device is holding on behalf of other, genuinely different origin
+    // devices (a mule's pulled-from-others inbox) — empty for a device that's never pulled
+    // from anyone (an ordinary Time/Bibs phone, or a mule that hasn't relayed anything yet).
+    // See RelayManifestEntry's own doc.
+    val relayEntries: List<RelayManifestEntry> = emptyList(),
 )
 
 /** Written to [MuleGattProfile.CONTROL_CHARACTERISTIC_UUID] to request a delta stream of
- *  every line after [sinceLineNumber] (0 to request the device's entire history). */
+ *  every line after [sinceLineNumber] (0 to request the device's entire history) — of the
+ *  responding device's own race by default ([originDeviceId] null), or of a specific
+ *  [RelayManifestEntry] it's relaying on behalf of another device ([originDeviceId] +
+ *  [originRaceLabel] set, paired the same way [PulledRecordEntity]'s own sourceDeviceId +
+ *  sourceRaceLabel always are — a deviceId alone isn't guaranteed unique to one race label
+ *  over a device's lifetime). */
 @Serializable
-data class PullRequest(val sinceLineNumber: Long)
+data class PullRequest(
+    val sinceLineNumber: Long,
+    val originDeviceId: String? = null,
+    val originRaceLabel: String? = null,
+)
 
 /** Written to [MuleGattProfile.ACK_CHARACTERISTIC_UUID] once a pulled stream is fully
  *  reassembled and durably stored, so the peripheral knows it's safe to mark those records

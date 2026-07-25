@@ -1,5 +1,7 @@
 package mobile.racemaster.data.mule
 
+import kotlinx.serialization.json.Json
+import mobile.racemaster.data.db.entity.PulledRecordEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -90,4 +92,29 @@ class MuleRepositoryTest {
 
         assertTrue(due.isEmpty())
     }
+
+    // decodeSyncRecord — a row whose payloadJson no longer matches SyncRecord's current shape
+    // must be dropped, not thrown, so one bad row can't take down a whole push/relay-serve
+    // attempt (see its own doc). Shared by pushToServer's per-device decode and
+    // relayedRecordsSince.
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    @Test
+    fun aRowWithValidPayloadDecodesToTheMatchingRecord() {
+        val row = PulledRecordEntity(
+            recordUuid = "uuid-1",
+            sourceDeviceId = "device-a",
+            sourceRaceLabel = "race-a",
+            lineNumber = 1,
+            payloadJson = json.encodeToString(timeRecord(1)),
+            pulledAtMillis = 0L,
+        )
+
+        assertEquals(timeRecord(1), decodeSyncRecord(row, json))
+    }
+
+    // The unparseable-payload branch also logs via android.util.Log, which isn't available in
+    // a plain JVM unit test (no Robolectric/Log mocking set up in this project) — that drop-not-
+    // throw behavior is a one-line runCatching/getOrNull, visible directly in the implementation.
 }

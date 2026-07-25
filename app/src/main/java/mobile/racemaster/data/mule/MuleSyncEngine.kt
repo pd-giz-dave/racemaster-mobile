@@ -67,7 +67,15 @@ import mobile.racemaster.data.settings.SettingsRepository
  *  device's borrowed time either). Surfaced directly on the device's own row as a running
  *  "(missed N)" suffix below the threshold, then "(unreachable)" once it's crossed (see
  *  MuleModeScreen.NearbyDevicesSection) — not a shared banner naming only one device, which
- *  was misleading whenever more than one had actually dropped out. */
+ *  was misleading whenever more than one had actually dropped out.
+ *
+ *  [relayedViaDeviceName] is non-null exactly for a synthetic row representing an origin known
+ *  only *transitively* — data this phone doesn't have direct BLE visibility of, only reachable
+ *  because some other Mule ([relayedViaDeviceName]) is currently relaying it (see
+ *  [MuleSyncEngine.relayDevices]). Such a row has no [advertisement] of its own (nothing to
+ *  connect to directly) and doesn't participate in the [unreachable]/[consecutiveFailures]
+ *  reachability tracking above — those describe *this phone's own* BLE link to a peer, which
+ *  is meaningless for an origin it's never actually connected to. */
 data class DiscoveredDevice(
     val deviceKey: String,
     val advertisement: Advertisement?,
@@ -79,6 +87,7 @@ data class DiscoveredDevice(
     val lastReachableAtMillis: Long = System.currentTimeMillis(),
     val consecutiveFailures: Int = 0,
     val unreachable: Boolean = false,
+    val relayedViaDeviceName: String? = null,
 )
 
 // discoveredFlow (see below) only ever holds devices that came from a live BLE scan result
@@ -121,6 +130,15 @@ class MuleSyncEngine(
     private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
 
     private val discoveredFlow = MutableStateFlow<Map<String, DiscoveredDevice>>(emptyMap())
+    // Origins known only transitively, via some other Mule's relay manifest — kept separate
+    // from discoveredFlow (rather than folded straight in) so discoveredFlow's own documented
+    // guarantee that every entry carries a real Advertisement (see requiredAdvertisement above)
+    // stays true; MuleModeViewModel merges this in alongside discoveredFlow/selfDevice for
+    // display, the same way it already folds selfDevice in. Rebuilt from scratch every
+    // pullAllVisibleDevices() tick from whichever peers were actually reachable that tick, so a
+    // relay row for an origin no longer offered by any currently-visible peer simply drops
+    // rather than lingering as a stale ghost entry.
+    private val relayFlow = MutableStateFlow<Map<String, DiscoveredDevice>>(emptyMap())
     private val statusMessageFlow = MutableStateFlow<String?>(null)
     // Distinct from statusMessageFlow (user-triggered action results): set when the
     // background auto-sync loop itself hits a failure, and cleared automatically as soon as
@@ -140,6 +158,7 @@ class MuleSyncEngine(
     private var started = false
 
     val discoveredDevices: StateFlow<Map<String, DiscoveredDevice>> = discoveredFlow.asStateFlow()
+    val relayDevices: StateFlow<Map<String, DiscoveredDevice>> = relayFlow.asStateFlow()
     val statusMessage: StateFlow<String?> = statusMessageFlow.asStateFlow()
     val autoWarning: StateFlow<String?> = autoWarningFlow.asStateFlow()
     val bluetoothWarning: StateFlow<String?> = bluetoothWarningFlow.asStateFlow()
@@ -417,11 +436,32 @@ class MuleSyncEngine(
      *  [DiscoveredDevice.consecutiveFailures], shown as a "(missed N)"/"(unreachable)" suffix
      *  on that device's own row — a single shared banner naming only the last unreachable
      *  device of however many was misleading when more than one had actually dropped out).
+     *
+     *  Beyond each visible peer's own race, this also walks its [DeviceInfo.relayEntries] —
+     *  whatever *that* peer is separately holding for other, genuinely different origin
+     *  devices — and pulls those the exact same way, just tagged with [PullRequest.originDeviceId]
+     *  instead of implicit (see [MuleRepository.pullFrom]'s own doc). The resume cursor for a
+     *  relay entry is looked up by its true origin id/race label
+     *  ([MuleRepository.lastPulledLineNumber]), never by which peer is currently offering it —
+     *  that's the entire loop-prevention mechanism this feature relies on: once this device
+     *  already holds an origin's data up to line N, it will never re-request anything below N
+     *  from *any* neighbor, direct or relayed, so redundant transfer (and any risk of data
+     *  bouncing indefinitely around a multi-mule mesh) is bounded to at most one wasted
+     *  "nothing new" round-trip per redundant path, with no hop-count/TTL/visited-device-list
+     *  needed. The one required guard is skipping an entry whose origin is *this* device itself
+     *  — never re-pull my own data handed back to me by a mule that happened to relay it.
+     *  Relay-derived rows land in [relayFlow], rebuilt fresh every tick (see its own doc) rather
+     *  than folded into [discoveredFlow] — see [DiscoveredDevice.relayedViaDeviceName]'s doc for
+     *  why that separation matters. [dedupRelayRows] drops a relay row the moment its origin
+     *  becomes directly BLE-visible, so the same source never doubles up in the list.
+     *
      *  Returns a failure message from the last device whose *pull itself* failed (having
      *  already proven reachable via a successful DeviceInfo read) this tick, or null if every
      *  attempt succeeded (including "nothing to pull"). */
     private suspend fun pullAllVisibleDevices(): String? {
         var tickFailure: String? = null
+        val myDeviceId = muleRepository.myDeviceId()
+        val relayRows = mutableMapOf<String, DiscoveredDevice>()
         for ((key, device) in discoveredFlow.value.toList()) {
             val freshInfo = runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }.getOrNull()
             if (freshInfo == null) {
@@ -430,26 +470,62 @@ class MuleSyncEngine(
             }
             val since = muleRepository.lastPulledLineNumber(freshInfo.deviceId, freshInfo.raceLabel)
             mergeDeviceInfo(key, device, freshInfo, since)
-            if (freshInfo.lastLineNumber - since <= 0) continue
-            val result = runCatching {
-                muleRepository.pullFrom(
-                    device.requiredAdvertisement,
-                    freshInfo.raceLabel,
-                    freshInfo.deviceId,
-                    freshInfo.deviceName,
-                    since,
-                )
+            if (freshInfo.lastLineNumber - since > 0) {
+                val result = runCatching {
+                    muleRepository.pullFrom(
+                        device.requiredAdvertisement,
+                        freshInfo.raceLabel,
+                        freshInfo.deviceId,
+                        freshInfo.deviceName,
+                        since,
+                    )
+                }
+                result.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
+                result.onSuccess {
+                    // Reflects the drop in outstanding lines immediately rather than waiting for
+                    // the next periodic refresh, up to AUTO_SYNC_INTERVAL later.
+                    runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }.getOrNull()?.let {
+                        val newSince = muleRepository.lastPulledLineNumber(it.deviceId, it.raceLabel)
+                        mergeDeviceInfo(key, device, it, newSince)
+                    }
+                }
             }
-            result.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
-            result.onSuccess {
-                // Reflects the drop in outstanding lines immediately rather than waiting for
-                // the next periodic refresh, up to AUTO_SYNC_INTERVAL later.
-                runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }.getOrNull()?.let {
-                    val newSince = muleRepository.lastPulledLineNumber(it.deviceId, it.raceLabel)
-                    mergeDeviceInfo(key, device, it, newSince)
+
+            for (entry in relevantRelayEntries(myDeviceId, freshInfo.relayEntries)) {
+                val relayKey = "relay:${entry.originDeviceId}:${entry.originRaceLabel}"
+                val relaySince = muleRepository.lastPulledLineNumber(entry.originDeviceId, entry.originRaceLabel)
+                val outstanding = (entry.lastLineNumber - relaySince).coerceAtLeast(0).toInt()
+                relayRows[relayKey] = DiscoveredDevice(
+                    deviceKey = relayKey,
+                    advertisement = null,
+                    deviceId = entry.originDeviceId,
+                    deviceName = entry.originDeviceName,
+                    raceLabel = entry.originRaceLabel,
+                    unsyncedCount = outstanding,
+                    relayedViaDeviceName = freshInfo.deviceName,
+                )
+                if (entry.lastLineNumber - relaySince <= 0) continue
+                val relayResult = runCatching {
+                    muleRepository.pullFrom(
+                        device.requiredAdvertisement,
+                        sourceRaceLabel = entry.originRaceLabel,
+                        sourceDeviceId = entry.originDeviceId,
+                        sourceDeviceName = entry.originDeviceName,
+                        sinceLineNumber = relaySince,
+                        requestOriginDeviceId = entry.originDeviceId,
+                        requestOriginRaceLabel = entry.originRaceLabel,
+                    )
+                }
+                relayResult.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
+                relayResult.onSuccess {
+                    val newSince = muleRepository.lastPulledLineNumber(entry.originDeviceId, entry.originRaceLabel)
+                    val newOutstanding = (entry.lastLineNumber - newSince).coerceAtLeast(0).toInt()
+                    relayRows[relayKey] = relayRows.getValue(relayKey).copy(unsyncedCount = newOutstanding)
                 }
             }
         }
+        val directDeviceIds = discoveredFlow.value.values.mapNotNull { it.deviceId }.toSet()
+        relayFlow.value = dedupRelayRows(directDeviceIds, relayRows)
         return tickFailure
     }
 
@@ -550,3 +626,27 @@ internal fun pushResultMessage(auto: Boolean, result: Result<Int>): String? = re
     },
     onFailure = { e -> "Push failed: ${e.message}" },
 )
+
+/**
+ * Filters a peer's relay manifest down to entries actually worth acting on from my own point
+ * of view — the one loop-prevention guard this design needs beyond the delta-cursor comparison
+ * itself (see [MuleSyncEngine.pullAllVisibleDevices]'s own doc for why that comparison alone
+ * already makes redundant re-transfer of anything already held a no-op regardless of path):
+ * never treat my own data, handed back to me by a mule that happens to be relaying it, as
+ * something worth pulling. Pulled out as a pure function so this guard is directly testable
+ * without standing up MuleSyncEngine's full BLE dependency graph.
+ */
+internal fun relevantRelayEntries(myDeviceId: String, relayEntries: List<RelayManifestEntry>): List<RelayManifestEntry> =
+    relayEntries.filter { it.originDeviceId != myDeviceId }
+
+/**
+ * Drops a relay-only row the instant its origin becomes directly BLE-visible — otherwise the
+ * same source would show twice in the Mule Mode device list, once as a real (`isSelf = false`,
+ * real [DiscoveredDevice.advertisement]) entry and once as a stale "(via X)" one, the moment
+ * both the origin phone and the relaying mule are simultaneously in range. Pulled out as a pure
+ * function for the same directly-testable reason as [relevantRelayEntries].
+ */
+internal fun dedupRelayRows(
+    directDeviceIds: Set<String>,
+    relayRows: Map<String, DiscoveredDevice>,
+): Map<String, DiscoveredDevice> = relayRows.filterValues { it.deviceId !in directDeviceIds }

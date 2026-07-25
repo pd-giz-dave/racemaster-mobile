@@ -109,6 +109,11 @@ class MulePullClient {
         pullerDeviceId: String,
         pullerDeviceName: String,
         sinceLineNumber: Long,
+        // Null (the default) requests the peripheral's own race, exactly as before these two
+        // params existed. Set together, requests a specific RelayManifestEntry it's relaying on
+        // behalf of another device instead — see PullRequest's own doc.
+        originDeviceId: String? = null,
+        originRaceLabel: String? = null,
         onReceived: suspend (List<SyncRecord>) -> Unit,
     ): Unit = coroutineScope {
         val peripheral = peripheralFor(advertisement)
@@ -145,7 +150,7 @@ class MulePullClient {
             // on this characteristic server-side — Kable's write() defaults to
             // WriteType.WithoutResponse, which fails against a with-response-only
             // characteristic ("writeWithoutResponse property not found").
-            val pullRequest = json.encodeToString(PullRequest(sinceLineNumber))
+            val pullRequest = json.encodeToString(PullRequest(sinceLineNumber, originDeviceId, originRaceLabel))
             peripheral.write(controlCharacteristic, pullRequest.toByteArray(Charsets.UTF_8), WriteType.WithResponse)
             withTimeout(PULL_TIMEOUT) { collectJob.join() }
 

@@ -148,4 +148,50 @@ class SettingsRepositoryTest {
         )
         scope.cancel()
     }
+
+    // revertServerSetupDraft — MuleServerSetupScreen's Cancel handling: undoes the sticky-draft
+    // side effect of a failed login attempt, without polluting serverCredentialHistory with
+    // something the operator never actually submitted.
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun revertServerSetupDraftRestoresTheDraftWithoutTouchingCredentialHistory() = runTest {
+        val file = tempFolder.newFile("test.preferences_pb")
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = SettingsRepository(dataStoreOverFile(file, scope))
+
+        // A genuine submission, then a failed attempt's own draft write (simulated directly —
+        // saveServerSetupDraft is called regardless of whether the login itself succeeds).
+        repository.saveServerSetupDraft("https://good.example", "good-user", "good-pass")
+        repository.saveServerSetupDraft("https://bad.example", "bad-user", "bad-pass")
+        assertEquals(ServerSetupDraft("https://bad.example", "bad-user", "bad-pass"), repository.serverSetupDraft.first())
+
+        repository.revertServerSetupDraft("https://good.example", "good-user", "good-pass")
+
+        assertEquals(ServerSetupDraft("https://good.example", "good-user", "good-pass"), repository.serverSetupDraft.first())
+        // The failed attempt's own history entry (a real submission, however bad) stays put —
+        // only the sticky draft is reverted, matching MuleServerSetupScreen's own doc for why.
+        assertEquals(
+            listOf(
+                ServerSetupDraft("https://bad.example", "bad-user", "bad-pass"),
+                ServerSetupDraft("https://good.example", "good-user", "good-pass"),
+            ),
+            repository.serverCredentialHistory.first(),
+        )
+        scope.cancel()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun revertServerSetupDraftCanRestoreToEmptyWhenThereWasNoPriorSave() = runTest {
+        val file = tempFolder.newFile("test.preferences_pb")
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = SettingsRepository(dataStoreOverFile(file, scope))
+
+        repository.saveServerSetupDraft("https://bad.example", "bad-user", "bad-pass")
+        repository.revertServerSetupDraft("", "", "")
+
+        assertEquals(ServerSetupDraft("", "", ""), repository.serverSetupDraft.first())
+        scope.cancel()
+    }
 }

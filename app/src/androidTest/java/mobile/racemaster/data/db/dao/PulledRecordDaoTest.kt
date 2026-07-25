@@ -135,6 +135,48 @@ class PulledRecordDaoTest {
     }
 
     @Test
+    fun sourceSummariesReportTheMaxLineNumberPerGroupIndependentOfPulledAtOrder() = runTest {
+        // A mule-to-mule relay manifest is built straight from this summary — it must report
+        // the source's true highest line number regardless of the order rows happened to be
+        // pulled in (an edit-echo/undo-marker can arrive in a later batch than its own root).
+        dao.insertAll(
+            listOf(
+                record("a", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", lineNumber = 9L, pulledAtMillis = 100L),
+                record("b", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", lineNumber = 3L, pulledAtMillis = 200L),
+                record("c", sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label", lineNumber = 40L, pulledAtMillis = 50L),
+            ),
+        )
+        val summaries = dao.observeSourceSummaries().first().associate { it.sourceDeviceId to it.lastLineNumber }
+        assertEquals(mapOf("device-2" to 9L, "device-3" to 40L), summaries)
+    }
+
+    @Test
+    fun getRecordsSinceOnlyReturnsRowsPastTheCutoffForThatSourceOrderedByLineNumber() = runTest {
+        dao.insertAll(
+            listOf(
+                record("a", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", lineNumber = 5L),
+                record("b", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", lineNumber = 2L),
+                record("c", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", lineNumber = 8L),
+                // Different source sharing the line-number range — must not leak in.
+                record("d", sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label", lineNumber = 6L),
+            ),
+        )
+        val since = dao.getRecordsSince("device-2", "Shared Label", sinceLineNumber = 1L)
+        assertEquals(listOf("b", "a", "c"), since.map { it.recordUuid })
+    }
+
+    @Test
+    fun theSameRecordArrivingViaTwoRelayPathsStaysAtOneRow() = runTest {
+        // The whole no-hop-count/TTL relay design leans on redundant transfer being a harmless
+        // storage no-op — this pins that down directly: the same recordUuid inserted twice
+        // (simulating it reaching this device via two different mule paths) must not duplicate.
+        dao.insertAll(listOf(record("shared-record", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label")))
+        dao.insertAll(listOf(record("shared-record", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label")))
+
+        assertEquals(1, dao.getUnsynced().size)
+    }
+
+    @Test
     fun observeForSourceOnlyReturnsRowsFromTheGivenDevice() = runTest {
         dao.insertAll(
             listOf(

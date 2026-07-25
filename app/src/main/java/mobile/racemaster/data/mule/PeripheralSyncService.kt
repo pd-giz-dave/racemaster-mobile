@@ -48,17 +48,21 @@ import kotlinx.serialization.json.Json
 import kotlin.time.Duration.Companion.milliseconds
 import mobile.racemaster.MainActivity
 import mobile.racemaster.RacemasterApplication
+import mobile.racemaster.data.db.dao.PulledSourceSummary
 
 /**
  * Runs on every device (Time, Bibs, and Mule) regardless of which screen is showing, so a
  * Mule can discover and pull from a Time/Bibs phone without its operator doing anything.
- * Advertises [MuleGattProfile.SERVICE_UUID] and answers a pull request by streaming this
- * device's own unsynced splits/entries (there's nothing to serve while in Mule Mode itself —
- * Mule-to-mule relay is a follow-up, not part of this pass). Also starts [MuleSyncEngine]
- * unconditionally — so every phone, regardless of its own current mode, is simultaneously
- * scanning for and pulling from every *other* nearby device and pushing to the server, not
- * just serving/self-pushing its own data. This is what lets a single phone record Time or
- * Bibs mode and act as a Mule at the same time.
+ * Advertises [MuleGattProfile.SERVICE_UUID] and answers a pull request by streaming either
+ * this device's own unsynced splits/entries (the default — see [streamRecords]) or, for a
+ * request naming a specific [RelayManifestEntry], whatever it's separately holding on that
+ * origin's behalf in its own pulled inbox (see [streamRelayedRecords]) — this second path is
+ * what lets a Mule relay another Mule's already-pulled data on to a third device, not just
+ * serve its own race. Also starts [MuleSyncEngine] unconditionally — so every phone,
+ * regardless of its own current mode, is simultaneously scanning for and pulling from every
+ * *other* nearby device (leaf phone or fellow Mule alike) and pushing to the server, not just
+ * serving/self-pushing its own data. This is what lets a single phone record Time or Bibs
+ * mode and act as a Mule at the same time.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class PeripheralSyncService : Service() {
@@ -96,6 +100,13 @@ class PeripheralSyncService : Service() {
     @Volatile
     private var servingState = ServingState()
 
+    // Kept live the same way deviceName is above — what this device is currently able to
+    // relay on behalf of other, genuinely different origin devices (its own pulled_records
+    // inbox), reflected into DeviceInfo.relayEntries on every read so a neighbor scanning this
+    // device sees relay-worthy data appear/advance without this service needing to restart.
+    @Volatile
+    private var relayManifest: List<PulledSourceSummary> = emptyList()
+
     private data class ServingState(
         val raceId: Long? = null,
         val raceLabel: String = "",
@@ -117,6 +128,7 @@ class PeripheralSyncService : Service() {
         startForegroundWithNotification()
         observeServingState()
         observeDeviceName()
+        observeRelayManifest()
         startAdvertisingRetryLoop()
         container.muleSyncEngine.start()
     }
@@ -134,6 +146,16 @@ class PeripheralSyncService : Service() {
             container.settingsRepository.deviceName.collect { name ->
                 if (!name.isNullOrBlank()) deviceName = name
             }
+        }
+    }
+
+    // Same "keep it live for this service's whole lifetime" reasoning as observeDeviceName —
+    // a fresh BLE pull landing in this device's pulled_records inbox must be reflected in the
+    // very next DeviceInfo read a neighbor performs, not just the next time this long-running
+    // service happens to restart.
+    private fun observeRelayManifest() {
+        serviceScope.launch {
+            container.muleRepository.sourceSummaries.collect { summaries -> relayManifest = summaries }
         }
     }
 
@@ -342,6 +364,9 @@ class PeripheralSyncService : Service() {
                 raceLabel = servingState.raceLabel,
                 lastLineNumber = servingState.lastLineNumber,
                 deviceName = deviceName,
+                relayEntries = relayManifest.map {
+                    RelayManifestEntry(it.sourceDeviceId, it.deviceName, it.sourceRaceLabel, it.lastLineNumber)
+                },
             )
             val bytes = json.encodeToString(info).toByteArray(Charsets.UTF_8)
             val value = bytes.drop(offset).toByteArray()
@@ -361,8 +386,13 @@ class PeripheralSyncService : Service() {
             when (characteristic.uuid) {
                 MuleGattProfile.CONTROL_CHARACTERISTIC_UUID -> {
                     val request = runCatching { json.decodeFromString<PullRequest>(String(value, Charsets.UTF_8)) }.getOrNull()
-                    if (request != null) {
+                    val originDeviceId = request?.originDeviceId
+                    if (request != null && originDeviceId == null) {
                         serviceScope.launch { streamRecords(device, request.sinceLineNumber) }
+                    } else if (request != null && originDeviceId != null) {
+                        serviceScope.launch {
+                            streamRelayedRecords(device, originDeviceId, request.originRaceLabel.orEmpty(), request.sinceLineNumber)
+                        }
                     }
                 }
                 MuleGattProfile.ACK_CHARACTERISTIC_UUID -> {
@@ -423,15 +453,31 @@ class PeripheralSyncService : Service() {
         val race = container.raceRepository.getRace(raceId)
         val records = container.raceRepository.getHistorySinceLineNumber(raceId, sinceLineNumber)
             .map { it.toSyncRecord(race?.timeModeStartedAtMillis, location = race?.location ?: "Finish") }
-        // ATT header is 3 bytes, so the usable notification payload is (MTU - 3). Sizing to
-        // whatever actually got negotiated (see onMtuChanged) is what fixed real truncation
-        // corruption in the field: a fixed chunk size larger than the un-negotiated default
-        // MTU (23 bytes) gets silently cut off in transit by the BLE stack. The negotiated
-        // MTU is *not* a reliable upper bound on its own though — Android doesn't guarantee
-        // it matches what was requested, and a large enough negotiated value here produced a
-        // chunk over the platform's hard 512-byte GATT attribute limit, which crashed the
-        // whole app (notifyCharacteristicChanged throws, uncaught, on this coroutine) rather
-        // than just failing the one transfer — so this is always capped to a safe max too.
+        sendRecordsChunked(device, records)
+    }
+
+    // Answers a mule-to-mule relay pull request — the pulled-inbox equivalent of streamRecords
+    // above, for a RelayManifestEntry this device is holding on another, genuinely different
+    // device's behalf rather than its own race. Deliberately does not filter by whether these
+    // rows have already been synced to the internet server: only the line-number delta matters
+    // here, exactly like streamRecords' own behavior — a record already on the server must
+    // still be offered to a neighbor mule that hasn't caught up to it yet.
+    private suspend fun streamRelayedRecords(device: BluetoothDevice, originDeviceId: String, originRaceLabel: String, sinceLineNumber: Long) {
+        sendRecordsChunked(device, container.muleRepository.relayedRecordsSince(originDeviceId, originRaceLabel, sinceLineNumber))
+    }
+
+    // ATT header is 3 bytes, so the usable notification payload is (MTU - 3). Sizing to
+    // whatever actually got negotiated (see onMtuChanged) is what fixed real truncation
+    // corruption in the field: a fixed chunk size larger than the un-negotiated default
+    // MTU (23 bytes) gets silently cut off in transit by the BLE stack. The negotiated
+    // MTU is *not* a reliable upper bound on its own though — Android doesn't guarantee
+    // it matches what was requested, and a large enough negotiated value here produced a
+    // chunk over the platform's hard 512-byte GATT attribute limit, which crashed the
+    // whole app (notifyCharacteristicChanged throws, uncaught, on this coroutine) rather
+    // than just failing the one transfer — so this is always capped to a safe max too.
+    // Shared by both streamRecords and streamRelayedRecords so this already field-tested
+    // sizing logic never has to be reimplemented (or drift) a second time.
+    private fun sendRecordsChunked(device: BluetoothDevice, records: List<SyncRecord>) {
         val negotiatedMtu = deviceMtus[device.address]
         val chunkSize = (negotiatedMtu?.let { (it - 3).coerceAtLeast(1) } ?: MuleGattProfile.FALLBACK_CHUNK_SIZE_BYTES)
             .coerceAtMost(MuleGattProfile.MAX_SAFE_CHUNK_SIZE_BYTES)
