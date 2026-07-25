@@ -27,7 +27,7 @@ fun HistoryLineEntity.toSyncRecord(raceStartedAtMillis: Long?, location: String 
     } else {
         null
     }
-    val wireBibNumber = if (mode == HistoryMode.BIBS) bibNumber?.toString() ?: "n/a" else null
+    val wireBibNumber = if (mode == HistoryMode.BIBS || mode == HistoryMode.CP) bibNumber?.toString() ?: "n/a" else null
     return SyncRecord(
         recordUuid = recordUuid,
         action = action.toServerAction(),
@@ -54,6 +54,8 @@ private fun HistoryAction.toServerAction(): String = when (this) {
     HistoryAction.MALE -> "Male"
     HistoryAction.FEMALE -> "Female"
     HistoryAction.CLOCK -> "Clock"
+    // CP Mode
+    HistoryAction.PASS -> "Pass"
     // Shared
     HistoryAction.START -> "Start"
     HistoryAction.STOP -> "Stop"
@@ -83,6 +85,7 @@ fun SyncRecord.toHistoryAction(): HistoryAction = when (action) {
     "Male" -> HistoryAction.MALE
     "Female" -> HistoryAction.FEMALE
     "Clock" -> HistoryAction.CLOCK
+    "Pass" -> HistoryAction.PASS
     "Stop" -> HistoryAction.STOP
     "Reset" -> HistoryAction.RESET
     "Undo" -> HistoryAction.UNDO

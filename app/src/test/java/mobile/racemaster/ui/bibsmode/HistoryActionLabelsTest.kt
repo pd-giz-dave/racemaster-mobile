@@ -18,6 +18,7 @@ class HistoryActionLabelsTest {
         assertEquals("Male", HistoryAction.MALE.displayName())
         assertEquals("Female", HistoryAction.FEMALE.displayName())
         assertEquals("Clock", HistoryAction.CLOCK.displayName())
+        assertEquals("Pass", HistoryAction.PASS.displayName())
         assertEquals("Stop", HistoryAction.STOP.displayName())
         assertEquals("Reset", HistoryAction.RESET.displayName())
         assertEquals("Undo", HistoryAction.UNDO.displayName())
@@ -39,5 +40,12 @@ class HistoryActionLabelsTest {
         assertEquals(false, HistoryAction.UNDO in EVENT_PICKER_OPTIONS)
         // The Time-only action never belongs on this Bibs-only picker either.
         assertEquals(false, HistoryAction.SPLIT in EVENT_PICKER_OPTIONS)
+        // CP's own action never belongs on the Bibs picker either.
+        assertEquals(false, HistoryAction.PASS in EVENT_PICKER_OPTIONS)
+    }
+
+    @Test
+    fun cpActionOptionsAreExactlyPassAndRetire() {
+        assertEquals(listOf(HistoryAction.PASS, HistoryAction.RETIRE), CP_ACTION_OPTIONS)
     }
 }

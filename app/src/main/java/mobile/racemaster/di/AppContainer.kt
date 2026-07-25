@@ -13,6 +13,7 @@ import mobile.racemaster.data.mule.MuleSyncClient
 import mobile.racemaster.data.mule.MuleSyncEngine
 import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.repository.BibsModeRepository
+import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.settings.SettingsRepository
@@ -23,6 +24,7 @@ interface AppContainer {
     val raceRepository: RaceRepository
     val timeModeRepository: TimeModeRepository
     val bibsModeRepository: BibsModeRepository
+    val cpModeRepository: CpModeRepository
     val settingsRepository: SettingsRepository
     val muleRepository: MuleRepository
     val muleSyncEngine: MuleSyncEngine
@@ -59,14 +61,18 @@ class DefaultAppContainer(context: Context) : AppContainer {
         BibsModeRepository(database, database.raceDao(), database.historyLineDao())
     }
 
+    override val cpModeRepository: CpModeRepository by lazy {
+        CpModeRepository(database, database.raceDao(), database.historyLineDao())
+    }
+
     private val muleSyncClient: MuleSyncClient by lazy { MuleSyncClient() }
 
     override val muleRepository: MuleRepository by lazy {
-        MuleRepository(database.pulledRecordDao(), settingsRepository, MulePullClient(), muleSyncClient, raceRepository)
+        MuleRepository(database.pulledRecordDao(), settingsRepository, MulePullClient(), muleSyncClient, raceRepository, database.knownDeviceDao())
     }
 
     override val muleSyncEngine: MuleSyncEngine by lazy {
-        MuleSyncEngine(muleRepository, bluetoothStateRepository, raceRepository, timeModeRepository, bibsModeRepository, settingsRepository)
+        MuleSyncEngine(muleRepository, bluetoothStateRepository, raceRepository, timeModeRepository, bibsModeRepository, cpModeRepository, settingsRepository)
     }
 
     override val serverStatusRepository: ServerStatusRepository by lazy {

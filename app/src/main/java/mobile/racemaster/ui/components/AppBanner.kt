@@ -31,6 +31,7 @@ import mobile.racemaster.ui.theme.RaceMasterGreen
 import mobile.racemaster.ui.theme.ServerInvalidAmber
 import mobile.racemaster.ui.theme.ServerOfflineRed
 import mobile.racemaster.ui.theme.ServerOnlineGreen
+import mobile.racemaster.ui.theme.ServerPausedGrey
 
 /**
  * Always-visible app banner shown above every screen, styled to match the RaceMaster web
@@ -87,6 +88,8 @@ private fun ServerStatusIndicator(status: ServerStatus) {
         ServerStatus.ONLINE -> ServerOnlineGreen to "Online"
         ServerStatus.OFFLINE -> ServerOfflineRed to "Offline"
         ServerStatus.INVALID -> ServerInvalidAmber to "Invalid server"
+        // Server sync deliberately turned off from Mule Mode — see AppBannerViewModel's own doc.
+        ServerStatus.PAUSED -> ServerPausedGrey to "Paused"
     } ?: return
     val (dotColor, label) = indicator
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {

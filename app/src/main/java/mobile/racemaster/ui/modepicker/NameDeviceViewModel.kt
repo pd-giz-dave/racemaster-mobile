@@ -49,7 +49,7 @@ class NameDeviceViewModel(
                     raceRepository.observeRace(raceId),
                     bibsModeRepository.observeCurrentSegmentEntries(raceId),
                 ) { race, bibsEntries ->
-                    race != null && isRaceActive(race.timeModeStartedAtMillis, bibsEntries.hasRealEntries())
+                    race != null && isRaceActive(race.timeModeStartedAtMillis, bibsEntries.hasRealEntries(), race.cpModeStartedAtMillis)
                 }
             }
         }

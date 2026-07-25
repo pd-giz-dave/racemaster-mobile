@@ -18,9 +18,16 @@ enum class HistoryAction {
     // mapped 1:1 to wire `action` strings via toServerAction()).
     FINISH, RETIRE, IGNORE, SENIORS, JUNIORS, MALE, FEMALE, CLOCK,
 
+    // CP Mode only — a runner passing a checkpoint, the CP equivalent of Bibs' FINISH (see
+    // BibValidation.ACCOUNTED_FOR_ACTIONS/BIB_REQUIRED_ACTIONS below, where it's treated
+    // identically to FINISH for dup-detection/outstanding-bib purposes). RETIRE is shared with
+    // Bibs Mode instead of getting its own CP variant — a retirement means the same thing
+    // regardless of which station recorded it.
+    PASS,
+
     // Shared — see this file's own doc for why START/STOP/RESET/UNDO are safe to share.
     START, STOP, RESET, UNDO,
 }
 
 /** Actions that carry a real bib number and participate in range/duplicate checks. */
-val BIB_REQUIRED_ACTIONS = setOf(HistoryAction.START, HistoryAction.FINISH, HistoryAction.RETIRE)
+val BIB_REQUIRED_ACTIONS = setOf(HistoryAction.START, HistoryAction.FINISH, HistoryAction.RETIRE, HistoryAction.PASS)

@@ -12,7 +12,12 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-enum class ServerStatus { UNKNOWN, ONLINE, OFFLINE, INVALID }
+// PAUSED is never produced by interpretPingOutcome/checkNow below — this repository only
+// reports raw reachability. It's an AppBannerViewModel-level override applied on top of
+// whatever this reports, for when the operator has deliberately turned server sync off (see
+// AppBannerViewModel's own doc) — reachability is still polled underneath so the real status
+// is ready to show the moment sync is turned back on.
+enum class ServerStatus { UNKNOWN, ONLINE, OFFLINE, INVALID, PAUSED }
 
 data class ServerStatusState(val status: ServerStatus, val checkedAtMillis: Long?)
 

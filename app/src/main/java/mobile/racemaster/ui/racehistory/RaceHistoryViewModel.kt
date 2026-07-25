@@ -115,7 +115,7 @@ class RaceHistoryViewModel(
                                 id = race.id,
                                 label = race.label,
                                 createdByDeviceName = race.createdByDeviceName,
-                                isActive = isRaceActive(race.timeModeStartedAtMillis, bibsEntries.hasRealEntries()),
+                                isActive = isRaceActive(race.timeModeStartedAtMillis, bibsEntries.hasRealEntries(), race.cpModeStartedAtMillis),
                                 serverSyncSkippedAsStale = isSkippedAsStale(lastActivityAtMillis, maxAgeDays),
                             )
                         }

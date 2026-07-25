@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -19,18 +18,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.ui.components.CompactTopAppBarHeight
 import mobile.racemaster.ui.components.SyncStatusLine
-import mobile.racemaster.ui.theme.ServerOfflineRed
 import mobile.racemaster.ui.theme.SyncedGreen
 import mobile.racemaster.ui.theme.UnsyncedRed
 import mobile.racemaster.util.formatWallClock
@@ -45,28 +40,6 @@ fun MuleModeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
-
-    // A fresh install (or any device that's never logged in) is offered an explicit choice
-    // rather than being auto-forwarded to Setup Server: Mule Mode's Bluetooth pull/relay side
-    // works fine with no server at all, so an operator opening this screen just to look
-    // around shouldn't be forced through server setup first. null while the one-shot checks
-    // below are still resolving (renders nothing that one frame, rather than flashing the
-    // real logged-out screen first); true/false once resolved. rememberSaveable so the choice
-    // survives the round trip to Setup Server and back and sticks across recomposition for
-    // this screen's back-stack lifetime — naturally stops mattering the moment isLoggedIn
-    // flips true for real (e.g. after actually completing Setup Server).
-    var showServerChoice by rememberSaveable { mutableStateOf<Boolean?>(null) }
-    // Whether "With server" is the recommended option — a device with no working internet
-    // connection right now can't reach a server regardless, so "Without server" (pure
-    // Bluetooth device-to-device sync) is highlighted instead. See
-    // MuleModeViewModel.hasInternetConnectivity's own doc for why this is a one-shot check,
-    // not a live subscription.
-    var recommendServer by rememberSaveable { mutableStateOf(true) }
-    LaunchedEffect(Unit) {
-        if (showServerChoice != null) return@LaunchedEffect
-        recommendServer = viewModel.hasInternetConnectivity()
-        showServerChoice = !viewModel.isLoggedIn()
-    }
 
     Scaffold(
         topBar = {
@@ -86,93 +59,32 @@ fun MuleModeScreen(
         // height of blank space above the system bar.
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->
-        when (showServerChoice) {
-            // Still resolving the one-shot checks above — nothing to show yet, deliberately
-            // for only a frame or two rather than flashing the real (logged-out) screen first.
-            null -> {}
-            true -> ServerChoicePrompt(
-                recommendServer = recommendServer,
-                onWithServer = {
-                    showServerChoice = false
-                    onSetupServer()
-                },
-                onWithoutServer = { showServerChoice = false },
-                modifier = Modifier
-                    .padding(padding)
-                    .imePadding()
-                    .verticalScroll(rememberScrollState())
-                    .padding(16.dp),
-            )
-            false -> Column(
-                modifier = Modifier
-                    .padding(padding)
-                    .imePadding()
-                    .verticalScroll(rememberScrollState())
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                // Mule Mode's layout is due a larger rework — parked here plainly for now.
-                if (!deviceName.isNullOrBlank()) {
-                    Text(text = "Device name: $deviceName", style = MaterialTheme.typography.labelMedium)
-                }
-                SyncStatusLine(uiState.unsyncedCount, uiState.lastSyncedAtMillis)
-                BluetoothAndServerSyncToggles(uiState, viewModel)
-                AutoSyncStatus(uiState, viewModel)
-
-                uiState.statusMessage?.let { message ->
-                    Text(
-                        message,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.clickable(onClick = withClickSound(viewModel::dismissStatusMessage)),
-                    )
-                }
-
-                NearbyDevicesSection(uiState)
-
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            // Mule Mode's layout is due a larger rework — parked here plainly for now.
+            if (!deviceName.isNullOrBlank()) {
+                Text(text = "Device name: $deviceName", style = MaterialTheme.typography.labelMedium)
             }
-        }
-    }
-}
+            SyncStatusLine(uiState.unsyncedCount, uiState.lastSyncedAtMillis)
+            BluetoothAndServerSyncToggles(uiState, viewModel)
+            AutoSyncStatus(uiState, viewModel)
 
-@Composable
-private fun ServerChoicePrompt(
-    recommendServer: Boolean,
-    onWithServer: () -> Unit,
-    onWithoutServer: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("Use Mule Mode with a server, or purely device-to-device?", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "Nearby devices sync with each other over Bluetooth either way. A server also " +
-                "backs everything up online for the race organizer, reachable even once " +
-                "devices are out of Bluetooth range of each other.",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Text(
-            if (recommendServer) "Internet connection available" else "No internet connection detected",
-            style = MaterialTheme.typography.bodySmall,
-            color = if (recommendServer) SyncedGreen else ServerOfflineRed,
-        )
-        if (!recommendServer) {
-            Text(
-                "So Without server is recommended for now — you can still connect to a " +
-                    "server later from this screen's Setup Server button once you have " +
-                    "signal or WiFi.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-        // The recommended option (based on current connectivity) gets the filled Button; the
-        // other gets the lower-emphasis OutlinedButton — same two actions either way, just
-        // which one visually leads.
-        if (recommendServer) {
-            Button(onClick = withClickSound(onWithServer), modifier = Modifier.fillMaxWidth()) { Text("With server") }
-            OutlinedButton(onClick = withClickSound(onWithoutServer), modifier = Modifier.fillMaxWidth()) { Text("Without server") }
-        } else {
-            OutlinedButton(onClick = withClickSound(onWithServer), modifier = Modifier.fillMaxWidth()) { Text("With server") }
-            Button(onClick = withClickSound(onWithoutServer), modifier = Modifier.fillMaxWidth()) { Text("Without server") }
+            uiState.statusMessage?.let { message ->
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable(onClick = withClickSound(viewModel::dismissStatusMessage)),
+                )
+            }
+
+            NearbyDevicesSection(uiState, onForget = viewModel::forgetDevice)
         }
     }
 }
@@ -194,14 +106,14 @@ private fun BluetoothAndServerSyncToggles(uiState: MuleModeUiState, viewModel: M
             )
         } else {
             Text(
-                "Bluetooth: ON — pulling data from visible nearby devices",
+                "Bluetooth: ON — pulling data from nearby devices",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
             )
         }
         if (uiState.serverSyncOff) {
             Text(
-                "Server sync: OFF — not pushing to or checking the server",
+                "Server sync: OFF — not pushing to the server",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -213,7 +125,7 @@ private fun BluetoothAndServerSyncToggles(uiState: MuleModeUiState, viewModel: M
             )
         } else {
             Text(
-                "Server sync: ON — pushing pulled and self data to the server",
+                "Server sync: ON — pushing data to the server",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
             )
@@ -258,7 +170,7 @@ private fun AutoSyncStatus(uiState: MuleModeUiState, viewModel: MuleModeViewMode
         // another Mule) once any relaying is actually happening — a raw combined count would
         // overstate how many devices are genuinely in range right now. Falls back to today's
         // exact wording while relayCount is 0, so this is a visual no-op until a chain forms.
-        val directDeviceCount = uiState.discoveredDevices.count { !it.isSelf && it.relayedViaDeviceName == null }
+        val directDeviceCount = uiState.discoveredDevices.count { !it.isSelf && !it.isStale && it.relayedViaDeviceName == null }
         val relayDeviceCount = uiState.discoveredDevices.count { it.relayedViaDeviceName != null }
         val fromSuffix = if (relayDeviceCount > 0) {
             "$directDeviceCount nearby, $relayDeviceCount relayed"
@@ -296,11 +208,12 @@ private fun AutoSyncStatus(uiState: MuleModeUiState, viewModel: MuleModeViewMode
 }
 
 @Composable
-private fun NearbyDevicesSection(uiState: MuleModeUiState) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+private fun NearbyDevicesSection(uiState: MuleModeUiState, onForget: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text("Nearby devices", style = MaterialTheme.typography.titleMedium)
         Text(
-            "Red means it has unsynced data, green means it's all synced.",
+            "Red means it has unsynced data, green means it's all synced, grey means it's " +
+                "gone quiet — most recently seen first.",
             style = MaterialTheme.typography.bodySmall,
         )
         if (uiState.bluetoothOff) {
@@ -321,36 +234,65 @@ private fun NearbyDevicesSection(uiState: MuleModeUiState) {
             // remaining case it doesn't cover: self, resolved, but with no active race and no
             // device name ever chosen yet.
             val hasReported = device.deviceName.isNotEmpty() || device.raceLabel.isNotEmpty()
-            if (!hasReported) {
-                Text(
-                    "${device.deviceKey.take(8)} — Discovering…",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            } else {
-                val unsynced = device.unsyncedCount
-                // Below UNREACHABLE_FAILURE_THRESHOLD, a missed read is still just ordinary
-                // BLE noise (see DiscoveredDevice's own doc) — naming the running count here
-                // rather than staying silent lets the operator see a device is having trouble
-                // before it's actually flagged unreachable, without a shared banner that could
-                // only ever name one device at a time.
-                val suffix = when {
-                    device.isSelf -> " (self)"
-                    // A relay-only row has no direct BLE link of its own to be unreachable/missing
-                    // reads on — those track this phone's own connection to a peer, meaningless
-                    // for an origin only ever known transitively (see DiscoveredDevice's own doc).
-                    device.relayedViaDeviceName != null -> " (via ${device.relayedViaDeviceName})"
-                    device.unreachable -> " (unreachable)"
-                    device.consecutiveFailures > 0 -> " (missed ${device.consecutiveFailures})"
-                    else -> ""
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                when {
+                    // A stale row (see DiscoveredDevice.isStale's own doc) always has a name —
+                    // it only exists because it resolved at least once before — so this branches
+                    // ahead of the live-only "Discovering…" case below. Neutral grey, not
+                    // red/green: there's no current sync status to report, just a last-seen time,
+                    // which is what differentiates it from a live row at a glance.
+                    device.isStale -> Text(
+                        "${device.deviceName} — last seen ${formatWallClock(device.lastReachableAtMillis)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    !hasReported -> Text(
+                        "${device.deviceKey.take(8)} — Discovering…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    else -> {
+                        val unsynced = device.unsyncedCount
+                        // Below UNREACHABLE_FAILURE_THRESHOLD, a missed read is still just ordinary
+                        // BLE noise (see DiscoveredDevice's own doc) — naming the running count here
+                        // rather than staying silent lets the operator see a device is having trouble
+                        // before it's actually flagged unreachable, without a shared banner that could
+                        // only ever name one device at a time.
+                        val suffix = when {
+                            device.isSelf -> " (self)"
+                            // A relay-only row has no direct BLE link of its own to be unreachable/missing
+                            // reads on — those track this phone's own connection to a peer, meaningless
+                            // for an origin only ever known transitively (see DiscoveredDevice's own doc).
+                            device.relayedViaDeviceName != null -> " (via ${device.relayedViaDeviceName})"
+                            device.unreachable -> " (unreachable)"
+                            device.consecutiveFailures > 0 -> " (missed ${device.consecutiveFailures})"
+                            else -> ""
+                        }
+                        Text(
+                            "${device.deviceName.ifEmpty { device.deviceKey.take(8) }} — ${device.raceLabel.ifEmpty { "no race" }}$suffix",
+                            style = MaterialTheme.typography.bodyMedium,
+                            // Unreachable overrides whatever unsynced count was last read — that
+                            // count is stale the moment a read fails, so trusting it would show a
+                            // reassuring green right next to a "couldn't reach" warning.
+                            color = if (device.unreachable || unsynced > 0) UnsyncedRed else SyncedGreen,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
-                Text(
-                    "${device.deviceName.ifEmpty { device.deviceKey.take(8) }} — ${device.raceLabel.ifEmpty { "no race" }}$suffix",
-                    style = MaterialTheme.typography.bodyMedium,
-                    // Unreachable overrides whatever unsynced count was last read — that
-                    // count is stale the moment a read fails, so trusting it would show a
-                    // reassuring green right next to a "couldn't reach" warning.
-                    color = if (device.unreachable || unsynced > 0) UnsyncedRed else SyncedGreen,
-                )
+                // Can't forget yourself — there's no live/persisted entry for self to purge
+                // (see MuleSyncEngine.selfDevice's own doc, it's synthesized fresh every time,
+                // never folded into discoveredFlow or the known-devices roster at all). A plain
+                // clickable Text, not a Button — Material's own minimum touch target on even a
+                // TextButton was tall enough to visibly space out every row in this list.
+                if (!device.isSelf) {
+                    Text(
+                        "Forget",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.clickable(onClick = withClickSound { onForget(device.deviceId ?: device.deviceKey) }),
+                    )
+                }
             }
         }
     }

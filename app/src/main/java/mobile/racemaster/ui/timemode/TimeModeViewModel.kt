@@ -113,7 +113,14 @@ class TimeModeViewModel(
                             )
                         },
                         canUndo = splits.isNotEmpty(),
-                        raceInProgress = isRaceInProgress(startedAt, stoppedAt, bibEntries.hasRealEntries(), race?.bibsModeStoppedAtMillis),
+                        raceInProgress = isRaceInProgress(
+                            startedAt,
+                            stoppedAt,
+                            bibEntries.hasRealEntries(),
+                            race?.bibsModeStoppedAtMillis,
+                            race?.cpModeStartedAtMillis,
+                            race?.cpModeStoppedAtMillis,
+                        ),
                         unsyncedCount = unsyncedCount,
                         lastSyncedAtMillis = lastSyncedAtMillis,
                         firstBibNumber = race?.bibsRangeStart,

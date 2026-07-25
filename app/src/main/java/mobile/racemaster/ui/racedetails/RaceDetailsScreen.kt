@@ -13,9 +13,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -95,16 +97,17 @@ fun RaceDetailsScreen(
         prefilled = true
     }
 
-    // Identical field set for Time and Bibs, both for create and edit — Time Mode never
+    // Identical field set for Time, Bibs, and CP, both for create and edit — Time Mode never
     // actually reads the first bib number for anything, but the form (and the feedback shown
     // on-screen later) stays the same either way, per instruction.
-    val showRunnerFields = mode == AppMode.TIME || mode == AppMode.BIBS
+    val showRunnerFields = mode == AppMode.TIME || mode == AppMode.BIBS || mode == AppMode.CP
 
     // "Fresh" = no real progress recorded yet, true both for a brand-new race and for one
     // that's just been Reset — safe to still change the runner count/bib range in either
     // case, since no recorded splits/entries depend on the old value.
     val isFresh = existingRaceId == null || when (mode) {
         AppMode.BIBS -> existingRace?.bibsModeNextSplit == 1
+        AppMode.CP -> existingRace?.cpModeNextSplit == 1
         AppMode.TIME -> existingRace?.timeModeNextSplit == 1
         AppMode.MULE -> true
     }
@@ -236,17 +239,38 @@ fun RaceDetailsScreen(
                     )
                 }
             }
-            Button(
-                onClick = withClickSound {
-                    isSaving = true
-                    scope.launch {
-                        val raceId = viewModel.save(name, course, location, start, count)
-                        onSaved(raceId)
-                    }
-                },
-                enabled = canSave,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text(if (existingRaceId == null) "Create" else "Save") }
+            // Save/Create alongside "Clear race" — same side-by-side pattern as Setup Server's
+            // Log-in/No Server row: primary action plus a "reset to nothing" secondary action
+            // that exits the form the same way the primary's success path does. Always shown,
+            // same as Setup Server's own row — Clear race just stays disabled rather than the
+            // row disappearing, whether that's because there's no race yet to clear
+            // (existingRaceId null) or because this one is currently active (canClearRace).
+            val canClearRace by viewModel.canClearRace.collectAsStateWithLifecycle()
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = withClickSound {
+                        isSaving = true
+                        scope.launch {
+                            val raceId = viewModel.save(name, course, location, start, count)
+                            onSaved(raceId)
+                        }
+                    },
+                    enabled = canSave,
+                    modifier = Modifier.weight(1f),
+                ) { Text(if (existingRaceId == null) "Create" else "Save") }
+                OutlinedButton(
+                    onClick = withClickSound {
+                        isSaving = true
+                        scope.launch {
+                            viewModel.clearRace()
+                            isSaving = false
+                            onCancel()
+                        }
+                    },
+                    enabled = canClearRace && !isSaving,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Clear race") }
+            }
         }
     }
 }

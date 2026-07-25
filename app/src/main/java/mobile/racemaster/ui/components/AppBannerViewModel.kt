@@ -5,7 +5,13 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import mobile.racemaster.data.mule.ServerStatus
 import mobile.racemaster.data.mule.ServerStatusRepository
+import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 
@@ -17,7 +23,18 @@ class AppBannerViewModel(
     settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
-    val serverStatus = serverStatusRepository.state
+    // Overrides whatever the raw reachability poll reports with PAUSED whenever the operator
+    // has turned server sync off from Mule Mode (MuleRepository.setServerSyncOff) — while
+    // paused, no push is going to happen regardless of whether the server itself is reachable,
+    // so "Online"/"Offline"/"Invalid server" would be misleading right now. UNKNOWN (no server
+    // configured at all) is left alone — there's nothing to pause yet, same reasoning as why
+    // the banner already renders blank for it (see AppBanner's own doc).
+    val serverStatus: StateFlow<ServerStatusState> = combine(
+        serverStatusRepository.state,
+        settingsRepository.serverSyncOff,
+    ) { state, syncOff ->
+        if (syncOff && state.status != ServerStatus.UNKNOWN) state.copy(status = ServerStatus.PAUSED) else state
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), serverStatusRepository.state.value)
 
     init {
         serverStatusRepository.startPolling(viewModelScope, settingsRepository.serverBaseUrl)

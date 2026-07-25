@@ -13,6 +13,7 @@ fun HistoryAction.displayName(): String = when (this) {
     HistoryAction.MALE -> "Male"
     HistoryAction.FEMALE -> "Female"
     HistoryAction.CLOCK -> "Clock"
+    HistoryAction.PASS -> "Pass"
     HistoryAction.STOP -> "Stop"
     HistoryAction.RESET -> "Reset"
     HistoryAction.UNDO -> "Undo"
@@ -36,3 +37,7 @@ val EVENT_PICKER_OPTIONS: List<HistoryAction> = listOf(
     HistoryAction.MALE,
     HistoryAction.FEMALE,
 )
+
+// CP Mode's own, much smaller picker — offered only when editing an existing entry (its main
+// entry flow has PASS/RETIRE as fixed buttons, no picker at all — see CpModeScreen).
+val CP_ACTION_OPTIONS: List<HistoryAction> = listOf(HistoryAction.PASS, HistoryAction.RETIRE)

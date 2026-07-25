@@ -194,4 +194,45 @@ class SettingsRepositoryTest {
         assertEquals(ServerSetupDraft("", "", ""), repository.serverSetupDraft.first())
         scope.cancel()
     }
+
+    // clearServerSession — MuleServerSetupScreen's "Clear server" action: the confirmed
+    // session must actually go away, not just the on-screen fields, so sync genuinely stops.
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun clearServerSessionRemovesBothTheBaseUrlAndTheToken() = runTest {
+        val file = tempFolder.newFile("test.preferences_pb")
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = SettingsRepository(dataStoreOverFile(file, scope))
+
+        repository.setServerSession("https://good.example", "some-token")
+        assertEquals("https://good.example", repository.serverBaseUrl.first())
+        assertEquals("some-token", repository.authToken.first())
+
+        repository.clearServerSession()
+
+        assertNull(repository.serverBaseUrl.first())
+        assertNull(repository.authToken.first())
+        scope.cancel()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun clearServerSessionLeavesTheDraftAndCredentialHistoryUntouched() = runTest {
+        // Clearing the session and clearing the draft are two separate calls the screen makes
+        // together (see MuleServerSetupViewModel.clearServer) — this pins down that
+        // clearServerSession alone only ever touches the confirmed session.
+        val file = tempFolder.newFile("test.preferences_pb")
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = SettingsRepository(dataStoreOverFile(file, scope))
+
+        repository.saveServerSetupDraft("https://good.example", "good-user", "good-pass")
+        repository.setServerSession("https://good.example", "some-token")
+
+        repository.clearServerSession()
+
+        assertEquals(ServerSetupDraft("https://good.example", "good-user", "good-pass"), repository.serverSetupDraft.first())
+        assertEquals(1, repository.serverCredentialHistory.first().size)
+        scope.cancel()
+    }
 }

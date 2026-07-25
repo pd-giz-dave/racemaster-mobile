@@ -14,11 +14,11 @@ fun isBibInLegalRange(bib: Int, rangeStart: Int?, rangeCount: Int?): Boolean {
     return bib in rangeStart until (rangeStart + rangeCount)
 }
 
-// A bib is no longer expected to cross the line once it's FINISH (they crossed) or RETIRE
-// (they've been accounted for elsewhere and won't cross) — either way, nothing left to wait
-// for from that bib. START doesn't count: they're on course, still expected to show up one
-// way or the other.
-private val ACCOUNTED_FOR_ACTIONS = setOf(HistoryAction.FINISH, HistoryAction.RETIRE)
+// A bib is no longer expected to cross the line once it's FINISH (they crossed), PASS (they
+// passed this checkpoint — CP Mode's own equivalent of FINISH), or RETIRE (they've been
+// accounted for elsewhere and won't cross) — either way, nothing left to wait for from that
+// bib. START doesn't count: they're on course, still expected to show up one way or the other.
+private val ACCOUNTED_FOR_ACTIONS = setOf(HistoryAction.FINISH, HistoryAction.PASS, HistoryAction.RETIRE)
 
 /**
  * Maps each entry's id to the split numbers of any other entries it duplicates. A bib has

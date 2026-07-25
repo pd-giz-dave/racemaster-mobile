@@ -2,11 +2,14 @@ package mobile.racemaster.data.db.entity
 
 // Which family of history a HistoryLineEntity row belongs to — stamped once at insert by
 // whichever thin repository writes it (TimeModeRepository always writes TIME, BibsModeRepository
-// always writes BIBS). Needed as a separate column rather than deriving it from `action` alone
-// because HistoryAction.UNDO is deliberately one shared value across both families — a query
-// scoped to "just this mode's rows" (including its own UNDO markers, excluding the other
-// family's) must filter on `mode`, not `action`.
-enum class HistoryMode { TIME, BIBS }
+// always writes BIBS, CpModeRepository always writes CP). Needed as a separate column rather
+// than deriving it from `action` alone because HistoryAction.UNDO (and START/STOP/RESET) are
+// deliberately shared values across every family — a query scoped to "just this mode's rows"
+// (including its own UNDO markers, excluding every other family's) must filter on `mode`, not
+// `action`. CP is otherwise structured just like BIBS (its own current-segment/undo-stack/
+// counters, independent of a Bibs device recording the same race from a different station) —
+// see EntryLogModeEngine, which both BIBS and CP repositories are built on.
+enum class HistoryMode { TIME, BIBS, CP }
 
 // Every history line is now shown in one rationalized column format regardless of mode — a
 // line no longer needs a mode-prefixed label (the old "B003"/"T012") to identify it, since

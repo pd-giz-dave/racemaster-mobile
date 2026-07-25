@@ -50,6 +50,16 @@ class SyncRecordMappingTest {
         refLineNumber: Long? = null,
     ) = line(HistoryMode.BIBS, action, splitNumber, timestampMillis, bibNumber = bibNumber, note = note, lineNumber = lineNumber, refLineNumber = refLineNumber)
 
+    private fun cpEntry(
+        bibNumber: Int?,
+        action: HistoryAction,
+        splitNumber: Int,
+        timestampMillis: Long,
+        note: String? = null,
+        lineNumber: Long = 1L,
+        refLineNumber: Long? = null,
+    ) = line(HistoryMode.CP, action, splitNumber, timestampMillis, bibNumber = bibNumber, note = note, lineNumber = lineNumber, refLineNumber = refLineNumber)
+
     // Time-mode HistoryLineEntity.toSyncRecord
 
     @Test
@@ -196,6 +206,45 @@ class SyncRecordMappingTest {
         assertEquals(2L, bibEcho.refLineNumber)
         val bibOriginal = bibEntry(101, HistoryAction.FINISH, splitNumber = 1, timestampMillis = 0L, lineNumber = 5L).toSyncRecord(null)
         assertNull(bibOriginal.refLineNumber)
+    }
+
+    // CP-mode HistoryLineEntity.toSyncRecord — CP shares Bibs' wire shape exactly (bibNumber as
+    // a non-null string, splitTime always null) rather than getting its own — see
+    // SyncRecordMapping's own wireBibNumber condition.
+
+    @Test
+    fun passTypeMapsToPassActionAndSendsBibNumberAsString() {
+        val record = cpEntry(101, HistoryAction.PASS, splitNumber = 1, timestampMillis = 60_000L).toSyncRecord(null)
+        assertEquals("Pass", record.action)
+        assertEquals("101", record.bibNumber)
+    }
+
+    @Test
+    fun cpRetireTypeMapsToDnfActionSameAsBibs() {
+        val record = cpEntry(101, HistoryAction.RETIRE, splitNumber = 1, timestampMillis = 0L).toSyncRecord(null)
+        assertEquals("DNF", record.action)
+    }
+
+    @Test
+    fun cpEntryTimeIsAlwaysNullCpModeHasNoStopwatchOfItsOwn() {
+        val record = cpEntry(101, HistoryAction.PASS, splitNumber = 1, timestampMillis = 360_000L).toSyncRecord(0L)
+        assertNull(record.splitTime)
+    }
+
+    @Test
+    fun cpMarkerActionsSendNAOnTheWireNotNull() {
+        assertEquals("n/a", cpEntry(null, HistoryAction.STOP, 1, 0L).toSyncRecord(null).bibNumber)
+        assertEquals("n/a", cpEntry(null, HistoryAction.RESET, 1, 0L).toSyncRecord(null).bibNumber)
+        assertEquals("n/a", cpEntry(null, HistoryAction.UNDO, 1, 0L).toSyncRecord(null).bibNumber)
+    }
+
+    @Test
+    fun roundTripsEveryCpModeActionThroughTheWireAndBack() {
+        assertEquals(HistoryAction.PASS, cpEntry(101, HistoryAction.PASS, 1, 0L).toSyncRecord(null).toHistoryAction())
+        assertEquals(HistoryAction.RETIRE, cpEntry(101, HistoryAction.RETIRE, 1, 0L).toSyncRecord(null).toHistoryAction())
+        assertEquals(HistoryAction.STOP, cpEntry(null, HistoryAction.STOP, 1, 0L).toSyncRecord(null).toHistoryAction())
+        assertEquals(HistoryAction.RESET, cpEntry(null, HistoryAction.RESET, 1, 0L).toSyncRecord(null).toHistoryAction())
+        assertEquals(HistoryAction.UNDO, cpEntry(null, HistoryAction.UNDO, 1, 0L).toSyncRecord(null).toHistoryAction())
     }
 
     // SyncRecord.toHistoryAction — the exact inverse of toServerAction, exercised via a full

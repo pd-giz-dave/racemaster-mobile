@@ -2,6 +2,7 @@ package mobile.racemaster.ui.mulemode
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -18,6 +19,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -242,22 +244,41 @@ fun MuleServerSetupScreen(
             errorMessage?.let { message ->
                 Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
-            Button(
-                onClick = withClickSound {
-                    isSaving = true
-                    errorMessage = null
-                    scope.launch {
-                        val result = runCatching { viewModel.save(url, username, password, requireNotNull(maxAgeDaysValue)) }
-                        isSaving = false
-                        result.fold(
-                            onSuccess = { onDone() },
-                            onFailure = { e -> errorMessage = "Login failed: ${e.message}" },
-                        )
-                    }
-                },
-                enabled = canSave,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Save & Log In") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = withClickSound {
+                        isSaving = true
+                        errorMessage = null
+                        scope.launch {
+                            val result = runCatching { viewModel.save(url, username, password, requireNotNull(maxAgeDaysValue)) }
+                            isSaving = false
+                            result.fold(
+                                onSuccess = { onDone() },
+                                onFailure = { e -> errorMessage = "Login failed: ${e.message}" },
+                            )
+                        }
+                    },
+                    enabled = canSave,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Log-in") }
+                // "Reset to no server": clears both the confirmed session and the sticky draft
+                // (see MuleServerSetupViewModel.clearServer's own doc), then exits the form
+                // exactly like a successful Log-in does — this is a legitimate, direct choice
+                // now (mirroring the removed Mule Mode intro screen's own "Without server"
+                // option), not a separate destructive action needing its own confirmation step.
+                OutlinedButton(
+                    onClick = withClickSound {
+                        isSaving = true
+                        scope.launch {
+                            viewModel.clearServer()
+                            isSaving = false
+                            onDone()
+                        }
+                    },
+                    enabled = !isSaving,
+                    modifier = Modifier.weight(1f),
+                ) { Text("No Server") }
+            }
         }
     }
 }

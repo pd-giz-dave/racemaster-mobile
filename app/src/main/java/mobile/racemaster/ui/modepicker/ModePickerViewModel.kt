@@ -7,6 +7,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.repository.BibsModeRepository
+import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.repository.hasRealEntries
@@ -29,6 +30,7 @@ data class ActiveRaceStatus(
     val currentModeLabel: String,
     val splitCount: Int,
     val bibCount: Int,
+    val cpCount: Int,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -36,6 +38,7 @@ class ModePickerViewModel(
     private val raceRepository: RaceRepository,
     private val timeModeRepository: TimeModeRepository,
     private val bibsModeRepository: BibsModeRepository,
+    private val cpModeRepository: CpModeRepository,
     private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
@@ -57,14 +60,17 @@ class ModePickerViewModel(
                     raceRepository.observeRace(raceId),
                     timeModeRepository.observeCurrentSegmentSplits(raceId),
                     bibsModeRepository.observeCurrentSegmentEntries(raceId),
+                    cpModeRepository.observeCurrentSegmentEntries(raceId),
                     settingsRepository.appMode,
-                ) { race, splits, bibEntries, mode ->
+                ) { race, splits, bibEntries, cpEntries, mode ->
                     if (race == null) return@combine null
                     val inProgress = isRaceInProgress(
                         race.timeModeStartedAtMillis,
                         race.timeModeStoppedAtMillis,
                         bibEntries.hasRealEntries(),
                         race.bibsModeStoppedAtMillis,
+                        race.cpModeStartedAtMillis,
+                        race.cpModeStoppedAtMillis,
                     )
                     if (!inProgress) return@combine null
                     ActiveRaceStatus(
@@ -72,6 +78,7 @@ class ModePickerViewModel(
                         currentModeLabel = mode.displayName(),
                         splitCount = splits.count { it.splitNumber != 0 },
                         bibCount = bibEntries.count { it.action != HistoryAction.CLOCK },
+                        cpCount = cpEntries.size,
                     )
                 }
             }
@@ -97,6 +104,7 @@ class ModePickerViewModel(
                     container.raceRepository,
                     container.timeModeRepository,
                     container.bibsModeRepository,
+                    container.cpModeRepository,
                     container.settingsRepository,
                 )
             }
@@ -107,6 +115,7 @@ class ModePickerViewModel(
 private fun AppMode?.displayName(): String = when (this) {
     AppMode.TIME -> "Time Mode"
     AppMode.BIBS -> "Bibs Mode"
+    AppMode.CP -> "CP Mode"
     AppMode.MULE -> "Mule Mode"
     null -> ""
 }

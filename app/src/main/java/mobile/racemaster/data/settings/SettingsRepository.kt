@@ -132,6 +132,20 @@ class SettingsRepository(
         }
     }
 
+    // The "reset to no server" counterpart to setServerSession above — for the Setup Server
+    // form's own "Clear server" action (see MuleServerSetupViewModel.clearServer), which resets
+    // both this confirmed session and the sticky draft back to nothing, distinct from just
+    // cancelling out of an in-progress edit. Sync simply stops (MuleRepository.pushToServer
+    // already requires a non-null baseUrl/token) rather than needing any explicit "log out"
+    // server-side call — there's no server-side session to invalidate, only this device's own
+    // locally-remembered one.
+    suspend fun clearServerSession() {
+        dataStore.edit { prefs ->
+            prefs.remove(Keys.SERVER_BASE_URL)
+            prefs.remove(Keys.AUTH_TOKEN)
+        }
+    }
+
     // What the operator last typed into the Setup Server form — kept separate from the
     // confirmed session above (serverBaseUrl/authToken, only updated on a *successful*
     // login) so the form stays sticky even after a failed attempt (e.g. a password typo),

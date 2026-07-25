@@ -1,4 +1,4 @@
-package mobile.racemaster.ui.bibsmode
+package mobile.racemaster.ui.cpmode
 
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.Arrangement
@@ -21,7 +21,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -40,10 +39,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.MainActivity
-import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.formatSplitRef
-import mobile.racemaster.ui.components.ActionPickerDialog
+import mobile.racemaster.ui.bibsmode.CP_ACTION_OPTIONS
+import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.ui.components.DigitKeypad
 import mobile.racemaster.ui.components.EditEntryPanel
 import mobile.racemaster.ui.components.EntryLogList
@@ -57,36 +56,41 @@ import mobile.racemaster.util.withClickSound
 private const val BUTTON_HEIGHT_DP = 48
 
 // Default Material button horizontal padding (24dp/side) leaves almost no room for text once
-// four buttons share a row — cut it down instead of shrinking the font, so labels like
-// "Finish"/"Seniors" stay readable.
+// four buttons share a row — cut it down instead of shrinking the font, matching Bibs Mode's
+// own identical row.
 private val BUTTON_ROW_CONTENT_PADDING = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
 
+/** CP Mode's screen — structurally the same as Bibs Mode's (same header, keypad, entry list,
+ *  edit panel, all reused via the shared `ui/components` composables), differing only in its
+ *  fixed Pass/Retire button pair in place of Bibs' dynamic Submit-plus-Event-picker: CP has
+ *  exactly two possible actions, so each gets its own always-visible button that submits
+ *  directly rather than staging a "pending type" first. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BibsModeScreen(
+fun CpModeScreen(
     onChangeMode: () -> Unit,
     onNewRace: () -> Unit,
     onEditRace: (raceId: Long) -> Unit,
-    viewModel: BibsModeViewModel = viewModel(factory = BibsModeViewModel.Factory),
+    viewModel: CpModeViewModel = viewModel(factory = CpModeViewModel.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
 
-    // Same external HID trigger mechanism Time Mode uses (MainActivity.onExternalSplitTrigger),
-    // registered here while Bibs Mode is on screen so a volume button (or any other recognized
-    // HID key) logs the pending event exactly like tapping the Log button.
+    // Same external HID trigger mechanism Time/Bibs Mode use (MainActivity.onExternalSplitTrigger)
+    // — a volume button (or any other recognized HID key) logs a Pass, CP's primary action,
+    // exactly like tapping the Pass button.
     val activity = LocalActivity.current as MainActivity
-    val currentOnSubmit by rememberUpdatedState(viewModel::submit)
+    val currentOnPass by rememberUpdatedState { viewModel.submit(HistoryAction.PASS) }
     val canExternalTrigger by rememberUpdatedState(uiState.canSubmit)
     DisposableEffect(activity) {
-        activity.onExternalSplitTrigger = { if (canExternalTrigger) currentOnSubmit() }
+        activity.onExternalSplitTrigger = { if (canExternalTrigger) currentOnPass() }
         onDispose { activity.onExternalSplitTrigger = null }
     }
 
     Scaffold(
         topBar = {
             ModeScreenTopBar(
-                title = "Bibs Mode",
+                title = "CP Mode",
                 newRaceEnabled = !uiState.raceInProgress,
                 thisRaceEnabled = uiState.raceId != null,
                 onNewRace = onNewRace,
@@ -94,26 +98,24 @@ fun BibsModeScreen(
                 onChangeMode = onChangeMode,
             )
         },
-        // MainActivity's outer Scaffold (no bottomBar) already reserves the navigation
-        // bar's bottom inset for every screen — without this, this inner Scaffold's own
-        // default contentWindowInsets reserves it a second time, wasting a whole nav-bar
-        // height of blank space above the system bar and leaving less room for the list.
+        // MainActivity's outer Scaffold (no bottomBar) already reserves the navigation bar's
+        // bottom inset for every screen — without this, this inner Scaffold's own default
+        // contentWindowInsets reserves it a second time.
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->
-        BibsModeContent(
+        CpModeContent(
             uiState = uiState,
             deviceName = deviceName,
-            onStart = viewModel::startBibsMode,
+            onStart = viewModel::startCpMode,
             onDigit = viewModel::onDigit,
             onBackspace = viewModel::onBackspace,
             onClear = viewModel::onClear,
-            onSetPendingEventType = viewModel::setPendingEventType,
-            onSubmit = viewModel::submit,
-            onStop = viewModel::stopBibsMode,
-            onReset = viewModel::resetBibsMode,
+            onPass = { viewModel.submit(HistoryAction.PASS) },
+            onRetire = { viewModel.submit(HistoryAction.RETIRE) },
+            onStop = viewModel::stopCpMode,
+            onReset = viewModel::resetCpMode,
             onUndo = viewModel::undoLast,
             onUpdateEntry = viewModel::updateEntry,
-            onUpdateClockTime = viewModel::updateClockTime,
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
@@ -133,54 +135,32 @@ fun BibsModeScreen(
 }
 
 @Composable
-private fun BibsModeContent(
-    uiState: BibsModeUiState,
+private fun CpModeContent(
+    uiState: CpModeUiState,
     deviceName: String?,
     onStart: () -> Unit,
     onDigit: (Int) -> Unit,
     onBackspace: () -> Unit,
     onClear: () -> Unit,
-    onSetPendingEventType: (HistoryAction) -> Unit,
-    onSubmit: () -> Unit,
+    onPass: () -> Unit,
+    onRetire: () -> Unit,
     onStop: () -> Unit,
     onReset: () -> Unit,
     onUndo: () -> Unit,
     onUpdateEntry: (id: Long, bibNumber: Int?, type: HistoryAction, note: String?) -> Unit,
-    onUpdateClockTime: (id: Long, raw: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // BoxWithConstraints (not a fixed dp budget) is what makes the header/list split adapt
-    // to whatever screen the app is running on: maxHeight below is the actual measured space
-    // available for this content on THIS device. The header gets everything except a fixed
-    // floor reserved for the list — not an even split — because a flat 50/50 turned out to
-    // clip the header's full keypad+buttons even on a tall phone (XCover) where there was
-    // never a problem: the header naturally wants ~80% of the space, and on a tall screen
-    // that 80% is still generously more than the list's floor in absolute terms, so it fits
-    // without scrolling exactly as before. Only on a short screen (e.g. the Cubot), where
-    // the header's natural content would eat the floor too, does the cap actually bind.
+    // See BibsModeScreen's own doc for why this is a measured (not fixed-fraction) header/list
+    // split — identical reasoning applies here.
     BoxWithConstraints(modifier = modifier) {
         val minListHeight = 140.dp
         val headerMaxHeight = (maxHeight - minListHeight).coerceAtLeast(0.dp)
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             var editingEntryId by remember { mutableStateOf<Long?>(null) }
             val editingEntry = uiState.entries.firstOrNull { it.id == editingEntryId }
-            var showEventPicker by remember { mutableStateOf(false) }
 
-            // The header (title/keypad/buttons/edit panel) is itself scrollable so that when the
-            // keyboard comes up to edit a split, it can scroll to keep the edit panel's Save/Cancel
-            // fully visible above the keyboard. It's fine for the quick-entry keypad above it to
-            // scroll out of view in the process — there's no time pressure entering bibs, runners
-            // can wait in the finish funnel while a bib is being recorded.
-            //
-            // Keying on editingEntryId alone isn't enough: the keyboard's appearance is itself
-            // animated (imePadding() shrinks this Column over several frames), so a single
-            // scroll-to-max right when editing starts can undershoot — it snapshots maxValue
-            // before the keyboard has finished pushing content up, so Save/Cancel can still end
-            // up hidden behind it (worse for the Bib field than the Note field, since Bib sits on
-            // an earlier row and Android's own "scroll focused field into view" never has reason
-            // to also reveal the row below it). Re-keying on the live ime bottom inset re-runs
-            // this on every frame of that animation, converging on the correct position once the
-            // keyboard settles, regardless of which field triggered it.
+            // See BibsModeScreen's own doc for why the header is itself scrollable and why it's
+            // re-keyed on the live ime inset rather than just editingEntryId.
             val headerScrollState = rememberScrollState()
             val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
             LaunchedEffect(editingEntryId, imeBottomPx) {
@@ -188,13 +168,6 @@ private fun BibsModeContent(
             }
 
             Column(
-                // Capped so the list below always keeps its floor (see BoxWithConstraints
-                // above) — on a short screen where the header's natural content (text lines
-                // + keypad + buttons) would otherwise eat the whole screen, this caps it and
-                // its own verticalScroll takes over. On a screen tall enough that the header
-                // already fits under the cap, heightIn(max=) doesn't force it larger — it
-                // just stays its natural size, so the list gets whatever's left over exactly
-                // as before.
                 modifier = Modifier.heightIn(max = headerMaxHeight).verticalScroll(headerScrollState),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
@@ -215,9 +188,9 @@ private fun BibsModeContent(
                 if (!uiState.started) {
                     // Nothing recorded yet for this segment (a fresh race, a race switched
                     // into from a different mode, or one just Reset) — side-effect-free to
-                    // just look at, exactly like Time Mode's own pre-Start state. Nothing
-                    // below is written until this is pressed (see
-                    // BibsModeRepository.startBibsMode).
+                    // just look at, exactly like Time/Bibs Mode's own pre-Start state. Unlike
+                    // Bibs, pressing this writes no history row at all — see
+                    // CpModeRepository.startCpMode's own doc.
                     Button(
                         onClick = withClickSound(onStart),
                         enabled = uiState.raceId != null,
@@ -227,11 +200,7 @@ private fun BibsModeContent(
                     ) { Text("START", style = MaterialTheme.typography.displaySmall) }
                 } else {
                     Text(
-                        text = if (uiState.pendingEventType in BIB_REQUIRED_ACTIONS) {
-                            uiState.currentDigits.ifEmpty { "Enter bib" }
-                        } else {
-                            uiState.pendingEventType.displayName()
-                        },
+                        text = uiState.currentDigits.ifEmpty { "Enter bib" },
                         style = MaterialTheme.typography.headlineSmall,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth(),
@@ -248,21 +217,21 @@ private fun BibsModeContent(
 
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(
-                            onClick = withClickSound(onSubmit),
+                            onClick = withClickSound(onPass),
                             enabled = uiState.canSubmit,
                             contentPadding = BUTTON_ROW_CONTENT_PADDING,
                             modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
-                        ) { Text(uiState.pendingEventType.displayName()) }
-                        OutlinedButton(
-                            onClick = withClickSound { showEventPicker = true },
-                            enabled = uiState.raceId != null && !uiState.stopped,
+                        ) { Text("Pass") }
+                        Button(
+                            onClick = withClickSound(onRetire),
+                            enabled = uiState.canSubmit,
                             contentPadding = BUTTON_ROW_CONTENT_PADDING,
                             modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
-                        ) { Text("Event") }
+                        ) { Text("Retire") }
                         StopOrResetButton(
                             isStopped = uiState.stopped,
-                            stopDescription = "No more bib entries can be logged. Undo the Stop entry to resume.",
-                            resetDescription = "This clears every bib entry and resets ready to start again from scratch.",
+                            stopDescription = "No more checkpoint entries can be logged. Undo the Stop entry to resume.",
+                            resetDescription = "This clears every checkpoint entry and resets ready to start again from scratch.",
                             onStop = onStop,
                             onReset = onReset,
                             enabled = uiState.raceId != null,
@@ -278,31 +247,19 @@ private fun BibsModeContent(
                         )
                     }
 
-                    if (showEventPicker) {
-                        ActionPickerDialog(
-                            options = EVENT_PICKER_OPTIONS,
-                            current = uiState.pendingEventType,
-                            onSelect = { type ->
-                                onSetPendingEventType(type)
-                                showEventPicker = false
-                            },
-                            onDismiss = { showEventPicker = false },
-                        )
-                    }
-
                     if (editingEntry != null) {
                         HorizontalDivider()
                         EditEntryPanel(
                             entry = editingEntry,
-                            availableTypes = EVENT_PICKER_OPTIONS,
+                            availableTypes = CP_ACTION_OPTIONS,
                             onSaveEntry = { bib, type, note ->
                                 onUpdateEntry(editingEntry.id, bib, type, note)
                                 editingEntryId = null
                             },
-                            onSaveClockTime = { raw ->
-                                onUpdateClockTime(editingEntry.id, raw)
-                                editingEntryId = null
-                            },
+                            // CP entries never have a Clock row to edit via this path — see
+                            // EditEntryPanel's own doc for why that branch is simply
+                            // unreachable here rather than needing a real handler.
+                            onSaveClockTime = {},
                             onCancel = { editingEntryId = null },
                         )
                     }

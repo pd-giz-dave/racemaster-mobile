@@ -1,5 +1,6 @@
 package mobile.racemaster.data.mule
 
+import mobile.racemaster.data.db.entity.KnownDeviceEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -122,5 +123,29 @@ class MuleSyncEngineTest {
         val deduped = dedupRelayRows(directDeviceIds = setOf("phone-a"), relayRows = relayRows)
 
         assertEquals(setOf("phone-b"), deduped.values.map { it.deviceId }.toSet())
+    }
+
+    // previouslySeenDevices — MuleModeScreen's "Previously seen" list: the persisted roster
+    // minus whatever's already showing up live, so the same device never shows twice.
+
+    private fun known(deviceId: String, name: String = "device-$deviceId") = KnownDeviceEntity(deviceId, name, 0L)
+
+    @Test
+    fun aKnownDeviceNotCurrentlyLiveIsIncluded() {
+        val result = previouslySeenDevices(known = listOf(known("phone-a")), liveDeviceIds = emptySet())
+
+        assertEquals(listOf("phone-a"), result.map { it.deviceId })
+    }
+
+    @Test
+    fun aKnownDeviceCurrentlyLiveIsExcluded() {
+        val result = previouslySeenDevices(known = listOf(known("phone-a"), known("phone-b")), liveDeviceIds = setOf("phone-a"))
+
+        assertEquals(listOf("phone-b"), result.map { it.deviceId })
+    }
+
+    @Test
+    fun anEmptyRosterStaysEmpty() {
+        assertTrue(previouslySeenDevices(known = emptyList(), liveDeviceIds = setOf("phone-a")).isEmpty())
     }
 }

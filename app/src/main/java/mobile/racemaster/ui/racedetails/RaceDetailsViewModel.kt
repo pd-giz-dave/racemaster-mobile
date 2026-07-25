@@ -6,13 +6,17 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.RaceEntity
+import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
+import mobile.racemaster.data.repository.hasRealEntries
+import mobile.racemaster.data.repository.isRaceActive
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 
 /**
@@ -30,6 +34,7 @@ class RaceDetailsViewModel(
     val existingRaceId: Long?,
     private val raceRepository: RaceRepository,
     private val settingsRepository: SettingsRepository,
+    bibsModeRepository: BibsModeRepository,
 ) : ViewModel() {
 
     val existingRace: StateFlow<RaceEntity?> = if (existingRaceId == null) {
@@ -37,6 +42,22 @@ class RaceDetailsViewModel(
     } else {
         raceRepository.observeRace(existingRaceId)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    }
+
+    // "Clear race" (RaceDetailsScreen's second button, mirroring Setup Server's own "No
+    // Server") is only ever offered for an existing race that isn't active — same definition
+    // isRaceCurrentlyActive/RaceRepository.deleteRace already enforce, computed reactively here
+    // (rather than a one-shot isRaceCurrentlyActive call) so the button updates live if this
+    // race's state changes while the form is open, same as NameDeviceViewModel.hasActiveRace.
+    val canClearRace: StateFlow<Boolean> = if (existingRaceId == null) {
+        MutableStateFlow(false)
+    } else {
+        combine(
+            existingRace,
+            bibsModeRepository.observeCurrentSegmentEntries(existingRaceId),
+        ) { race, bibsEntries ->
+            race != null && !isRaceActive(race.timeModeStartedAtMillis, bibsEntries.hasRealEntries(), race.cpModeStartedAtMillis)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
     }
 
     val deviceName: StateFlow<String?> = settingsRepository.deviceName
@@ -90,6 +111,14 @@ class RaceDetailsViewModel(
         }
     }
 
+    // "Reset to no race" — permanently deletes this race (RaceRepository.deleteRace already
+    // refuses if it's active, matching canClearRace above), then the screen exits exactly like
+    // Cancel does; there's no saved raceId left to report back via onSaved. A no-op if
+    // existingRaceId is null (nothing to clear on a brand-new, unsaved race).
+    suspend fun clearRace() {
+        existingRaceId?.let { raceRepository.deleteRace(it) }
+    }
+
     companion object {
         fun factory(mode: AppMode, existingRaceId: Long?): ViewModelProvider.Factory = viewModelFactory {
             initializer {
@@ -99,6 +128,7 @@ class RaceDetailsViewModel(
                     existingRaceId,
                     container.raceRepository,
                     container.settingsRepository,
+                    container.bibsModeRepository,
                 )
             }
         }

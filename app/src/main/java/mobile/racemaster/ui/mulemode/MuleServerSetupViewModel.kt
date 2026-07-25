@@ -66,6 +66,18 @@ class MuleServerSetupViewModel(
         muleRepository.login(url, username, password)
     }
 
+    // "Reset to no server" — clears both the confirmed session (so sync genuinely stops, not
+    // just the on-screen fields) and the sticky draft (so reopening this form afterward shows
+    // blank fields, not the credentials just cleared). Deliberately distinct from Cancel, which
+    // only ever reverts to the *last known good* state — this clears it outright, for an
+    // operator who wants to genuinely stop syncing to any server rather than fix a mistake.
+    // Doesn't touch serverCredentialHistory — those past logins stay available to pick again
+    // later even after clearing the active one.
+    suspend fun clearServer() {
+        settingsRepository.revertServerSetupDraft("", "", "")
+        muleRepository.clearServerSession()
+    }
+
     // Checked once when the screen opens (see MuleServerSetupScreen) — a plain synchronous
     // hint, not a live subscription, same one-shot use NetworkStatus.hasInternetConnectivity's
     // own doc already describes for Mule Mode's with/without-server prompt. Surfacing it here

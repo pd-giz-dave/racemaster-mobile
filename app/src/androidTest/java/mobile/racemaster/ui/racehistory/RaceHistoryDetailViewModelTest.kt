@@ -9,6 +9,7 @@ import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.repository.BibsModeRepository
+import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.settings.SettingsRepository
@@ -35,6 +36,7 @@ class RaceHistoryDetailViewModelTest {
     private lateinit var raceRepository: RaceRepository
     private lateinit var timeModeRepository: TimeModeRepository
     private lateinit var bibsModeRepository: BibsModeRepository
+    private lateinit var cpModeRepository: CpModeRepository
     private var raceId: Long = 0
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -52,6 +54,7 @@ class RaceHistoryDetailViewModelTest {
         )
         timeModeRepository = TimeModeRepository(db, db.raceDao(), db.historyLineDao())
         bibsModeRepository = BibsModeRepository(db, db.raceDao(), db.historyLineDao())
+        cpModeRepository = CpModeRepository(db, db.raceDao(), db.historyLineDao())
         raceRepository = RaceRepository(
             db.raceDao(),
             db.historyLineDao(),
@@ -67,7 +70,7 @@ class RaceHistoryDetailViewModelTest {
         db.close()
     }
 
-    private fun viewModel() = RaceHistoryDetailViewModel(raceId, raceRepository, timeModeRepository, bibsModeRepository)
+    private fun viewModel() = RaceHistoryDetailViewModel(raceId, raceRepository, timeModeRepository, bibsModeRepository, cpModeRepository)
 
     @Test
     fun mixedModeRaceInterleavesBothCategoriesInOneTrueLineNumberOrder() = runTest {

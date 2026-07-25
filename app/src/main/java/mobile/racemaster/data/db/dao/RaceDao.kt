@@ -72,6 +72,27 @@ interface RaceDao {
     @Query("UPDATE races SET bibsModeNextSplit = 1, bibsModeStoppedAtMillis = NULL WHERE id = :raceId")
     suspend fun resetBibsMode(raceId: Long)
 
+    @Query("UPDATE races SET cpModeNextSplit = cpModeNextSplit + 1 WHERE id = :raceId")
+    suspend fun incrementCpCounter(raceId: Long)
+
+    @Query("UPDATE races SET cpModeNextSplit = cpModeNextSplit - 1 WHERE id = :raceId")
+    suspend fun decrementCpCounter(raceId: Long)
+
+    @Query("UPDATE races SET cpModeStoppedAtMillis = :stoppedAtMillis WHERE id = :raceId")
+    suspend fun setCpModeStoppedAt(raceId: Long, stoppedAtMillis: Long)
+
+    @Query("UPDATE races SET cpModeStoppedAtMillis = NULL WHERE id = :raceId")
+    suspend fun clearCpModeStoppedAt(raceId: Long)
+
+    @Query("UPDATE races SET cpModeStartedAtMillis = :startedAtMillis WHERE id = :raceId")
+    suspend fun setCpModeStartedAt(raceId: Long, startedAtMillis: Long)
+
+    // Clears cpModeStartedAtMillis too, unlike resetBibsMode — CP has no Clock marker to fall
+    // back on for "started" detection, so this is what returns the screen to its pre-Start
+    // state (see RaceEntity.cpModeStartedAtMillis's own doc).
+    @Query("UPDATE races SET cpModeNextSplit = 1, cpModeStoppedAtMillis = NULL, cpModeStartedAtMillis = NULL WHERE id = :raceId")
+    suspend fun resetCpMode(raceId: Long)
+
     // The permanent, race-wide history line counter — see RaceEntity.nextLineNumber. Only
     // ever incremented, including across a Reset (unlike the display counters above).
     @Query("UPDATE races SET nextLineNumber = nextLineNumber + 1 WHERE id = :raceId")

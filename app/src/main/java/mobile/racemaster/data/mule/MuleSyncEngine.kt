@@ -22,7 +22,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
+import mobile.racemaster.data.db.entity.KnownDeviceEntity
 import mobile.racemaster.data.repository.BibsModeRepository
+import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.settings.SettingsRepository
@@ -75,7 +77,16 @@ import mobile.racemaster.data.settings.SettingsRepository
  *  [MuleSyncEngine.relayDevices]). Such a row has no [advertisement] of its own (nothing to
  *  connect to directly) and doesn't participate in the [unreachable]/[consecutiveFailures]
  *  reachability tracking above — those describe *this phone's own* BLE link to a peer, which
- *  is meaningless for an origin it's never actually connected to. */
+ *  is meaningless for an origin it's never actually connected to.
+ *
+ *  [isStale] marks a synthetic row built from [MuleRepository.knownDevices] rather than a live
+ *  BLE scan result — a device this phone has identified before but can't currently see (see
+ *  [previouslySeenDevices]). It carries no real [advertisement], no live
+ *  unreachable/consecutiveFailures tracking (nothing to track — there's no current connection
+ *  attempt), and [lastReachableAtMillis] means "last resolved at all" rather than "last
+ *  reachable this session". Folded into the same sorted list [mobile.racemaster.ui.mulemode.MuleModeScreen] renders (rather
+ *  than a separate section) so a device that's gone quiet sinks toward the bottom in place,
+ *  differentiated visually by its own "last seen" text instead of a race label/sync status. */
 data class DiscoveredDevice(
     val deviceKey: String,
     val advertisement: Advertisement?,
@@ -88,6 +99,7 @@ data class DiscoveredDevice(
     val consecutiveFailures: Int = 0,
     val unreachable: Boolean = false,
     val relayedViaDeviceName: String? = null,
+    val isStale: Boolean = false,
 )
 
 // discoveredFlow (see below) only ever holds devices that came from a live BLE scan result
@@ -118,6 +130,7 @@ class MuleSyncEngine(
     private val raceRepository: RaceRepository,
     private val timeModeRepository: TimeModeRepository,
     private val bibsModeRepository: BibsModeRepository,
+    private val cpModeRepository: CpModeRepository,
     settingsRepository: SettingsRepository,
 ) {
     // A background engine that talks to arbitrary other phones over BLE regardless of what
@@ -190,19 +203,20 @@ class MuleSyncEngine(
                     raceRepository.observeRace(raceId),
                     timeModeRepository.observeUnsyncedCount(raceId),
                     bibsModeRepository.observeUnsyncedCount(raceId),
+                    cpModeRepository.observeUnsyncedCount(raceId),
                     muleRepository.deviceName,
-                ) { race, unsyncedSplits, unsyncedEntries, deviceName ->
+                ) { race, unsyncedSplits, unsyncedEntries, unsyncedCpEntries, deviceName ->
                     DiscoveredDevice(
                         deviceKey = SELF_DEVICE_KEY,
                         advertisement = null,
                         deviceId = SELF_DEVICE_KEY,
                         deviceName = deviceName.orEmpty(),
                         raceLabel = race?.label.orEmpty(),
-                        // Time and Bibs are independently-scoped counts (a HistoryLineEntity
+                        // Time, Bibs, and CP are independently-scoped counts (a HistoryLineEntity
                         // row has exactly one mode), so summing them is safe here — unlike the
                         // BLE-pulled path below, there's no risk of double-counting the same
                         // line under two different reads.
-                        unsyncedCount = unsyncedSplits + unsyncedEntries,
+                        unsyncedCount = unsyncedSplits + unsyncedEntries + unsyncedCpEntries,
                         isSelf = true,
                     )
                 }
@@ -325,6 +339,30 @@ class MuleSyncEngine(
         mergeDeviceInfo(key, device, info, since)
     }
 
+    /** "Forget" a device — purges any live entry for it from [discoveredFlow]/[relayFlow]
+     *  right now (rather than waiting out [markUnreachable]'s own drop threshold, which for a
+     *  device that's *never* resolved can still take up to [UNRESOLVED_DROP_THRESHOLD] — see
+     *  its own doc for why that's already shorter than a resolved device's, but still not
+     *  instant), and deletes its persisted [MuleRepository.knownDevices] roster entry. [key] is
+     *  whichever identity [mobile.racemaster.ui.mulemode.MuleModeScreen] had on hand for that row: a resolved device's own
+     *  `deviceId` (works for both a still-visible direct entry, since [mergeDeviceInfo] always
+     *  keys a resolved entry by its deviceId, and a relay-only entry, matched by
+     *  [DiscoveredDevice.deviceId] below rather than its composite `relay:` map key), or an
+     *  unresolved ghost's raw BLE address (its only identity — [DiscoveredDevice.deviceId] is
+     *  null for those). [MuleRepository.forgetKnownDevice] is always safe to call either way —
+     *  see its own doc.
+     *
+     *  Deliberately not a permanent block/ignore-list: this only clears *current* state. A
+     *  direct device is still advertising, so the next [startScan] callback re-discovers it
+     *  from scratch (back to "Discovering…") rather than it staying gone — same "reset, not
+     *  block" facility already established for Setup Server's "No Server" and Race Details'
+     *  "Clear race". */
+    fun forgetDevice(key: String) {
+        discoveredFlow.value = discoveredFlow.value.filterValues { it.deviceKey != key && it.deviceId != key }
+        relayFlow.value = relayFlow.value.filterValues { it.deviceId != key }
+        engineScope.launch { muleRepository.forgetKnownDevice(key) }
+    }
+
     /** Folds a freshly-read [DeviceInfo] into [discoveredFlow], keyed by the stable
      *  `deviceId` rather than [oldKey] (a BLE address) — merging into any entry already
      *  tracked under that deviceId instead of creating a duplicate, and overwriting (not
@@ -333,8 +371,10 @@ class MuleSyncEngine(
      *  already computed by the caller). A successful read is by definition proof of
      *  reachability, so it always clears [DiscoveredDevice.unreachable] and
      *  [DiscoveredDevice.consecutiveFailures], and bumps [DiscoveredDevice.lastReachableAtMillis]
-     *  to now. */
-    private fun mergeDeviceInfo(oldKey: String, device: DiscoveredDevice, info: DeviceInfo, lastPulledLineNumber: Long) {
+     *  to now. Also upserts [MuleRepository.knownDevices]' persisted roster entry for it —
+     *  every successful resolve is exactly the moment this device's name is actually known,
+     *  regardless of how long it then stays live in [discoveredFlow] for. */
+    private suspend fun mergeDeviceInfo(oldKey: String, device: DiscoveredDevice, info: DeviceInfo, lastPulledLineNumber: Long) {
         val newKey = info.deviceId
         val current = discoveredFlow.value
         val base = current[newKey] ?: device
@@ -351,6 +391,7 @@ class MuleSyncEngine(
             unreachable = false,
         )
         discoveredFlow.value = (current - oldKey - newKey) + (newKey to merged)
+        muleRepository.recordDeviceSeen(newKey, info.deviceName)
     }
 
     /** Records a device that just failed to answer a read. If it's been unreachable
@@ -650,3 +691,14 @@ internal fun dedupRelayRows(
     directDeviceIds: Set<String>,
     relayRows: Map<String, DiscoveredDevice>,
 ): Map<String, DiscoveredDevice> = relayRows.filterValues { it.deviceId !in directDeviceIds }
+
+/**
+ * [MuleRepository.knownDevices] rows worth folding into MuleModeScreen's Nearby Devices list as
+ * stale entries (see [DiscoveredDevice.isStale]) — everything in the persisted roster except a
+ * device that's already showing up live (direct or relayed), which would otherwise show twice.
+ * Pulled out as a pure function for the same directly-testable reason as [dedupRelayRows].
+ */
+internal fun previouslySeenDevices(
+    known: List<KnownDeviceEntity>,
+    liveDeviceIds: Set<String>,
+): List<KnownDeviceEntity> = known.filterNot { it.deviceId in liveDeviceIds }

@@ -1,6 +1,5 @@
 package mobile.racemaster.ui.mulemode
 
-import android.app.Application
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -9,17 +8,20 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import mobile.racemaster.data.db.entity.KnownDeviceEntity
 import mobile.racemaster.data.mule.DiscoveredDevice
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.MuleSyncEngine
+import mobile.racemaster.data.mule.previouslySeenDevices
 import mobile.racemaster.di.appContainer
-import mobile.racemaster.di.applicationContext
-import mobile.racemaster.util.hasInternetConnectivity
 
 data class MuleModeUiState(
+    // Live BLE-discovered/relayed devices, self, and stale entries from the persisted
+    // known-devices roster (see DiscoveredDevice.isStale's own doc) — one flat list, sorted
+    // most-recently-seen first, so a device that's gone quiet sinks toward the bottom in place
+    // rather than living in a separate section.
     val discoveredDevices: List<DiscoveredDevice> = emptyList(),
     val unsyncedCount: Int = 0,
     val lastSyncedAtMillis: Long? = null,
@@ -46,23 +48,10 @@ data class MuleModeUiState(
 class MuleModeViewModel(
     private val muleRepository: MuleRepository,
     private val muleSyncEngine: MuleSyncEngine,
-    // Typed as Application, not Context — see ViewModelFactorySupport.applicationContext's own
-    // doc for why that's what keeps Lint's StaticFieldLeak check from flagging this field.
-    private val context: Application,
 ) : ViewModel() {
 
     val deviceName: StateFlow<String?> = muleRepository.deviceName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
-
-    // Read directly rather than via uiState.isLoggedIn — that StateFlow's initial value is
-    // a synthetic "not logged in" default until the underlying DataStore read actually
-    // completes, which would otherwise misfire the screen's auto-forward-to-Setup-Server
-    // check (see MuleModeScreen) for an operator who genuinely already is logged in.
-    suspend fun isLoggedIn(): Boolean = muleRepository.isLoggedIn.first()
-
-    // Checked once, at the same moment as isLoggedIn() above (see MuleModeScreen) — a hint
-    // for which of "With server"/"Without server" to recommend, not a live subscription.
-    fun hasInternetConnectivity(): Boolean = hasInternetConnectivity(context)
 
     @Suppress("UNCHECKED_CAST")
     val uiState: StateFlow<MuleModeUiState> = combine(
@@ -80,6 +69,7 @@ class MuleModeViewModel(
         muleRepository.bluetoothOff,
         muleRepository.serverSyncOff,
         muleSyncEngine.relayDevices,
+        muleRepository.knownDevices,
     ) { values ->
         val isLoggedIn = values[4] as Boolean
         val autoSyncStopped = values[8] as Boolean
@@ -87,9 +77,26 @@ class MuleModeViewModel(
         val bluetoothOff = values[11] as Boolean
         val serverSyncOff = values[12] as Boolean
         val relayDevices = values[13] as Map<String, DiscoveredDevice>
+        val knownDevices = values[14] as List<KnownDeviceEntity>
+        val directDevices = values[0] as Map<String, DiscoveredDevice>
+        val liveDeviceIds = (directDevices.values + relayDevices.values).mapNotNull { it.deviceId }.toSet()
+        // Stale rows: a device this phone has resolved before but can't currently see, given
+        // no live advertisement/unreachable-tracking of its own — see DiscoveredDevice.isStale's
+        // own doc. lastReachableAtMillis is repurposed to mean "last resolved at all" for these,
+        // which is exactly what sorts them toward the bottom below.
+        val staleDevices = previouslySeenDevices(knownDevices, liveDeviceIds).map { known ->
+            DiscoveredDevice(
+                deviceKey = known.deviceId,
+                advertisement = null,
+                deviceId = known.deviceId,
+                deviceName = known.deviceName,
+                lastReachableAtMillis = known.lastSeenAtMillis,
+                isStale = true,
+            )
+        }
         MuleModeUiState(
-            discoveredDevices = ((values[0] as Map<String, DiscoveredDevice>).values + relayDevices.values + selfDevice)
-                .sortedBy { it.raceLabel.ifEmpty { it.deviceKey } },
+            discoveredDevices = (directDevices.values + relayDevices.values + selfDevice + staleDevices)
+                .sortedByDescending { it.lastReachableAtMillis },
             unsyncedCount = values[1] as Int,
             lastSyncedAtMillis = values[2] as Long?,
             lastPulledAtMillis = values[3] as Long?,
@@ -142,6 +149,13 @@ class MuleModeViewModel(
         muleSyncEngine.dismissStatusMessage()
     }
 
+    // See MuleSyncEngine.forgetDevice's own doc — key is a resolved device's deviceId (also
+    // works for a relay-only row, matched by its true origin id) or an unresolved ghost's raw
+    // BLE address, whichever MuleModeScreen had on hand for the row being forgotten.
+    fun forgetDevice(key: String) {
+        muleSyncEngine.forgetDevice(key)
+    }
+
     companion object {
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
@@ -149,7 +163,6 @@ class MuleModeViewModel(
                 MuleModeViewModel(
                     container.muleRepository,
                     container.muleSyncEngine,
-                    applicationContext(),
                 )
             }
         }

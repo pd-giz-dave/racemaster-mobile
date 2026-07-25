@@ -84,6 +84,7 @@ fun ModePickerScreen(
         Text("Select device mode", style = MaterialTheme.typography.titleMedium)
         ModeButton("Time Mode") { handleModeTap(AppMode.TIME) }
         ModeButton("Bibs Mode") { handleModeTap(AppMode.BIBS) }
+        ModeButton("CP Mode") { handleModeTap(AppMode.CP) }
         ModeButton("Mule Mode") { handleModeTap(AppMode.MULE) }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
@@ -146,6 +147,12 @@ private fun ActiveRaceStatusCard(status: ActiveRaceStatus, modifier: Modifier = 
         if (status.bibCount > 0) {
             Text(
                 "${status.bibCount} bib${if (status.bibCount == 1) "" else "s"} recorded",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        if (status.cpCount > 0) {
+            Text(
+                "${status.cpCount} checkpoint entr${if (status.cpCount == 1) "y" else "ies"} recorded",
                 style = MaterialTheme.typography.bodySmall,
             )
         }

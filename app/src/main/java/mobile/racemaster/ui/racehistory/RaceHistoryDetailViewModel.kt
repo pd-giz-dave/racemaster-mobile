@@ -8,6 +8,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.repository.BibsModeRepository
+import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.repository.findDuplicateSplitRefsPerSegment
@@ -28,7 +29,7 @@ data class ArchivedHistoryLineUi(
     // marker) — 0 for a BIBS-mode row, which has no stopwatch of its own.
     val elapsedMillis: Long,
     val note: String?,
-    // Only meaningful for a BIBS-mode row — empty for a TIME-mode row.
+    // Only meaningful for a BIBS/CP-mode row — empty for a TIME-mode row.
     val dupSplitRefs: List<Int>,
     val timestampMillis: Long,
     val synced: Boolean,
@@ -49,12 +50,14 @@ class RaceHistoryDetailViewModel(
     raceRepository: RaceRepository,
     timeModeRepository: TimeModeRepository,
     bibsModeRepository: BibsModeRepository,
+    cpModeRepository: CpModeRepository,
 ) : ViewModel() {
 
     private val lastSyncedFlow = combine(
         timeModeRepository.observeLastSyncedAtMillis(raceId),
         bibsModeRepository.observeLastSyncedAtMillis(raceId),
-    ) { timeSynced, bibsSynced -> maxOfNullable(timeSynced, bibsSynced) }
+        cpModeRepository.observeLastSyncedAtMillis(raceId),
+    ) { timeSynced, bibsSynced, cpSynced -> maxOfNullable(maxOfNullable(timeSynced, bibsSynced), cpSynced) }
 
     val uiState: StateFlow<RaceHistoryDetailUiState> = combine(
         raceRepository.observeRace(raceId),
@@ -68,11 +71,13 @@ class RaceHistoryDetailViewModel(
         // targetName is what's actually shown, since a raw deviceId isn't user-friendly.
         val syncedToByLine = lineSyncs.groupBy({ it.lineNumber }, { it.targetName })
 
-        // Duplicate bib detection, scoped per Bibs segment (bounded by RESET markers) rather
+        // Duplicate bib detection, scoped per Bibs/CP segment (bounded by RESET markers) rather
         // than across the whole history — a bib legitimately reused in a later segment must
         // not be flagged against an earlier, already-reset-away segment (fixes a real bug:
-        // this screen used to feed the full multi-segment history into one flat check).
-        val dupRefs = findDuplicateSplitRefsPerSegment(rows.filter { it.mode == HistoryMode.BIBS })
+        // this screen used to feed the full multi-segment history into one flat check). CP
+        // shares this exact dup logic with Bibs (see BIB_REQUIRED_ACTIONS/ACCOUNTED_FOR_ACTIONS'
+        // own doc for why PASS is treated identically to FINISH).
+        val dupRefs = findDuplicateSplitRefsPerSegment(rows.filter { it.mode == HistoryMode.BIBS || it.mode == HistoryMode.CP })
 
         // A race's history can span more than one segment (each bounded by a Reset marker),
         // and each Time segment has its own Start time — so elapsed time can't be computed
@@ -133,6 +138,7 @@ class RaceHistoryDetailViewModel(
                     container.raceRepository,
                     container.timeModeRepository,
                     container.bibsModeRepository,
+                    container.cpModeRepository,
                 )
             }
         }

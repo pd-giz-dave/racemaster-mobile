@@ -9,8 +9,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlin.time.Duration.Companion.days
 import kotlinx.serialization.json.Json
+import mobile.racemaster.data.db.dao.KnownDeviceDao
 import mobile.racemaster.data.db.dao.PulledRecordDao
 import mobile.racemaster.data.db.dao.PulledSourceSummary
+import mobile.racemaster.data.db.entity.KnownDeviceEntity
 import mobile.racemaster.data.db.entity.PulledRecordEntity
 import mobile.racemaster.data.db.entity.SERVER_TARGET_ID
 import mobile.racemaster.data.repository.RaceRepository
@@ -42,6 +44,7 @@ class MuleRepository(
     private val pullClient: MulePullClient,
     private val syncClient: MuleSyncClient,
     private val raceRepository: RaceRepository,
+    private val knownDeviceDao: KnownDeviceDao,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -95,6 +98,28 @@ class MuleRepository(
     fun scanForDevices(): Flow<Advertisement> = pullClient.scanForDevices()
 
     suspend fun readDeviceInfo(advertisement: Advertisement): DeviceInfo = pullClient.readDeviceInfo(advertisement)
+
+    // The durable "seen devices" roster — see KnownDeviceEntity's own doc for how this differs
+    // from MuleSyncEngine's own in-memory discoveredFlow.
+    val knownDevices: Flow<List<KnownDeviceEntity>> = knownDeviceDao.observeAll()
+
+    // Called from MuleSyncEngine.mergeDeviceInfo on every successful GATT resolve — a blank
+    // deviceName would only ever come from a device mid-setup that hasn't picked one yet (see
+    // MuleSyncEngine.selfDevice's own handling of that same case), not worth cluttering this
+    // list with.
+    suspend fun recordDeviceSeen(deviceId: String, deviceName: String) {
+        if (deviceName.isBlank()) return
+        knownDeviceDao.upsert(KnownDeviceEntity(deviceId, deviceName, System.currentTimeMillis()))
+    }
+
+    // "Forget" — see MuleSyncEngine.forgetDevice's own doc for the full picture (this alone only
+    // ever clears the persisted roster entry; the live discoveredFlow/relayFlow purge happens
+    // there). Always safe to call with a raw BLE address that was never actually resolved/
+    // upserted (see KnownDeviceDao.delete's own doc) — forgetting a still-unresolved
+    // "Discovering…" ghost is exactly the case this needs to be a harmless no-op for.
+    suspend fun forgetKnownDevice(deviceId: String) {
+        knownDeviceDao.delete(deviceId)
+    }
 
     // Lets MuleSyncEngine self-loop-guard a relay manifest entry (never pull my own data back
     // from a mule that happens to be relaying it) without reaching into SettingsRepository
@@ -184,6 +209,11 @@ class MuleRepository(
         val normalizedUrl = normalizeBaseUrl(baseUrl)
         val response = syncClient.login(normalizedUrl, username, password)
         settingsRepository.setServerSession(normalizedUrl, response.token)
+    }
+
+    // See SettingsRepository.clearServerSession's own doc.
+    suspend fun clearServerSession() {
+        settingsRepository.clearServerSession()
     }
 
     // Defaults to https:// when the operator doesn't type a scheme — real deployments

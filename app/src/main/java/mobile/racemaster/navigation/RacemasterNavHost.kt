@@ -21,6 +21,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.bibsmode.BibsModeScreen
+import mobile.racemaster.ui.cpmode.CpModeScreen
 import mobile.racemaster.ui.help.HelpScreen
 import mobile.racemaster.ui.modepicker.ModePickerScreen
 import mobile.racemaster.ui.modepicker.NameDeviceScreen
@@ -109,6 +110,13 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                         onEditRace = { raceId -> navController.navigate(Routes.raceDetails(AppMode.BIBS, raceId)) },
                     )
                 }
+                composable(Routes.CP_MODE) {
+                    CpModeScreen(
+                        onChangeMode = { navController.navigateToModePicker() },
+                        onNewRace = { navController.navigate(Routes.raceDetails(AppMode.CP, raceId = null)) },
+                        onEditRace = { raceId -> navController.navigate(Routes.raceDetails(AppMode.CP, raceId)) },
+                    )
+                }
                 composable(Routes.MULE_MODE) {
                     MuleModeScreen(
                         onChangeMode = { navController.navigateToModePicker() },
@@ -177,6 +185,7 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
 private fun AppMode?.toRoute(): String = when (this) {
     AppMode.TIME -> Routes.TIME_MODE
     AppMode.BIBS -> Routes.BIBS_MODE
+    AppMode.CP -> Routes.CP_MODE
     AppMode.MULE -> Routes.MULE_MODE
     null -> Routes.MODE_PICKER
 }

@@ -34,6 +34,14 @@ data class RaceEntity(
     val bibsRangeStart: Int? = null,
     val bibsRangeCount: Int? = null,
     val bibsModeStoppedAtMillis: Long? = null,
+    val cpModeNextSplit: Int = 1,
+    val cpModeStoppedAtMillis: Long? = null,
+    // Unlike Bibs (which derives "started" from entries.isNotEmpty(), safe only because its
+    // Clock marker guarantees a non-undoable first row), CP Mode has no such marker — so
+    // "started" is tracked explicitly here instead, exactly like Time Mode's own
+    // timeModeStartedAtMillis. This is what lets undoing CP's very first Pass/Retire leave the
+    // screen still showing the keypad rather than reverting to a pre-Start state.
+    val cpModeStartedAtMillis: Long? = null,
     // Which AppMode (TIME/BIBS/MULE) created this race — carried metadata for the sync
     // payload, not used for any local query logic.
     val deviceRole: String? = null,
