@@ -47,6 +47,7 @@ import mobile.racemaster.ui.components.SplitRow
 import mobile.racemaster.ui.components.StopOrResetButton
 import mobile.racemaster.ui.components.SyncStatusLine
 import mobile.racemaster.ui.components.UndoLastButton
+import mobile.racemaster.util.formatElapsedSplitTime
 import mobile.racemaster.util.formatTimeSplitsText
 import mobile.racemaster.util.withClickSound
 
@@ -61,14 +62,19 @@ fun TimeModeScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
 
-    // Registers this screen's split action as the target for an external USB/Bluetooth
-    // trigger (see MainActivity.onExternalSplitTrigger) while it's on screen, only firing
-    // when there's actually a running race to split against.
+    // Registers this screen's main action as the target for an external USB/Bluetooth trigger
+    // (see MainActivity.onExternalSplitTrigger) while it's on screen — mirrors the big on-screen
+    // button exactly, including its own START/SPLIT toggle (see TimeModeContent's identical
+    // `if (uiState.stopwatchStarted) onSplit else onStart` below), so a clicker fires whichever
+    // of the two the operator would otherwise have tapped. Same enabled condition as that
+    // button too: a race must exist and not already be stopped.
     val activity = LocalActivity.current as MainActivity
-    val currentOnSplit by rememberUpdatedState(viewModel::recordSplit)
-    val canExternalSplit by rememberUpdatedState(uiState.stopwatchStarted && !uiState.stopwatchStopped)
+    val currentOnMainAction by rememberUpdatedState {
+        if (uiState.stopwatchStarted) viewModel.recordSplit() else viewModel.startStopwatch()
+    }
+    val canExternalTrigger by rememberUpdatedState(uiState.raceId != null && !uiState.stopwatchStopped)
     DisposableEffect(activity) {
-        activity.onExternalSplitTrigger = { if (canExternalSplit) currentOnSplit() }
+        activity.onExternalSplitTrigger = { if (canExternalTrigger) currentOnMainAction() }
         onDispose { activity.onExternalSplitTrigger = null }
     }
 
@@ -218,7 +224,7 @@ private fun TimeModeContent(
                             enabled = uiState.canUndo,
                             description = uiState.splits.firstOrNull()?.let {
                                 val noteSuffix = it.note?.let { note -> " · $note" }.orEmpty()
-                                "Remove split ${formatSplitRef(it.splitNumber)}$noteSuffix (${formatElapsed(it.elapsedMillis)})"
+                                "Remove split ${formatSplitRef(it.splitNumber)}$noteSuffix (${formatElapsedSplitTime(it.elapsedMillis)})"
                             }.orEmpty(),
                             onConfirm = onUndo,
                             modifier = Modifier.weight(1f),
@@ -284,7 +290,7 @@ private fun EditSplitNotePanel(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(
-            "Editing ${formatSplitRef(split.splitNumber)}  ${formatElapsed(split.elapsedMillis)}",
+            "Editing ${formatSplitRef(split.splitNumber)}  ${formatElapsedSplitTime(split.elapsedMillis)}",
             style = MaterialTheme.typography.titleMedium,
         )
         Row(

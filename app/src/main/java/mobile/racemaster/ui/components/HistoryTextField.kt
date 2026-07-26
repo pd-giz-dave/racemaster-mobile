@@ -38,6 +38,8 @@ import mobile.racemaster.util.withClickSound
  * filling in username/password) can override it independently. [extraTrailingIcon] lets a
  * caller add its own trailing icon (e.g. the password field's show/hide toggle) alongside the
  * history dropdown toggle, rather than the two competing for the same trailing-icon slot.
+ * [enabled] also suppresses the history dropdown toggle when false — re-filling from a
+ * previous value makes no sense on a field the caller has locked read-only.
  */
 @Composable
 fun HistoryTextField(
@@ -47,6 +49,7 @@ fun HistoryTextField(
     history: List<String>,
     modifier: Modifier = Modifier,
     onPick: (String) -> Unit = onValueChange,
+    enabled: Boolean = true,
     singleLine: Boolean = true,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
@@ -70,16 +73,17 @@ fun HistoryTextField(
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
+            enabled = enabled,
             singleLine = singleLine,
             label = { Text(label) },
             keyboardOptions = keyboardOptions,
             keyboardActions = keyboardActions,
             visualTransformation = visualTransformation,
-            trailingIcon = if (extraTrailingIcon != null || history.isNotEmpty()) {
+            trailingIcon = if (extraTrailingIcon != null || (history.isNotEmpty() && enabled)) {
                 {
                     Row {
                         extraTrailingIcon?.invoke()
-                        if (history.isNotEmpty()) {
+                        if (history.isNotEmpty() && enabled) {
                             IconButton(onClick = withClickSound { expanded = true }) {
                                 Icon(Icons.Filled.ArrowDropDown, contentDescription = "Show previous values")
                             }

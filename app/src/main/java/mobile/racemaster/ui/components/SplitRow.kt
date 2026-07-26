@@ -17,7 +17,7 @@ import mobile.racemaster.data.db.entity.formatLineRef
 import mobile.racemaster.data.db.entity.formatSplitRef
 import mobile.racemaster.ui.theme.SyncedGreen
 import mobile.racemaster.ui.theme.UnsyncedRed
-import mobile.racemaster.ui.timemode.formatElapsed
+import mobile.racemaster.util.formatElapsedSplitTime
 import mobile.racemaster.util.withClickSound
 
 /** One line per Time Mode split — split number, elapsed time, note — the live Time Mode screen's
@@ -50,7 +50,7 @@ fun SplitRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(formatSplitRef(splitNumber), style = MaterialTheme.typography.bodyLarge, color = rowColor, modifier = Modifier.width(40.dp))
-            Text(formatElapsed(elapsedMillis), style = MaterialTheme.typography.bodyLarge, color = rowColor)
+            Text(formatElapsedSplitTime(elapsedMillis), style = MaterialTheme.typography.bodyLarge, color = rowColor)
             if (!note.isNullOrBlank()) {
                 Text(note, style = MaterialTheme.typography.bodySmall, color = rowColor)
             }

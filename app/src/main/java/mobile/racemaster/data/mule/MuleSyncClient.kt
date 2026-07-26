@@ -25,12 +25,15 @@ data class LoginRequest(val username: String, val password: String)
 @Serializable
 data class LoginResponse(val token: String, val username: String, val isAdmin: Boolean)
 
-// Identical to SyncRecord except timestampMillis is formatted as "yyyy/MM/dd HH:mm:ss" (the
-// device's own local time) rather than sent as a raw epoch value — purely a server-side
-// display convenience, requested once the server started surfacing this field to humans. The
-// BLE wire (SyncRecord itself, between phones/mules) keeps the raw Long: an unambiguous
-// instant every device can safely reconstruct elapsed times from, which a formatted string
-// isn't (especially once devices in different time zones are involved).
+// Identical to SyncRecord except `timestamp` is formatted as "yyyy/MM/dd HH:mm:ss" (the
+// device's own local time) rather than sent as a raw epoch value under the wire name
+// SyncRecord.timestampMillis carries — purely a server-side display convenience, requested
+// once the server started surfacing this field to humans (renamed from timestampMillis to
+// timestamp for the same reason: it's a formatted string here, not a millis count, and the
+// old name was misleading on this side of the wire). The BLE wire (SyncRecord itself, between
+// phones/mules) keeps both the raw Long and the timestampMillis name: an unambiguous instant
+// every device can safely reconstruct elapsed times from, which a formatted string isn't
+// (especially once devices in different time zones are involved).
 @Serializable
 private data class ServerSyncRecord(
     val recordUuid: String,
@@ -42,7 +45,7 @@ private data class ServerSyncRecord(
     val lineNumber: Long,
     val refLineNumber: Long? = null,
     val note: String?,
-    val timestampMillis: String,
+    val timestamp: String,
 )
 
 private fun SyncRecord.toServerSyncRecord() = ServerSyncRecord(
@@ -55,7 +58,7 @@ private fun SyncRecord.toServerSyncRecord() = ServerSyncRecord(
     lineNumber = lineNumber,
     refLineNumber = refLineNumber,
     note = note,
-    timestampMillis = SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.getDefault()).format(Date(timestampMillis)),
+    timestamp = SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.getDefault()).format(Date(timestampMillis)),
 )
 
 // Body for POST .../mobile — one flat, chronological line array per device (deviceName ->

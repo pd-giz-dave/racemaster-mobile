@@ -2,6 +2,8 @@ package mobile.racemaster.data.repository
 
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
+import mobile.racemaster.data.db.entity.RaceEntity
+import mobile.racemaster.data.settings.AppMode
 
 /**
  * Whether any of these entries represent real, undoable activity — excludes the fixed Clock
@@ -58,4 +60,19 @@ fun isRaceActive(timeModeStartedAtMillis: Long?, bibsModeStartedAtMillis: Long?,
 suspend fun isRaceCurrentlyActive(raceId: Long, raceRepository: RaceRepository): Boolean {
     val race = raceRepository.getRace(raceId) ?: return false
     return isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.cpModeStartedAtMillis)
+}
+
+/**
+ * Whether [mode] has been started for [race]'s current segment — the per-mode mapping onto
+ * whichever of RaceEntity's own timeModeStartedAtMillis/bibsModeStartedAtMillis/
+ * cpModeStartedAtMillis fields is the right one to read, pulled out as its own pure function so
+ * a caller (see RaceDetailsScreen's own field-locking use) never has to hand-roll that mapping
+ * itself. [race] null (not yet loaded, or a dangling id) is never "started". Mule has no started
+ * concept of its own — it never owns a race's fields the way Time/Bibs/CP each do.
+ */
+fun isModeStarted(mode: AppMode, race: RaceEntity?): Boolean = when (mode) {
+    AppMode.BIBS -> race?.bibsModeStartedAtMillis != null
+    AppMode.CP -> race?.cpModeStartedAtMillis != null
+    AppMode.TIME -> race?.timeModeStartedAtMillis != null
+    AppMode.MULE -> false
 }

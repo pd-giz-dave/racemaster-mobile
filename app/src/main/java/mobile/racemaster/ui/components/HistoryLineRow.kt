@@ -19,7 +19,7 @@ import mobile.racemaster.data.db.entity.formatSplitColumn
 import mobile.racemaster.data.db.entity.formatSplitRef
 import mobile.racemaster.ui.theme.SyncedGreen
 import mobile.racemaster.ui.theme.UnsyncedRed
-import mobile.racemaster.ui.timemode.formatElapsed
+import mobile.racemaster.util.formatElapsedSplitTime
 import mobile.racemaster.util.withClickSound
 
 /**
@@ -82,7 +82,7 @@ fun HistoryLineRow(
                 modifier = Modifier.width(32.dp),
             )
             Text(
-                elapsedMillis?.let { formatElapsed(it) } ?: "–",
+                elapsedMillis?.let { formatElapsedSplitTime(it) } ?: "–",
                 style = MaterialTheme.typography.bodyMedium,
                 color = rowColor,
                 modifier = Modifier.weight(1f),

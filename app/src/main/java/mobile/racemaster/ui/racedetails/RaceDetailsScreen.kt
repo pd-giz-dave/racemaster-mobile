@@ -43,6 +43,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import mobile.racemaster.data.repository.MAX_BIB_NUMBER
 import mobile.racemaster.data.repository.MIN_BIB_NUMBER
+import mobile.racemaster.data.repository.isModeStarted
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.components.HistoryTextField
 import mobile.racemaster.util.withClickSound
@@ -102,21 +103,21 @@ fun RaceDetailsScreen(
     // on-screen later) stays the same either way, per instruction.
     val showRunnerFields = mode == AppMode.TIME || mode == AppMode.BIBS || mode == AppMode.CP
 
-    // "Fresh" = no real progress recorded yet, true both for a brand-new race and for one
-    // that's just been Reset — safe to still change the runner count/bib range in either
-    // case, since no recorded splits/entries depend on the old value.
-    val isFresh = existingRaceId == null || when (mode) {
-        AppMode.BIBS -> existingRace?.bibsModeNextSplit == 1
-        AppMode.CP -> existingRace?.cpModeNextSplit == 1
-        AppMode.TIME -> existingRace?.timeModeNextSplit == 1
-        AppMode.MULE -> true
-    }
-    val countFieldsEnabled = prefilled && isFresh
+    // Whether [mode] has been started for this segment — same per-mode startedAtMillis field
+    // isRaceActive/isRaceInProgress read (see RaceProgress.kt), only clearing on Reset, not on
+    // Stop. Once true, every field except runner count locks read-only: name/course/location/
+    // first bib number are what other stations and the server record already key off, so
+    // changing them mid-race would desync what's already been recorded elsewhere — Reset is
+    // the deliberate "start over" escape hatch instead. Runner count stays editable throughout
+    // since the final headcount can genuinely still change right up to race start.
+    val isStarted = existingRaceId != null && isModeStarted(mode, existingRace)
+    val fieldsEnabled = prefilled && !isStarted
+    val countFieldEnabled = prefilled
 
     val start = startText.toIntOrNull()
     val count = countText.toIntOrNull()
     val rangeEnd = if (start != null && count != null) start + count - 1 else null
-    val countFieldsValid = !showRunnerFields || !countFieldsEnabled ||
+    val countFieldsValid = !showRunnerFields || !countFieldEnabled ||
         (start != null && start in MIN_BIB_NUMBER..MAX_BIB_NUMBER && count != null && count >= 1 && rangeEnd != null && rangeEnd <= MAX_BIB_NUMBER)
     val canSave = prefilled && !isSaving && name.isNotBlank() && course.isNotBlank() && location.isNotBlank() && countFieldsValid
 
@@ -165,6 +166,7 @@ fun RaceDetailsScreen(
                 // count are unrelated and stay exactly as already entered (see
                 // SettingsRepository.raceNameHistory's own doc).
                 history = raceNameHistory,
+                enabled = fieldsEnabled,
                 // Always followed by Course, so always "Next" — see nextFieldAction's own doc.
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                 keyboardActions = nextFieldAction,
@@ -177,6 +179,7 @@ fun RaceDetailsScreen(
                 // Same independent-field behavior as the Race name field above — picking a
                 // previous course only ever fills this field.
                 history = courseHistory,
+                enabled = fieldsEnabled,
                 // Always followed by Location, so always "Next" — see nextFieldAction's own doc.
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                 keyboardActions = nextFieldAction,
@@ -189,12 +192,20 @@ fun RaceDetailsScreen(
                 // Same independent-field behavior as Race name/Course above — picking a
                 // previous location only ever fills this field.
                 history = locationHistory,
+                enabled = fieldsEnabled,
                 // The last field gets "Done" (dismisses the keyboard); every other field gets
                 // "Next" — Location is last exactly when the runner fields aren't shown.
                 keyboardOptions = KeyboardOptions(imeAction = if (showRunnerFields) ImeAction.Next else ImeAction.Done),
                 keyboardActions = if (showRunnerFields) nextFieldAction else KeyboardActions(onDone = { focusManager.clearFocus() }),
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (isStarted) {
+                Text(
+                    "Once the race has started, only Number of runners can still be changed — " +
+                        "Reset to edit anything else.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             if (showRunnerFields) {
                 // bringIntoViewRequester + onFocusEvent — see HistoryTextField's own doc for
                 // why relying on the keyboard's own ime inset alone isn't reliable everywhere.
@@ -202,7 +213,7 @@ fun RaceDetailsScreen(
                 OutlinedTextField(
                     value = startText,
                     onValueChange = { startText = it.filter(Char::isDigit).take(3) },
-                    enabled = countFieldsEnabled,
+                    enabled = fieldsEnabled,
                     singleLine = true,
                     label = { Text("First bib number (1–999)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
@@ -218,7 +229,7 @@ fun RaceDetailsScreen(
                 OutlinedTextField(
                     value = countText,
                     onValueChange = { countText = it.filter(Char::isDigit).take(3) },
-                    enabled = countFieldsEnabled,
+                    enabled = countFieldEnabled,
                     singleLine = true,
                     label = { Text("Number of runners") },
                     // Last field in this branch — "Done" dismisses the keyboard.
@@ -231,13 +242,6 @@ fun RaceDetailsScreen(
                             if (state.isFocused) scope.launch { countFieldRequester.bringIntoView() }
                         },
                 )
-                if (!countFieldsEnabled) {
-                    Text(
-                        "First bib number and number of runners are fixed once the race has " +
-                            "real splits/entries recorded — Reset to change them.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
             }
             // Save/Create alongside "Clear race" — same side-by-side pattern as Setup Server's
             // Log-in/No Server row: primary action plus a "reset to nothing" secondary action

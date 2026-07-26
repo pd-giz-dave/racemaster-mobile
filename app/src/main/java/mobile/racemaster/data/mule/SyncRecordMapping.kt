@@ -1,9 +1,9 @@
 package mobile.racemaster.data.mule
 
-import java.util.Locale
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
+import mobile.racemaster.util.formatElapsedSplitTime
 
 /**
  * Maps a unified history line into the wire/server record shape. [raceStartedAtMillis] is the
@@ -23,7 +23,7 @@ import mobile.racemaster.data.db.entity.HistoryMode
 fun HistoryLineEntity.toSyncRecord(raceStartedAtMillis: Long?, location: String = "Finish"): SyncRecord {
     val splitTime = if (mode == HistoryMode.TIME) {
         val elapsedMillis = raceStartedAtMillis?.let { timestampMillis - it } ?: 0L
-        formatElapsedAsClock(elapsedMillis)
+        formatElapsedSplitTime(elapsedMillis)
     } else {
         null
     }
@@ -91,22 +91,4 @@ fun SyncRecord.toHistoryAction(): HistoryAction = when (action) {
     "Undo" -> HistoryAction.UNDO
     // An unrecognized wire value - should not get here
     else -> HistoryAction.IGNORE
-}
-
-// Centisecond precision, matching util/ElapsedTimeFormat.kt's on-screen convention exactly —
-// previously truncated to whole seconds here, discarding precision the app already tracks and
-// displays internally. server.js's own coerce() (mobile-sync's `splitTime` field, formerly
-// `time`) treats this as an opaque passthrough string either way, so this needs no
-// server-side change beyond the field-name rename itself. finishers.js's own, unrelated
-// `time` field (see SyncRecord's own doc — a separate, non-mobile-fed dataset) is untouched by
-// any of this; its own parseFinishTime() (which splits on any non-digit run, including '.',
-// and rejects more than 3 numeric parts) would reject a trailing ".CC" as a 4th part — not a
-// concern for any integration that exists today, but worth knowing before ever wiring one up.
-private fun formatElapsedAsClock(elapsedMillis: Long): String {
-    val totalMillis = elapsedMillis.coerceAtLeast(0)
-    val hours = totalMillis / 3_600_000
-    val minutes = (totalMillis % 3_600_000) / 60_000
-    val seconds = (totalMillis % 60_000) / 1000
-    val centis = (totalMillis % 1000) / 10
-    return String.format(Locale.US, "%02d:%02d:%02d.%02d", hours, minutes, seconds, centis)
 }

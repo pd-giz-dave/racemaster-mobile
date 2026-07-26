@@ -65,7 +65,7 @@ class SyncRecordMappingTest {
     @Test
     fun finishSplitMapsElapsedTimeRelativeToRaceStart() {
         val record = split(splitNumber = 3, timestampMillis = 90_000L).toSyncRecord(raceStartedAtMillis = 0L)
-        assertEquals("00:01:30.00", record.splitTime)
+        assertEquals("00:01:30", record.splitTime)
         assertEquals(3, record.splitNumber)
         assertEquals(null, record.bibNumber)
         assertEquals("Split", record.action)
@@ -74,13 +74,19 @@ class SyncRecordMappingTest {
     @Test
     fun finishSplitWithNullRaceStartFormatsAsZero() {
         val record = split(splitNumber = 1, timestampMillis = 12_345L).toSyncRecord(raceStartedAtMillis = null)
-        assertEquals("00:00:00.00", record.splitTime)
+        assertEquals("00:00:00", record.splitTime)
     }
 
     @Test
-    fun finishSplitCentisecondsCarryThrough() {
+    fun finishSplitRoundsDownBelowHalfASecond() {
+        val record = split(splitNumber = 1, timestampMillis = 1_490L).toSyncRecord(raceStartedAtMillis = 0L)
+        assertEquals("00:00:01", record.splitTime)
+    }
+
+    @Test
+    fun finishSplitRoundsUpAtHalfASecondOrMore() {
         val record = split(splitNumber = 1, timestampMillis = 1_530L).toSyncRecord(raceStartedAtMillis = 0L)
-        assertEquals("00:00:01.53", record.splitTime)
+        assertEquals("00:00:02", record.splitTime)
     }
 
     @Test
@@ -281,7 +287,7 @@ class SyncRecordMappingTest {
         // A Time split is sent as its own honest "Split" (see toServerAction's own doc), so
         // "Finish" on the wire now means exactly one thing — a genuine Bibs Finish — regardless
         // of whether `splitTime` happens to be set.
-        assertEquals(HistoryAction.SPLIT, SyncRecord(recordUuid = "u", action = "Split", bibNumber = null, splitTime = "00:00:00.00", location = "Finish", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
+        assertEquals(HistoryAction.SPLIT, SyncRecord(recordUuid = "u", action = "Split", bibNumber = null, splitTime = "00:00:00", location = "Finish", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
         assertEquals(HistoryAction.FINISH, SyncRecord(recordUuid = "u", action = "Finish", bibNumber = "101", splitTime = null, location = "Finish", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
     }
 

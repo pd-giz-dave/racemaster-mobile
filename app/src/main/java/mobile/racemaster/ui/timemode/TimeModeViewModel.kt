@@ -130,7 +130,10 @@ class TimeModeViewModel(
 
     fun startStopwatch() {
         val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch { timeModeRepository.startStopwatch(raceId) }
+        viewModelScope.launch {
+            timeModeRepository.startStopwatch(raceId)
+            beeper.beep()
+        }
     }
 
     // No debounce here by design: two taps in quick succession (two finishers crossing close

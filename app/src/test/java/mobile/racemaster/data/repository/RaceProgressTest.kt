@@ -1,6 +1,10 @@
 package mobile.racemaster.data.repository
 
+import mobile.racemaster.data.db.entity.RaceEntity
+import mobile.racemaster.data.settings.AppMode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RaceProgressTest {
@@ -136,4 +140,46 @@ class RaceProgressTest {
     // them, see RaceDao.resetBibsMode/resetCpMode/resetTimeMode), so it's already covered by the
     // "started alone counts as active" cases above; there's no separate "stopped" input here to
     // test.
+
+    // isModeStarted — the per-mode mapping RaceDetailsScreen uses to decide which fields lock
+    // read-only once a race is under way.
+
+    @Test
+    fun isModeStartedReadsEachModesOwnField() {
+        val race = RaceEntity(
+            label = "Test Race",
+            createdAtMillis = 0L,
+            timeModeStartedAtMillis = 1_000L,
+            bibsModeStartedAtMillis = 2_000L,
+            cpModeStartedAtMillis = 3_000L,
+        )
+        assertTrue(isModeStarted(AppMode.TIME, race))
+        assertTrue(isModeStarted(AppMode.BIBS, race))
+        assertTrue(isModeStarted(AppMode.CP, race))
+    }
+
+    @Test
+    fun isModeStartedIsFalseForAModeThatHasNotStartedEvenIfAnotherHas() {
+        val race = RaceEntity(label = "Test Race", createdAtMillis = 0L, bibsModeStartedAtMillis = 2_000L)
+        assertFalse(isModeStarted(AppMode.TIME, race))
+        assertTrue(isModeStarted(AppMode.BIBS, race))
+        assertFalse(isModeStarted(AppMode.CP, race))
+    }
+
+    @Test
+    fun isModeStartedIsAlwaysFalseForMule() {
+        val race = RaceEntity(
+            label = "Test Race",
+            createdAtMillis = 0L,
+            timeModeStartedAtMillis = 1_000L,
+            bibsModeStartedAtMillis = 2_000L,
+            cpModeStartedAtMillis = 3_000L,
+        )
+        assertFalse(isModeStarted(AppMode.MULE, race))
+    }
+
+    @Test
+    fun isModeStartedIsFalseForANullRace() {
+        assertFalse(isModeStarted(AppMode.BIBS, null))
+    }
 }
