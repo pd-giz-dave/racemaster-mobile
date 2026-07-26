@@ -15,8 +15,8 @@ android {
         applicationId = "mobile.racemaster"
         minSdk = 24
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.0.2"
+        versionCode = 3
+        versionName = "0.0.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -80,6 +80,23 @@ tasks.configureEach {
     if (name == "preDebugBuild" || name == "preDebugAndroidTestBuild") {
         dependsOn("devServer")
     }
+}
+
+// Builds the debug APK and drops it where the racemaster web app's own static-file fallback
+// already serves it from (see server.js's "Static file serving" section — any file under its
+// ROOT is servable with no route of its own needed) — the sidebar's "Download APK" link (see
+// index.html's "Mobile App" nav section) always points at this same stable filename, so a
+// re-run of this task is all a new field-test build needs, no link/URL to update elsewhere.
+// Debug-signed deliberately, not release — see TODO.md/session notes for why: swapping to a
+// release-signed build later means testers uninstall once (different signing key = different
+// app to Android), a one-time cost worth paying only once real Play submission is imminent.
+tasks.register<Copy>("publishApkToWebApp") {
+    group = "other"
+    description = "Build the debug APK and publish it for download from the racemaster web app"
+    dependsOn("assembleDebug")
+    from(layout.buildDirectory.file("outputs/apk/debug/app-debug.apk"))
+    into("${System.getProperty("user.home")}/racemaster/downloads")
+    rename { "racemaster-mobile-debug.apk" }
 }
 
 dependencies {
