@@ -6,9 +6,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.RaceEntity
-import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
-import mobile.racemaster.data.repository.hasRealEntries
 import mobile.racemaster.data.repository.isRaceActive
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
@@ -16,7 +14,7 @@ import mobile.racemaster.di.appContainer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
 /**
@@ -34,7 +32,6 @@ class RaceDetailsViewModel(
     val existingRaceId: Long?,
     private val raceRepository: RaceRepository,
     private val settingsRepository: SettingsRepository,
-    bibsModeRepository: BibsModeRepository,
 ) : ViewModel() {
 
     val existingRace: StateFlow<RaceEntity?> = if (existingRaceId == null) {
@@ -52,11 +49,8 @@ class RaceDetailsViewModel(
     val canClearRace: StateFlow<Boolean> = if (existingRaceId == null) {
         MutableStateFlow(false)
     } else {
-        combine(
-            existingRace,
-            bibsModeRepository.observeCurrentSegmentEntries(existingRaceId),
-        ) { race, bibsEntries ->
-            race != null && !isRaceActive(race.timeModeStartedAtMillis, bibsEntries.hasRealEntries(), race.cpModeStartedAtMillis)
+        existingRace.map { race ->
+            race != null && !isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.cpModeStartedAtMillis)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
     }
 
@@ -128,7 +122,6 @@ class RaceDetailsViewModel(
                     existingRaceId,
                     container.raceRepository,
                     container.settingsRepository,
-                    container.bibsModeRepository,
                 )
             }
         }

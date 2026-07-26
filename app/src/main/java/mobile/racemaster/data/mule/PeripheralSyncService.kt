@@ -51,8 +51,8 @@ import mobile.racemaster.RacemasterApplication
 import mobile.racemaster.data.db.dao.PulledSourceSummary
 
 /**
- * Runs on every device (Time, Bibs, and Mule) regardless of which screen is showing, so a
- * Mule can discover and pull from a Time/Bibs phone without its operator doing anything.
+ * Runs on every device (Time, Bibs, CP and Mule) regardless of which screen is showing, so a
+ * Mule can discover and pull from a Time/Bibs/CP phone without its operator doing anything.
  * Advertises [MuleGattProfile.SERVICE_UUID] and answers a pull request by streaming either
  * this device's own unsynced splits/entries (the default — see [streamRecords]) or, for a
  * request naming a specific [RelayManifestEntry], whatever it's separately holding on that
@@ -62,7 +62,7 @@ import mobile.racemaster.data.db.dao.PulledSourceSummary
  * regardless of its own current mode, is simultaneously scanning for and pulling from every
  * *other* nearby device (leaf phone or fellow Mule alike) and pushing to the server, not just
  * serving/self-pushing its own data. This is what lets a single phone record Time or Bibs
- * mode and act as a Mule at the same time.
+ * or CP mode and act as a Mule at the same time.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class PeripheralSyncService : Service() {
@@ -102,7 +102,7 @@ class PeripheralSyncService : Service() {
 
     // Kept live the same way deviceName is above — what this device is currently able to
     // relay on behalf of other, genuinely different origin devices (its own pulled_records
-    // inbox), reflected into DeviceInfo.relayEntries on every read so a neighbor scanning this
+    // inbox), reflected into DeviceInfo.relayEntries on every read so a neighbour scanning this
     // device sees relay-worthy data appear/advance without this service needing to restart.
     @Volatile
     private var relayManifest: List<PulledSourceSummary> = emptyList()
@@ -151,7 +151,7 @@ class PeripheralSyncService : Service() {
 
     // Same "keep it live for this service's whole lifetime" reasoning as observeDeviceName —
     // a fresh BLE pull landing in this device's pulled_records inbox must be reflected in the
-    // very next DeviceInfo read a neighbor performs, not just the next time this long-running
+    // very next DeviceInfo read a neighbour performs, not just the next time this long-running
     // service happens to restart.
     private fun observeRelayManifest() {
         serviceScope.launch {
@@ -166,7 +166,7 @@ class PeripheralSyncService : Service() {
     // recover short of killing the whole app. This instead re-checks periodically and
     // (re)establishes the server/advertiser fresh on every transition from disabled to
     // enabled, so every device stays discoverable whenever Bluetooth genuinely is available
-    // — in every mode (Time/Bibs/Mule), matching the same requirement the scanning side
+    // — in every mode (Time/Bibs/CP/Mule), matching the same requirement the scanning side
     // already got (see BluetoothStateRepository / MuleModeViewModel's own retry loop).
     private fun startAdvertisingRetryLoop() {
         serviceScope.launch {

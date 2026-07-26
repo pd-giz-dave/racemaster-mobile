@@ -46,12 +46,12 @@ data class BibsModeUiState(
     val raceId: Long? = null,
     val raceLabel: String = "",
     val raceLocation: String = "",
-    // Whether this segment's Clock marker (split #0) has been logged yet — false for a fresh
-    // race, a race just switched into from a different mode, or one just Reset, in which case
-    // the screen shows a Start button instead of the entry keypad/list (see BibsModeScreen).
-    // Derived from entries rather than a dedicated race column: the Clock row is guaranteed
-    // non-undoable (see BibsModeRepository.undoMostRecent), so "any entries at all" reliably
-    // means "started" for as long as this segment lasts.
+    // Whether Bibs Mode has been started for this segment — false for a fresh race, a race
+    // just switched into from a different mode, or one just Reset, in which case the screen
+    // shows a Start button instead of the entry keypad/list (see BibsModeScreen). Sourced
+    // directly from RaceEntity.bibsModeStartedAtMillis, same as CpModeUiState.started — see
+    // that field's own doc for why its Clock marker's mere presence isn't what this is derived
+    // from, even though Start still writes one.
     val started: Boolean = false,
     val currentDigits: String = "",
     val pendingEventType: HistoryAction = HistoryAction.FINISH,
@@ -129,7 +129,7 @@ class BibsModeViewModel(
             raceId = race?.id,
             raceLabel = race?.label.orEmpty(),
             raceLocation = race?.location.orEmpty(),
-            started = entries.isNotEmpty(),
+            started = race?.bibsModeStartedAtMillis != null,
             currentDigits = digits,
             pendingEventType = pendingType,
             nextSplitNumber = race?.bibsModeNextSplit ?: 1,
@@ -151,7 +151,7 @@ class BibsModeViewModel(
             raceInProgress = isRaceInProgress(
                 race?.timeModeStartedAtMillis,
                 race?.timeModeStoppedAtMillis,
-                entries.hasRealEntries(),
+                race?.bibsModeStartedAtMillis,
                 race?.bibsModeStoppedAtMillis,
                 race?.cpModeStartedAtMillis,
                 race?.cpModeStoppedAtMillis,

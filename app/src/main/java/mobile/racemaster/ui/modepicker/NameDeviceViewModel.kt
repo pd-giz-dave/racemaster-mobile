@@ -8,15 +8,13 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
-import mobile.racemaster.data.repository.hasRealEntries
 import mobile.racemaster.data.repository.isRaceActive
 import mobile.racemaster.data.repository.isRaceCurrentlyActive
 import mobile.racemaster.data.settings.SettingsRepository
@@ -34,7 +32,6 @@ import mobile.racemaster.util.generateDeviceName
 class NameDeviceViewModel(
     private val settingsRepository: SettingsRepository,
     private val raceRepository: RaceRepository,
-    private val bibsModeRepository: BibsModeRepository,
 ) : ViewModel() {
 
     val deviceName: StateFlow<String?> = settingsRepository.deviceName
@@ -45,11 +42,8 @@ class NameDeviceViewModel(
             if (raceId == null) {
                 flowOf(false)
             } else {
-                combine(
-                    raceRepository.observeRace(raceId),
-                    bibsModeRepository.observeCurrentSegmentEntries(raceId),
-                ) { race, bibsEntries ->
-                    race != null && isRaceActive(race.timeModeStartedAtMillis, bibsEntries.hasRealEntries(), race.cpModeStartedAtMillis)
+                raceRepository.observeRace(raceId).map { race ->
+                    race != null && isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.cpModeStartedAtMillis)
                 }
             }
         }
@@ -73,7 +67,7 @@ class NameDeviceViewModel(
             // Defense-in-depth backstop — NameDeviceScreen already disables editing entirely
             // while the active race is active, this just guards the actual mutation too.
             val raceId = settingsRepository.activeRaceId.first()
-            if (raceId != null && isRaceCurrentlyActive(raceId, raceRepository, bibsModeRepository)) return@launch
+            if (raceId != null && isRaceCurrentlyActive(raceId, raceRepository)) return@launch
             settingsRepository.setDeviceName(trimmed)
         }
     }
@@ -82,7 +76,7 @@ class NameDeviceViewModel(
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val container = appContainer()
-                NameDeviceViewModel(container.settingsRepository, container.raceRepository, container.bibsModeRepository)
+                NameDeviceViewModel(container.settingsRepository, container.raceRepository)
             }
         }
     }

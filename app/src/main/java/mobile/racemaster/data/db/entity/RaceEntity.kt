@@ -33,14 +33,23 @@ data class RaceEntity(
     val timeModeStoppedAtMillis: Long? = null,
     val bibsRangeStart: Int? = null,
     val bibsRangeCount: Int? = null,
+    // Bibs' own started/stopped pair, shaped identically to Time's and CP's own — Bibs still
+    // writes a Clock marker row on Start (see BibsModeRepository.startBibsMode/
+    // CLOCK_SPLIT_NUMBER), but that row's mere presence is deliberately not what "started" is
+    // derived from anymore: relying on it made Bibs the one mode whose "started"/"active"
+    // signal couldn't be read directly off this row, for no real reason beyond that marker
+    // happening to exist. This is what lets undoing Bibs' very first real entry leave the
+    // screen still showing the keypad rather than reverting to a pre-Start state — same as
+    // cpModeStartedAtMillis below already does for CP, which never had a marker row to lean on
+    // in the first place.
+    val bibsModeStartedAtMillis: Long? = null,
     val bibsModeStoppedAtMillis: Long? = null,
     val cpModeNextSplit: Int = 1,
     val cpModeStoppedAtMillis: Long? = null,
-    // Unlike Bibs (which derives "started" from entries.isNotEmpty(), safe only because its
-    // Clock marker guarantees a non-undoable first row), CP Mode has no such marker — so
-    // "started" is tracked explicitly here instead, exactly like Time Mode's own
-    // timeModeStartedAtMillis. This is what lets undoing CP's very first Pass/Retire leave the
-    // screen still showing the keypad rather than reverting to a pre-Start state.
+    // Time Mode's own timeModeStartedAtMillis, mirrored here since CP has no marker row of its
+    // own to derive "started" from at all (unlike Bibs' Clock row). This is what lets undoing
+    // CP's very first Pass/Retire leave the screen still showing the keypad rather than
+    // reverting to a pre-Start state.
     val cpModeStartedAtMillis: Long? = null,
     // Which AppMode (TIME/BIBS/MULE) created this race — carried metadata for the sync
     // payload, not used for any local query logic.

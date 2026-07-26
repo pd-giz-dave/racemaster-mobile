@@ -8,7 +8,6 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.RaceEntity
-import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.accountedForRecordCount
@@ -39,23 +38,16 @@ private data class RaceContext(
     val entries: List<HistoryLineEntity>,
     val unsyncedCount: Int,
     val lastSyncedAtMillis: Long?,
-    // Needed only for the cross-mode isRaceInProgress check below — mirrors
-    // TimeModeViewModel's own identical need for this signal (Bibs has no explicit
-    // started/stopped RaceEntity field of its own, unlike Time and CP, so its "is it running"
-    // signal can only ever come from a live look at its actual entries).
-    val bibsHasRealEntries: Boolean,
 )
 
 data class CpModeUiState(
     val raceId: Long? = null,
     val raceLabel: String = "",
     val raceLocation: String = "",
-    // Whether CP Mode has been started for this segment — unlike Bibs (derived from
-    // entries.isNotEmpty(), safe only because its Clock marker guarantees a non-undoable first
-    // row), CP has no marker row at all, so this is sourced directly from
-    // RaceEntity.cpModeStartedAtMillis instead (see that field's own doc for why: it's what
-    // lets undoing CP's very first Pass/Retire leave the screen still showing the keypad
-    // rather than reverting to a pre-Start state).
+    // Whether CP Mode has been started for this segment — sourced directly from
+    // RaceEntity.cpModeStartedAtMillis, same as BibsModeUiState.started (see that field's own
+    // doc for why: it's what lets undoing CP's very first Pass/Retire leave the screen still
+    // showing the keypad rather than reverting to a pre-Start state).
     val started: Boolean = false,
     val currentDigits: String = "",
     val nextSplitNumber: Int = 1,
@@ -81,7 +73,6 @@ data class CpModeUiState(
 @OptIn(ExperimentalCoroutinesApi::class)
 class CpModeViewModel(
     private val cpModeRepository: CpModeRepository,
-    private val bibsModeRepository: BibsModeRepository,
     private val raceRepository: RaceRepository,
     settingsRepository: SettingsRepository,
     private val beeper: Beeper,
@@ -103,16 +94,15 @@ class CpModeViewModel(
 
     private val raceAndEntriesFlow = raceIdFlow.flatMapLatest { raceId ->
         if (raceId == null) {
-            flowOf(RaceContext(null, emptyList(), 0, null, false))
+            flowOf(RaceContext(null, emptyList(), 0, null))
         } else {
             combine(
                 raceRepository.observeRace(raceId),
                 cpModeRepository.observeCurrentSegmentEntries(raceId),
                 cpModeRepository.observeUnsyncedCount(raceId),
                 cpModeRepository.observeLastSyncedAtMillis(raceId),
-                bibsModeRepository.observeCurrentSegmentEntries(raceId),
-            ) { race, entries, unsyncedCount, lastSyncedAtMillis, bibsEntries ->
-                RaceContext(race, entries, unsyncedCount, lastSyncedAtMillis, bibsEntries.hasRealEntries())
+            ) { race, entries, unsyncedCount, lastSyncedAtMillis ->
+                RaceContext(race, entries, unsyncedCount, lastSyncedAtMillis)
             }
         }
     }
@@ -122,7 +112,7 @@ class CpModeViewModel(
         digitsFlow,
         errorFlow,
     ) { context, digits, error ->
-        val (race, entries, unsyncedCount, lastSyncedAtMillis, bibsHasRealEntries) = context
+        val (race, entries, unsyncedCount, lastSyncedAtMillis) = context
         val dupRefs = findDuplicateSplitRefs(entries)
         val outstanding = outstandingBibs(entries, race?.bibsRangeStart, race?.bibsRangeCount)
         CpModeUiState(
@@ -150,7 +140,7 @@ class CpModeViewModel(
             raceInProgress = isRaceInProgress(
                 race?.timeModeStartedAtMillis,
                 race?.timeModeStoppedAtMillis,
-                bibsHasRealEntries,
+                race?.bibsModeStartedAtMillis,
                 race?.bibsModeStoppedAtMillis,
                 race?.cpModeStartedAtMillis,
                 race?.cpModeStoppedAtMillis,
@@ -253,7 +243,6 @@ class CpModeViewModel(
                 val container = appContainer()
                 CpModeViewModel(
                     container.cpModeRepository,
-                    container.bibsModeRepository,
                     container.raceRepository,
                     container.settingsRepository,
                     Beeper(applicationContext()),

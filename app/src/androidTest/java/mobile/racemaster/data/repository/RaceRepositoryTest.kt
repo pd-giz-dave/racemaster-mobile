@@ -52,13 +52,11 @@ class RaceRepositoryTest {
                 produceFile = { tempFolder.newFile("test.preferences_pb") },
             ),
         )
-        val bibsModeRepository = BibsModeRepository(db, db.raceDao(), db.historyLineDao())
         repository = RaceRepository(
             db.raceDao(),
             db.historyLineDao(),
             db.lineSyncDao(),
             settingsRepository,
-            bibsModeRepository,
         )
         raceId = db.raceDao().insert(RaceEntity(label = "Test Race", createdAtMillis = 0L))
     }
@@ -310,13 +308,7 @@ class RaceRepositoryTest {
     }
 
     @Test
-    fun blockedModeSwitchReasonAllowsSwitchingToCpWhenBibsHasNoRealEntries() = runTest {
-        // A fixed Clock marker alone (no real activity) must not count as "active" — same
-        // hasRealEntries() rule isRaceActive itself relies on.
-        db.historyLineDao().insert(
-            HistoryLineEntity(raceId = raceId, mode = HistoryMode.BIBS, action = HistoryAction.CLOCK, splitNumber = 0, lineNumber = 1L, timestampMillis = 0L),
-        )
-
+    fun blockedModeSwitchReasonAllowsSwitchingToCpWhenBibsWasNeverStarted() = runTest {
         assertNull(repository.blockedModeSwitchReason(raceId, AppMode.CP))
     }
 
@@ -353,10 +345,8 @@ class RaceRepositoryTest {
     }
 
     @Test
-    fun blockedModeSwitchReasonRefusesSwitchingToCpWhileBibsHasRealEntries() = runTest {
-        db.historyLineDao().insert(
-            HistoryLineEntity(raceId = raceId, mode = HistoryMode.BIBS, action = HistoryAction.FINISH, bibNumber = 101, splitNumber = 1, lineNumber = 1L, timestampMillis = 0L),
-        )
+    fun blockedModeSwitchReasonRefusesSwitchingToCpWhileBibsIsStarted() = runTest {
+        db.raceDao().setBibsModeStartedAt(raceId, 1_000L)
 
         assertEquals(
             "Bibs Mode still has an active race — Stop and Reset it before switching to CP Mode.",
@@ -365,12 +355,23 @@ class RaceRepositoryTest {
     }
 
     @Test
-    fun blockedModeSwitchReasonAllowsSwitchingToCpOnceBibsHasBeenReset() = runTest {
-        db.historyLineDao().insert(
-            HistoryLineEntity(raceId = raceId, mode = HistoryMode.BIBS, action = HistoryAction.FINISH, bibNumber = 101, splitNumber = 1, lineNumber = 1L, timestampMillis = 0L),
+    fun blockedModeSwitchReasonRefusesSwitchingToCpWhileBibsIsStoppedButNotReset() = runTest {
+        // Stopping alone must not clear Bibs' active status — only Reset (which clears
+        // bibsModeStartedAtMillis) does, same reasoning as isRaceActive.
+        db.raceDao().setBibsModeStartedAt(raceId, 1_000L)
+        db.raceDao().setBibsModeStoppedAt(raceId, 2_000L)
+
+        assertEquals(
+            "Bibs Mode still has an active race — Stop and Reset it before switching to CP Mode.",
+            repository.blockedModeSwitchReason(raceId, AppMode.CP),
         )
-        val bibsModeRepository = BibsModeRepository(db, db.raceDao(), db.historyLineDao())
-        bibsModeRepository.resetBibsMode(raceId, resetAtMillis = 2_000L)
+    }
+
+    @Test
+    fun blockedModeSwitchReasonAllowsSwitchingToCpOnceBibsHasBeenStoppedAndReset() = runTest {
+        db.raceDao().setBibsModeStartedAt(raceId, 1_000L)
+        db.raceDao().setBibsModeStoppedAt(raceId, 2_000L)
+        db.raceDao().resetBibsMode(raceId)
 
         assertNull(repository.blockedModeSwitchReason(raceId, AppMode.CP))
     }
@@ -378,9 +379,7 @@ class RaceRepositoryTest {
     @Test
     fun blockedModeSwitchReasonNeverBlocksSwitchingToTimeOrMule() = runTest {
         db.raceDao().setCpModeStartedAt(raceId, 1_000L)
-        db.historyLineDao().insert(
-            HistoryLineEntity(raceId = raceId, mode = HistoryMode.BIBS, action = HistoryAction.FINISH, bibNumber = 101, splitNumber = 1, lineNumber = 1L, timestampMillis = 0L),
-        )
+        db.raceDao().setBibsModeStartedAt(raceId, 1_000L)
 
         assertNull(repository.blockedModeSwitchReason(raceId, AppMode.TIME))
         assertNull(repository.blockedModeSwitchReason(raceId, AppMode.MULE))

@@ -20,8 +20,8 @@ import org.junit.runner.RunWith
 // CP Mode's repository is built on the same EntryLogModeEngine as Bibs Mode's — most of these
 // mirror BibsModeRepositoryTest exactly (proving the shared engine behaves identically once
 // wired to CP's own columns/mode), with the Clock-marker-specific cases dropped (CP never
-// writes one) and CP-specific started-at-timestamp cases added instead (see
-// RaceEntity.cpModeStartedAtMillis's own doc for why CP tracks "started" that way, unlike Bibs).
+// writes one, unlike Bibs' own Clock row — see RaceEntity.bibsModeStartedAtMillis's own doc for
+// why that's a separate concern from the started-at-timestamp tracking both modes now share).
 @RunWith(AndroidJUnit4::class)
 class CpModeRepositoryTest {
 
@@ -98,10 +98,9 @@ class CpModeRepositoryTest {
     }
 
     @Test
-    fun resetCpModeClearsStartedAtUnlikeBibsWhichHasNoSuchField() = runTest {
-        // The one genuine behavioral difference from Bibs' own resetBibsMode: CP has no Clock
-        // marker to fall back on for "started" detection, so Reset must explicitly clear
-        // cpModeStartedAtMillis too, returning the screen to its pre-Start state.
+    fun resetCpModeClearsStartedAt() = runTest {
+        // Same as Bibs' own resetBibsMode now — Reset clears the mode's started-at field,
+        // returning the screen to its pre-Start state.
         repository.startCpMode(raceId, startedAtMillis = 1_000L)
         repository.recordEntry(raceId, HistoryAction.PASS, 101, note = null)
 

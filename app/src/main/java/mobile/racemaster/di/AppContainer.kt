@@ -49,7 +49,6 @@ class DefaultAppContainer(context: Context) : AppContainer {
             database.historyLineDao(),
             database.lineSyncDao(),
             settingsRepository,
-            bibsModeRepository,
         )
     }
 

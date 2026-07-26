@@ -60,7 +60,6 @@ class RaceHistoryDetailViewModelTest {
             db.historyLineDao(),
             db.lineSyncDao(),
             settingsRepository,
-            bibsModeRepository,
         )
         raceId = db.raceDao().insert(RaceEntity(label = "Mixed Race", createdAtMillis = 0L, createdByDeviceName = "quiet-thicket"))
     }

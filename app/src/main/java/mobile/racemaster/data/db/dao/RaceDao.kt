@@ -63,13 +63,19 @@ interface RaceDao {
     )
     suspend fun resetTimeMode(raceId: Long)
 
+    @Query("UPDATE races SET bibsModeStartedAtMillis = :startedAtMillis WHERE id = :raceId")
+    suspend fun setBibsModeStartedAt(raceId: Long, startedAtMillis: Long)
+
     @Query("UPDATE races SET bibsModeStoppedAtMillis = :stoppedAtMillis WHERE id = :raceId")
     suspend fun setBibsModeStoppedAt(raceId: Long, stoppedAtMillis: Long)
 
     @Query("UPDATE races SET bibsModeStoppedAtMillis = NULL WHERE id = :raceId")
     suspend fun clearBibsModeStoppedAt(raceId: Long)
 
-    @Query("UPDATE races SET bibsModeNextSplit = 1, bibsModeStoppedAtMillis = NULL WHERE id = :raceId")
+    // Clears bibsModeStartedAtMillis too, same as resetCpMode does for CP — this is what
+    // returns the screen to its pre-Start state (see RaceEntity.bibsModeStartedAtMillis's own
+    // doc).
+    @Query("UPDATE races SET bibsModeNextSplit = 1, bibsModeStoppedAtMillis = NULL, bibsModeStartedAtMillis = NULL WHERE id = :raceId")
     suspend fun resetBibsMode(raceId: Long)
 
     @Query("UPDATE races SET cpModeNextSplit = cpModeNextSplit + 1 WHERE id = :raceId")
@@ -87,9 +93,9 @@ interface RaceDao {
     @Query("UPDATE races SET cpModeStartedAtMillis = :startedAtMillis WHERE id = :raceId")
     suspend fun setCpModeStartedAt(raceId: Long, startedAtMillis: Long)
 
-    // Clears cpModeStartedAtMillis too, unlike resetBibsMode — CP has no Clock marker to fall
-    // back on for "started" detection, so this is what returns the screen to its pre-Start
-    // state (see RaceEntity.cpModeStartedAtMillis's own doc).
+    // Clears cpModeStartedAtMillis too, same as resetBibsMode does for Bibs — this is what
+    // returns the screen to its pre-Start state (see RaceEntity.cpModeStartedAtMillis's own
+    // doc).
     @Query("UPDATE races SET cpModeNextSplit = 1, cpModeStoppedAtMillis = NULL, cpModeStartedAtMillis = NULL WHERE id = :raceId")
     suspend fun resetCpMode(raceId: Long)
 

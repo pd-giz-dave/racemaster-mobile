@@ -6,10 +6,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.HistoryAction
-import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
-import mobile.racemaster.data.repository.hasRealEntries
 import mobile.racemaster.data.repository.isRaceInProgress
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
@@ -58,7 +56,6 @@ data class TimeModeUiState(
 @OptIn(ExperimentalCoroutinesApi::class)
 class TimeModeViewModel(
     private val timeModeRepository: TimeModeRepository,
-    private val bibsModeRepository: BibsModeRepository,
     private val raceRepository: RaceRepository,
     settingsRepository: SettingsRepository,
     private val beeper: Beeper,
@@ -83,10 +80,9 @@ class TimeModeViewModel(
                 combine(
                     raceRepository.observeRace(raceId),
                     timeModeRepository.observeCurrentSegmentSplits(raceId),
-                    bibsModeRepository.observeCurrentSegmentEntries(raceId),
                     tickerFlow,
                     muleStatusFlow,
-                ) { race, splits, bibEntries, now, (unsyncedCount, lastSyncedAtMillis) ->
+                ) { race, splits, now, (unsyncedCount, lastSyncedAtMillis) ->
                     val startedAt = race?.timeModeStartedAtMillis
                     val stoppedAt = race?.timeModeStoppedAtMillis
                     val liveElapsed = when {
@@ -116,7 +112,7 @@ class TimeModeViewModel(
                         raceInProgress = isRaceInProgress(
                             startedAt,
                             stoppedAt,
-                            bibEntries.hasRealEntries(),
+                            race?.bibsModeStartedAtMillis,
                             race?.bibsModeStoppedAtMillis,
                             race?.cpModeStartedAtMillis,
                             race?.cpModeStoppedAtMillis,
@@ -176,7 +172,6 @@ class TimeModeViewModel(
                 val container = appContainer()
                 TimeModeViewModel(
                     container.timeModeRepository,
-                    container.bibsModeRepository,
                     container.raceRepository,
                     container.settingsRepository,
                     Beeper(applicationContext()),

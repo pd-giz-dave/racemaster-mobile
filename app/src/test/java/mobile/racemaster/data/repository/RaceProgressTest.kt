@@ -5,10 +5,11 @@ import org.junit.Test
 
 class RaceProgressTest {
 
-    // isRaceInProgress — CP mirrors Time's own started/stopped-timestamp shape (not Bibs'
-    // entries-derived one), so a race active *only* in CP Mode must still block a "New Race"
-    // from any mode's screen — a blind spot that would otherwise let CP's own live segment be
-    // silently orphaned (see RaceProgress.kt's own doc for why this signal was added).
+    // isRaceInProgress — Time, Bibs, and CP all contribute independently via the same
+    // started/stopped-timestamp shape (see RaceEntity's own started/stopped field pairs), so a
+    // race active in only one of the three must still block a "New Race" from any mode's
+    // screen — a blind spot that would otherwise let that mode's own live segment be silently
+    // orphaned.
 
     @Test
     fun cpAloneCountsAsInProgress() {
@@ -17,7 +18,7 @@ class RaceProgressTest {
             isRaceInProgress(
                 timeModeStartedAtMillis = null,
                 timeModeStoppedAtMillis = null,
-                bibsHasRealEntries = false,
+                bibsModeStartedAtMillis = null,
                 bibsModeStoppedAtMillis = null,
                 cpModeStartedAtMillis = 1_000L,
                 cpModeStoppedAtMillis = null,
@@ -32,7 +33,7 @@ class RaceProgressTest {
             isRaceInProgress(
                 timeModeStartedAtMillis = null,
                 timeModeStoppedAtMillis = null,
-                bibsHasRealEntries = false,
+                bibsModeStartedAtMillis = null,
                 bibsModeStoppedAtMillis = null,
                 cpModeStartedAtMillis = 1_000L,
                 cpModeStoppedAtMillis = 2_000L,
@@ -47,8 +48,41 @@ class RaceProgressTest {
             isRaceInProgress(
                 timeModeStartedAtMillis = null,
                 timeModeStoppedAtMillis = null,
-                bibsHasRealEntries = false,
+                bibsModeStartedAtMillis = null,
                 bibsModeStoppedAtMillis = null,
+                cpModeStartedAtMillis = null,
+                cpModeStoppedAtMillis = null,
+            ),
+        )
+    }
+
+    @Test
+    fun bibsAloneCountsAsInProgress() {
+        // Bibs is shaped exactly like CP/Time now — a started-but-not-stopped timestamp is
+        // sufficient on its own, with no dependence on whether any real entry has been logged
+        // yet (unlike the old entries-derived signal).
+        assertEquals(
+            true,
+            isRaceInProgress(
+                timeModeStartedAtMillis = null,
+                timeModeStoppedAtMillis = null,
+                bibsModeStartedAtMillis = 1_000L,
+                bibsModeStoppedAtMillis = null,
+                cpModeStartedAtMillis = null,
+                cpModeStoppedAtMillis = null,
+            ),
+        )
+    }
+
+    @Test
+    fun bibsStoppedDoesNotCountAsInProgress() {
+        assertEquals(
+            false,
+            isRaceInProgress(
+                timeModeStartedAtMillis = null,
+                timeModeStoppedAtMillis = null,
+                bibsModeStartedAtMillis = 1_000L,
+                bibsModeStoppedAtMillis = 2_000L,
                 cpModeStartedAtMillis = null,
                 cpModeStoppedAtMillis = null,
             ),
@@ -64,7 +98,7 @@ class RaceProgressTest {
             isRaceInProgress(
                 timeModeStartedAtMillis = null,
                 timeModeStoppedAtMillis = null,
-                bibsHasRealEntries = true,
+                bibsModeStartedAtMillis = 1_000L,
                 bibsModeStoppedAtMillis = 5_000L,
                 cpModeStartedAtMillis = 1_000L,
                 cpModeStoppedAtMillis = null,
@@ -72,22 +106,34 @@ class RaceProgressTest {
         )
     }
 
-    // isRaceActive — same "CP contributes its own independent signal" property, for the
-    // stricter "protect from a destructive action" definition.
+    // isRaceActive — same "each mode contributes its own independent signal" property, for the
+    // stricter "protect from a destructive action" definition. All three params are now shaped
+    // identically (a plain started-at timestamp), so one representative pair of tests per mode
+    // is enough to prove the same thing three times over.
 
     @Test
     fun cpStartedAloneCountsAsActive() {
-        assertEquals(true, isRaceActive(timeModeStartedAtMillis = null, bibsHasRealEntries = false, cpModeStartedAtMillis = 1_000L))
+        assertEquals(true, isRaceActive(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null, cpModeStartedAtMillis = 1_000L))
     }
 
     @Test
-    fun cpNeverStartedAndNothingElseIsNotActive() {
-        assertEquals(false, isRaceActive(timeModeStartedAtMillis = null, bibsHasRealEntries = false, cpModeStartedAtMillis = null))
+    fun bibsStartedAloneCountsAsActive() {
+        assertEquals(true, isRaceActive(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = 1_000L, cpModeStartedAtMillis = null))
+    }
+
+    @Test
+    fun timeStartedAloneCountsAsActive() {
+        assertEquals(true, isRaceActive(timeModeStartedAtMillis = 1_000L, bibsModeStartedAtMillis = null, cpModeStartedAtMillis = null))
+    }
+
+    @Test
+    fun nothingStartedIsNotActive() {
+        assertEquals(false, isRaceActive(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null, cpModeStartedAtMillis = null))
     }
 
     // isRaceActive deliberately takes no stopped-flag params at all — a merely Stopped-not-Reset
-    // CP segment still has cpModeStartedAtMillis set (Reset is the only thing that clears it, see
-    // RaceDao.resetCpMode), so it's already covered by cpStartedAloneCountsAsActive above; there's
-    // no separate "stopped" input here to test, mirroring Bibs' own identical reasoning for why
-    // this function ignores stopped flags entirely.
+    // segment still has its own started-at field set (Reset is the only thing that clears any of
+    // them, see RaceDao.resetBibsMode/resetCpMode/resetTimeMode), so it's already covered by the
+    // "started alone counts as active" cases above; there's no separate "stopped" input here to
+    // test.
 }

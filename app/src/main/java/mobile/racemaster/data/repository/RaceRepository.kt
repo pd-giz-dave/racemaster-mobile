@@ -16,7 +16,6 @@ class RaceRepository(
     private val historyLineDao: HistoryLineDao,
     private val lineSyncDao: LineSyncDao,
     private val settingsRepository: SettingsRepository,
-    private val bibsModeRepository: BibsModeRepository,
 ) {
     // bibsRangeStart/bibsRangeCount are collected on the race details form for Time Mode too
     // now (form parity with Bibs), even though Time itself never reads bibsRangeStart for
@@ -99,7 +98,7 @@ class RaceRepository(
     // action tries to write to it (e.g. TimeModeRepository.startStopwatch's own
     // requireNotNull(raceDao.getById(raceId))), it crashes (confirmed in the field).
     suspend fun deleteRace(raceId: Long) {
-        if (isRaceCurrentlyActive(raceId, this, bibsModeRepository)) return
+        if (isRaceCurrentlyActive(raceId, this)) return
         if (raceDao.getById(raceId) == null) return
         lineSyncDao.deleteForRace(raceId)
         raceDao.deleteById(raceId)
@@ -117,8 +116,8 @@ class RaceRepository(
     // holds live, un-reset activity would leave both writing independently into what's meant
     // to be one station's log. Requires the *other* of the two to be Stopped AND Reset first —
     // merely Stopped isn't enough, same "still counts as active" reasoning as [isRaceActive]
-    // (cpModeStartedAtMillis/bibsHasRealEntries only clear on Reset, not on Stop). Every other
-    // switch (into or out of Time/Mule, or re-selecting the same mode) is always allowed.
+    // (bibsModeStartedAtMillis/cpModeStartedAtMillis only clear on Reset, not on Stop). Every
+    // other switch (into or out of Time/Mule, or re-selecting the same mode) is always allowed.
     // Returns null when the switch is fine, or a message to show the operator when it isn't.
     // Called from ModePickerViewModel.selectModeForExistingRace, the one place a mode switch
     // for an already-active race actually happens.
@@ -128,9 +127,8 @@ class RaceRepository(
         if (targetMode == AppMode.BIBS && race.cpModeStartedAtMillis != null) {
             return "CP Mode still has an active race — Stop and Reset it before switching to Bibs Mode."
         }
-        if (targetMode == AppMode.CP) {
-            val bibsActive = bibsModeRepository.observeCurrentSegmentEntries(raceId).first().hasRealEntries()
-            if (bibsActive) return "Bibs Mode still has an active race — Stop and Reset it before switching to CP Mode."
+        if (targetMode == AppMode.CP && race.bibsModeStartedAtMillis != null) {
+            return "Bibs Mode still has an active race — Stop and Reset it before switching to CP Mode."
         }
         return null
     }

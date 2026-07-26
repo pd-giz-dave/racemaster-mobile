@@ -10,7 +10,6 @@ import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
-import mobile.racemaster.data.repository.hasRealEntries
 import mobile.racemaster.data.repository.isRaceInProgress
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
@@ -70,7 +69,7 @@ class ModePickerViewModel(
                     val inProgress = isRaceInProgress(
                         race.timeModeStartedAtMillis,
                         race.timeModeStoppedAtMillis,
-                        bibEntries.hasRealEntries(),
+                        race.bibsModeStartedAtMillis,
                         race.bibsModeStoppedAtMillis,
                         race.cpModeStartedAtMillis,
                         race.cpModeStoppedAtMillis,

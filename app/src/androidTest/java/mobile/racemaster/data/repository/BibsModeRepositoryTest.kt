@@ -124,6 +124,38 @@ class BibsModeRepositoryTest {
     }
 
     @Test
+    fun startBibsModeSetsStartedAtTimestamp() = runTest {
+        // Shaped identically to Time/CP's own start methods now — see
+        // RaceEntity.bibsModeStartedAtMillis's own doc for why this, not the Clock row's mere
+        // presence, is what "started" is derived from.
+        repository.startBibsMode(raceId, startedAtMillis = 5_000L)
+
+        assertEquals(5_000L, db.raceDao().getById(raceId)?.bibsModeStartedAtMillis)
+    }
+
+    @Test
+    fun undoingTheOnlyRealEntryLeavesStartedAtIntact() = runTest {
+        // This is the whole point of bibsModeStartedAtMillis existing: undoing the very first
+        // real entry must leave the screen still showing the keypad rather than reverting to a
+        // pre-Start state, same as CP's own cpModeStartedAtMillis already guarantees.
+        repository.startBibsMode(raceId, startedAtMillis = 5_000L)
+        repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
+
+        repository.undoMostRecent(raceId)
+
+        assertEquals(5_000L, db.raceDao().getById(raceId)?.bibsModeStartedAtMillis)
+    }
+
+    @Test
+    fun resetBibsModeClearsStartedAt() = runTest {
+        repository.startBibsMode(raceId, startedAtMillis = 1_000L)
+
+        repository.resetBibsMode(raceId, resetAtMillis = 9_000L)
+
+        assertNull(db.raceDao().getById(raceId)?.bibsModeStartedAtMillis)
+    }
+
+    @Test
     fun undoIsNoOpWhenClockIsTheOnlyRow() = runTest {
         repository.startBibsMode(raceId)
 

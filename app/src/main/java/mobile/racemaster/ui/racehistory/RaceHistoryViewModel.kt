@@ -8,9 +8,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.db.dao.PulledSourceSummary
 import mobile.racemaster.data.mule.MuleRepository
-import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
-import mobile.racemaster.data.repository.hasRealEntries
 import mobile.racemaster.data.repository.isRaceActive
 import mobile.racemaster.di.appContainer
 import kotlin.time.Duration.Companion.days
@@ -20,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -76,7 +75,6 @@ private data class HistorySources(
 class RaceHistoryViewModel(
     private val raceRepository: RaceRepository,
     private val muleRepository: MuleRepository,
-    bibsModeRepository: BibsModeRepository,
 ) : ViewModel() {
 
     val historyItems: StateFlow<List<HistoryItemUi>> = combine(
@@ -99,23 +97,19 @@ class RaceHistoryViewModel(
             if (races.isEmpty()) {
                 flowOf(muleItems)
             } else {
-                // Two flows per race — its own current Bibs segment (to know if Bibs has real
-                // activity, needed alongside the race's own Time-mode field to tell "active"
-                // apart from "merely selected", same distinction RaceRepository.deleteRace's
-                // own backstop makes) and its own last-activity timestamp (for staleness — a
-                // local race's own real history, not any Mule-inbox bookkeeping; see
-                // isSkippedAsStale's own doc).
+                // One flow per race — its own last-activity timestamp (for staleness — a local
+                // race's own real history, not any Mule-inbox bookkeeping; see
+                // isSkippedAsStale's own doc). isActive itself is a plain read off the race's
+                // own Time/Bibs/CP started-at fields (see isRaceActive), no separate query
+                // needed for it.
                 combine(
                     races.map { race ->
-                        combine(
-                            bibsModeRepository.observeCurrentSegmentEntries(race.id),
-                            raceRepository.observeLastActivityAtMillis(race.id),
-                        ) { bibsEntries, lastActivityAtMillis ->
+                        raceRepository.observeLastActivityAtMillis(race.id).map { lastActivityAtMillis ->
                             HistoryItemUi.LocalRace(
                                 id = race.id,
                                 label = race.label,
                                 createdByDeviceName = race.createdByDeviceName,
-                                isActive = isRaceActive(race.timeModeStartedAtMillis, bibsEntries.hasRealEntries(), race.cpModeStartedAtMillis),
+                                isActive = isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.cpModeStartedAtMillis),
                                 serverSyncSkippedAsStale = isSkippedAsStale(lastActivityAtMillis, maxAgeDays),
                             )
                         }
@@ -143,7 +137,7 @@ class RaceHistoryViewModel(
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val container = appContainer()
-                RaceHistoryViewModel(container.raceRepository, container.muleRepository, container.bibsModeRepository)
+                RaceHistoryViewModel(container.raceRepository, container.muleRepository)
             }
         }
     }

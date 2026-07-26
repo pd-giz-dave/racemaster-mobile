@@ -47,10 +47,14 @@ class BibsModeRepository(
     // automatically: this is what makes opening Bibs Mode side-effect-free to just look at,
     // exactly like Time Mode's own Start button — nothing is written until the operator
     // actually presses Start. (CP Mode's own start, by contrast, writes no row at all — see
-    // CpModeRepository.startCpMode.)
+    // CpModeRepository.startCpMode.) Also sets RaceEntity.bibsModeStartedAtMillis, exactly like
+    // Time/CP's own start methods — the Clock row above is still written (it's a real logged
+    // event, kept for the permanent record), but is no longer what "started" is derived from;
+    // see that field's own doc for why.
     suspend fun startBibsMode(raceId: Long, startedAtMillis: Long = System.currentTimeMillis()) {
         db.withTransaction {
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            raceDao.setBibsModeStartedAt(raceId, startedAtMillis)
             historyLineDao.insert(
                 HistoryLineEntity(
                     raceId = raceId,
