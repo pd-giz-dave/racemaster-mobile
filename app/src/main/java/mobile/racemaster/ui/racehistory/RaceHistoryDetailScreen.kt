@@ -80,7 +80,7 @@ fun RaceHistoryDetailScreen(
                         bibNumber = it.bibNumber,
                         elapsedMillis = if (it.mode == HistoryMode.TIME) it.elapsedMillis else null,
                         note = it.note,
-                        synced = it.synced,
+                        syncState = it.syncState,
                         syncedToLabel = syncedToLabel(it.syncedTo),
                         dupSplitRefs = it.dupSplitRefs,
                         editedFromLineNumber = it.editedFromLineNumber,

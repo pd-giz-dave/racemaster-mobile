@@ -9,6 +9,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import mobile.racemaster.data.db.entity.HistoryAction
+import mobile.racemaster.data.repository.LineSyncState
 import mobile.racemaster.ui.bibsmode.displayName
 
 /** One live-screen entry, shared between Bibs Mode and CP Mode's near-identical current-segment
@@ -22,7 +23,7 @@ data class EntryLogUi(
     val type: HistoryAction,
     val note: String?,
     val dupSplitRefs: List<Int>,
-    val synced: Boolean,
+    val syncState: LineSyncState,
 )
 
 /** The live current-segment entry list shared by Bibs Mode and CP Mode — auto-scrolls to the
@@ -54,7 +55,7 @@ fun EntryLogList(
                 typeLabel = entry.type.displayName(),
                 note = entry.note,
                 dupSplitRefs = entry.dupSplitRefs,
-                synced = entry.synced,
+                syncState = entry.syncState,
                 onClick = if (isMarkerRow) null else { { onEntryClick(entry) } },
             )
         }

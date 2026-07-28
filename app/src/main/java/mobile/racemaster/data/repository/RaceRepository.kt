@@ -182,8 +182,10 @@ class RaceRepository(
     suspend fun getHistoryLineNumbersForUuids(recordUuids: List<String>): List<Long> =
         if (recordUuids.isEmpty()) emptyList() else historyLineDao.getLineNumbersForUuids(recordUuids)
 
-    // Per-line "synced to" feedback for a local race — see LineSyncEntity's doc for why this
-    // is deliberately simple bookkeeping, not a gossip/multi-hop relay.
+    // Per-line "synced to" feedback for a local race — see LineSyncEntity's own doc for what
+    // isSink actually means (the red/orange/green threshold), and for why targetId/targetName
+    // still only ever names the immediate hop that told this device, even for a confirmation
+    // that arrived via a downstream device's own relayed sinkConfirmedRecordUuids.
     fun observeLineSyncs(raceId: Long): Flow<List<LineSyncEntity>> = lineSyncDao.observeForRace(raceId)
 
     suspend fun recordLineSyncs(
@@ -191,12 +193,13 @@ class RaceRepository(
         lineNumbers: List<Long>,
         targetId: String,
         targetName: String,
+        isSink: Boolean,
         syncedAtMillis: Long = System.currentTimeMillis(),
     ) {
         if (lineNumbers.isEmpty()) return
         lineSyncDao.insertAll(
             lineNumbers.map {
-                LineSyncEntity(raceId = raceId, lineNumber = it, targetId = targetId, targetName = targetName, syncedAtMillis = syncedAtMillis)
+                LineSyncEntity(raceId = raceId, lineNumber = it, targetId = targetId, targetName = targetName, syncedAtMillis = syncedAtMillis, isSink = isSink)
             },
         )
     }

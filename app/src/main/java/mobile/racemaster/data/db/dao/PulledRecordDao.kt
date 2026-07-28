@@ -115,6 +115,16 @@ interface PulledRecordDao {
     @Query("SELECT MAX(lineNumber) FROM pulled_records WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel")
     suspend fun getLastPulledLineNumber(sourceDeviceId: String, sourceRaceLabel: String): Long?
 
+    // Every recordUuid this device is holding on [sourceDeviceId]/[sourceRaceLabel]'s behalf
+    // that's already confirmed reaching a sink (syncedAtMillis set — see markSynced above, which
+    // only ever sets it once MuleRepository.pushToServer's own status check confirms server
+    // possession). Called right before acking a pull FROM that same source device, so this
+    // device's own ack can piggyback these as AckPayload.sinkConfirmedRecordUuids — the
+    // mechanism that lets a sink confirmation climb back up an N-hop mule chain to the device
+    // that originally recorded these lines. See MuleRepository.pullFrom.
+    @Query("SELECT recordUuid FROM pulled_records WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel AND syncedAtMillis IS NOT NULL")
+    suspend fun getSinkConfirmedRecordUuidsForSource(sourceDeviceId: String, sourceRaceLabel: String): List<String>
+
     // Purely a relayed copy of a genuinely different device's data — the real ground truth
     // still lives on the originating device. Deleting it here is always safe to offer, at any
     // time, including mid-race — getLastPulledLineNumber falls back to "nothing pulled yet" for

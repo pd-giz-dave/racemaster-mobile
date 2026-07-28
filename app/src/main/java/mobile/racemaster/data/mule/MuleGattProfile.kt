@@ -105,9 +105,32 @@ data class PullRequest(
  *  synced. [deviceId] identifies the puller — lets the peripheral attribute each acked line
  *  to whichever device just took it (see PeripheralSyncService.markSynced). [deviceName] is
  *  the puller's own memorable name, carried alongside so the "synced to" feedback shown in
- *  Race History can display something more useful than a raw UUID. */
+ *  Race History can display something more useful than a raw UUID.
+ *
+ *  [isSink] and [sinkConfirmedRecordUuids] are what turn a plain "somebody took a copy" ack
+ *  into "this data has genuinely reached a sink" — a real destination (the racemaster server,
+ *  or a Bluetooth device that identifies as one, e.g. the racemaster web app's own BLE client),
+ *  as opposed to just another relay mule. [isSink] is the acker's own identity: true only for
+ *  a genuine sink, always false for an ordinary racemaster-mobile phone acting as Mule.
+ *  [recordUuids] alone (isSink false) means "relayed to a mule, not yet sink-confirmed" — the
+ *  new intermediate (orange) state; [recordUuids] with isSink true means those lines are fully
+ *  confirmed (green) right now. [sinkConfirmedRecordUuids] is the separate back-channel that
+ *  lets that confirmation climb back through however many mule hops separate a sink from the
+ *  device that originally recorded a line: a mule piggybacks every recordUuid it has separately
+ *  learned is sink-confirmed (via its own successful server push, or a downstream device's own
+ *  ack) onto its next routine ack to whoever it pulls from — see PeripheralSyncService.markSynced
+ *  and MuleRepository.pullFrom for the two ends of this. Both new fields default so an ack from
+ *  an unmodified older build still decodes fine (every `Json` instance in this codebase already
+ *  sets `ignoreUnknownKeys = true`), just without ever reaching the new green state via that
+ *  path. */
 @Serializable
-data class AckPayload(val deviceId: String, val recordUuids: List<String>, val deviceName: String = "")
+data class AckPayload(
+    val deviceId: String,
+    val recordUuids: List<String>,
+    val deviceName: String = "",
+    val isSink: Boolean = false,
+    val sinkConfirmedRecordUuids: List<String> = emptyList(),
+)
 
 /**
  * One transferable record — Time Mode splits and Bibs Mode entries both flatten into this

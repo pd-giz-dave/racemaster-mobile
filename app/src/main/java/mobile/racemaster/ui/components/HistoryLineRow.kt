@@ -17,6 +17,8 @@ import mobile.racemaster.data.db.entity.formatLineColumn
 import mobile.racemaster.data.db.entity.formatLineRef
 import mobile.racemaster.data.db.entity.formatSplitColumn
 import mobile.racemaster.data.db.entity.formatSplitRef
+import mobile.racemaster.data.repository.LineSyncState
+import mobile.racemaster.ui.theme.RelayedOrange
 import mobile.racemaster.ui.theme.SyncedGreen
 import mobile.racemaster.ui.theme.UnsyncedRed
 import mobile.racemaster.util.formatElapsedSplitTime
@@ -47,7 +49,7 @@ fun HistoryLineRow(
     bibNumber: Int?,
     elapsedMillis: Long?,
     note: String?,
-    synced: Boolean,
+    syncState: LineSyncState,
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
     syncedToLabel: String? = null,
@@ -55,7 +57,11 @@ fun HistoryLineRow(
     editedFromLineNumber: Long? = null,
     isUndoMarker: Boolean = false,
 ) {
-    val rowColor = if (synced) SyncedGreen else UnsyncedRed
+    val rowColor = when (syncState) {
+        LineSyncState.SYNCED -> SyncedGreen
+        LineSyncState.RELAYED -> RelayedOrange
+        LineSyncState.NOT_SYNCED -> UnsyncedRed
+    }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -119,7 +125,7 @@ data class HistoryLineDisplay(
     val bibNumber: Int?,
     val elapsedMillis: Long?,
     val note: String?,
-    val synced: Boolean,
+    val syncState: LineSyncState,
     val syncedToLabel: String? = null,
     val dupSplitRefs: List<Int> = emptyList(),
     val isUndoMarker: Boolean = false,
@@ -148,7 +154,7 @@ fun HistoryLinesList(
                     bibNumber = line.bibNumber,
                     elapsedMillis = line.elapsedMillis,
                     note = line.note,
-                    synced = line.synced,
+                    syncState = line.syncState,
                     syncedToLabel = line.syncedToLabel,
                     dupSplitRefs = line.dupSplitRefs,
                     editedFromLineNumber = line.editedFromLineNumber,

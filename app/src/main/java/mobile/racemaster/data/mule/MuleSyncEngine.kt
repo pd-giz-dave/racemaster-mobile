@@ -511,7 +511,11 @@ class MuleSyncEngine(
             }
             val since = muleRepository.lastPulledLineNumber(freshInfo.deviceId, freshInfo.raceLabel)
             mergeDeviceInfo(key, device, freshInfo, since)
-            if (freshInfo.lastLineNumber - since > 0) {
+            // Also reconnects with zero new lines to pull when there's a sink confirmation to
+            // relay back — otherwise a source that's already fully pulled would never learn its
+            // data has since reached a sink, since nothing would ever re-trigger pullFrom for it.
+            val hasPendingConfirmation = muleRepository.hasSinkConfirmationToRelay(freshInfo.deviceId, freshInfo.raceLabel)
+            if (freshInfo.lastLineNumber - since > 0 || hasPendingConfirmation) {
                 val result = runCatching {
                     muleRepository.pullFrom(
                         device.requiredAdvertisement,
@@ -545,7 +549,8 @@ class MuleSyncEngine(
                     unsyncedCount = outstanding,
                     relayedViaDeviceName = freshInfo.deviceName,
                 )
-                if (entry.lastLineNumber - relaySince <= 0) continue
+                val relayHasPendingConfirmation = muleRepository.hasSinkConfirmationToRelay(entry.originDeviceId, entry.originRaceLabel)
+                if (entry.lastLineNumber - relaySince <= 0 && !relayHasPendingConfirmation) continue
                 val relayResult = runCatching {
                     muleRepository.pullFrom(
                         device.requiredAdvertisement,

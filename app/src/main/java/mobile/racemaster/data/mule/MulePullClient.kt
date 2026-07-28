@@ -97,13 +97,23 @@ class MulePullClient {
      *  device's entire history), reassembles the chunked/notified record stream, hands the
      *  records to [onReceived] to persist, and — only once that returns successfully — acks
      *  back the received `recordUuid`s (tagged with [pullerDeviceId]/[pullerDeviceName]) so
-     *  the peripheral can attribute and mark them synced. Acking is deliberately gated on
+     *  the peripheral can attribute and mark them relayed. Acking is deliberately gated on
      *  [onReceived] completing without throwing: if it throws (a failed local insert, a
      *  mid-write disconnect,
      *  cancellation, ...), the peripheral never hears about these records and will still offer
      *  them again on the next pull — the safe failure mode is a harmless redundant re-pull
      *  (records are deduped by `recordUuid` on the way in), not the source silently marking
-     *  data synced that the mule never actually captured. */
+     *  data synced that the mule never actually captured.
+     *
+     *  [sinkConfirmedRecordUuids] piggybacks a *separate* set of (typically older) recordUuids
+     *  this caller already knows are confirmed at a genuine sink — see AckPayload's own doc.
+     *  Included in the ack whenever non-empty, regardless of whether this particular pull
+     *  itself returned anything new: a mule fully caught up on a device's data may still owe it
+     *  a freshly-learned sink confirmation, so the ack must still fire in that case even though
+     *  `records` ends up empty. This device's own `isSink` is always false here (an ordinary
+     *  racemaster-mobile phone acting as Mule is never itself a sink — see AckPayload's own
+     *  default), left to AckPayload's default rather than a parameter this call site would
+     *  always pass the same value for. */
     suspend fun pull(
         advertisement: Advertisement,
         pullerDeviceId: String,
@@ -114,6 +124,7 @@ class MulePullClient {
         // behalf of another device instead — see PullRequest's own doc.
         originDeviceId: String? = null,
         originRaceLabel: String? = null,
+        sinkConfirmedRecordUuids: List<String> = emptyList(),
         onReceived: suspend (List<SyncRecord>) -> Unit,
     ): Unit = coroutineScope {
         val peripheral = peripheralFor(advertisement)
@@ -159,7 +170,16 @@ class MulePullClient {
 
             if (records.isNotEmpty()) {
                 onReceived(records)
-                val ackPayload = json.encodeToString(AckPayload(pullerDeviceId, records.map { it.recordUuid }, pullerDeviceName))
+            }
+            if (records.isNotEmpty() || sinkConfirmedRecordUuids.isNotEmpty()) {
+                val ackPayload = json.encodeToString(
+                    AckPayload(
+                        deviceId = pullerDeviceId,
+                        recordUuids = records.map { it.recordUuid },
+                        deviceName = pullerDeviceName,
+                        sinkConfirmedRecordUuids = sinkConfirmedRecordUuids,
+                    ),
+                )
                 peripheral.write(ackCharacteristic, ackPayload.toByteArray(Charsets.UTF_8), WriteType.WithResponse)
             }
         } finally {

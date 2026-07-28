@@ -398,7 +398,7 @@ class PeripheralSyncService : Service() {
                 MuleGattProfile.ACK_CHARACTERISTIC_UUID -> {
                     val ack = runCatching { json.decodeFromString<AckPayload>(String(value, Charsets.UTF_8)) }.getOrNull()
                     if (ack != null) {
-                        serviceScope.launch { markSynced(ack.recordUuids, ack.deviceId, ack.deviceName) }
+                        serviceScope.launch { markSynced(ack) }
                     }
                 }
             }
@@ -521,16 +521,48 @@ class PeripheralSyncService : Service() {
         }.onFailure { Log.e(TAG, "notifyCharacteristicChanged failed for chunk of ${chunk.size} bytes", it) }
     }
 
-    // [ackDeviceId]/[ackDeviceName] identify the puller that just took these records —
-    // recorded per-line as "synced to" feedback (see LineSyncEntity) alongside the existing
-    // syncedAtMillis marking. Unconditional — not scoped to servingState.mode, for the same
-    // reason as streamRecords: a mixed-mode race's ack can cover rows from either family.
-    private suspend fun markSynced(recordUuids: List<String>, ackDeviceId: String, ackDeviceName: String) {
-        if (recordUuids.isEmpty()) return
-        val raceId = servingState.raceId ?: return
-        container.raceRepository.markHistorySyncedByUuid(recordUuids)
-        val lineNumbers = container.raceRepository.getHistoryLineNumbersForUuids(recordUuids)
-        container.raceRepository.recordLineSyncs(raceId, lineNumbers, ackDeviceId, targetName = ackDeviceName)
+    // [ack] identifies the puller that just took these records and — critically — whether that
+    // puller is itself a genuine data sink, and what it separately already knows is
+    // sink-confirmed further up an N-hop mule chain (see AckPayload's own doc).
+    //
+    // The acked recordUuids can belong to either of two different tables on this device,
+    // depending on whether they're this device's own recorded lines or a relayed copy of some
+    // other, genuinely different device's data this Mule is holding on its behalf (see
+    // PulledRecordEntity's own doc) — an ack carries no field saying which, so both are tried;
+    // a given recordUuid only ever lives in one of the two, so an update against the wrong
+    // table for a given uuid always affects zero rows, never anything incorrect.
+    //
+    // For this device's OWN race: a plain (not yet sink-confirmed) relay hop still gets a
+    // LineSyncEntity row (isSink = false) so it's visible as "Synced to: X" — the new
+    // intermediate (orange) state — while [sinkConfirmedUuids] additionally get
+    // HistoryLineEntity.syncedAtMillis set (green) plus their own isSink = true row (see that
+    // field's own doc for why it may name an intermediate mule rather than the true originating
+    // sink once data has crossed more than one hop).
+    //
+    // For a RELAYED copy in pulled_records: there's no orange state to track there at all (Mule
+    // Source Detail deliberately stays plain red/green — see MuleRepository.markRelayedRecordsSynced's
+    // own doc), so only [sinkConfirmedUuids] ever needs writing there.
+    //
+    // Unconditional — not scoped to servingState.mode, for the same reason as streamRecords: a
+    // mixed-mode race's ack can cover rows from either family.
+    private suspend fun markSynced(ack: AckPayload) {
+        val raceId = servingState.raceId
+        val confirmedUuids = sinkConfirmedUuids(ack)
+
+        val plainRelayedUuids = ack.recordUuids.filterNot { it in confirmedUuids }
+        if (plainRelayedUuids.isNotEmpty() && raceId != null) {
+            val lineNumbers = container.raceRepository.getHistoryLineNumbersForUuids(plainRelayedUuids)
+            container.raceRepository.recordLineSyncs(raceId, lineNumbers, ack.deviceId, targetName = ack.deviceName, isSink = false)
+        }
+
+        if (confirmedUuids.isNotEmpty()) {
+            if (raceId != null) {
+                container.raceRepository.markHistorySyncedByUuid(confirmedUuids.toList())
+                val lineNumbers = container.raceRepository.getHistoryLineNumbersForUuids(confirmedUuids.toList())
+                container.raceRepository.recordLineSyncs(raceId, lineNumbers, ack.deviceId, targetName = ack.deviceName, isSink = true)
+            }
+            container.muleRepository.markRelayedRecordsSynced(confirmedUuids.toList(), ack.deviceName)
+        }
     }
 
     // --- Notification / permissions -----------------------------------------------------
@@ -614,3 +646,16 @@ class PeripheralSyncService : Service() {
         }
     }
 }
+
+/**
+ * Which recordUuids an [AckPayload] confirms as fully synced (reached a genuine sink) as
+ * opposed to merely relayed to a mule. [AckPayload.recordUuids] (what the acker just pulled)
+ * only counts once the acker's own [AckPayload.isSink] says it's a real destination;
+ * [AckPayload.sinkConfirmedRecordUuids] always counts — those are already confirmed by
+ * definition, relayed here from further along an N-hop mule chain. Pulled out as a top-level
+ * pure function (matching MuleSyncEngine's own `relevantRelayEntries`/`dedupRelayRows`
+ * precedent) so this decision is directly testable without PeripheralSyncService's live
+ * BLE/Service dependencies.
+ */
+internal fun sinkConfirmedUuids(ack: AckPayload): Set<String> =
+    (if (ack.isSink) ack.recordUuids.toSet() else emptySet()) + ack.sinkConfirmedRecordUuids

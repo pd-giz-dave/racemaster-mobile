@@ -8,7 +8,10 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
+import mobile.racemaster.data.repository.LineSyncState
 import mobile.racemaster.data.repository.isRaceInProgress
+import mobile.racemaster.data.repository.lineSyncState
+import mobile.racemaster.data.repository.linesWithAnySync
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.di.applicationContext
@@ -29,7 +32,7 @@ data class FinishSplitUi(
     val action: HistoryAction,
     val elapsedMillis: Long,
     val note: String?,
-    val synced: Boolean,
+    val syncState: LineSyncState,
 )
 
 data class TimeModeUiState(
@@ -82,7 +85,9 @@ class TimeModeViewModel(
                     timeModeRepository.observeCurrentSegmentSplits(raceId),
                     tickerFlow,
                     muleStatusFlow,
-                ) { race, splits, now, (unsyncedCount, lastSyncedAtMillis) ->
+                    raceRepository.observeLineSyncs(raceId),
+                ) { race, splits, now, (unsyncedCount, lastSyncedAtMillis), lineSyncs ->
+                    val linesWithAnySync = linesWithAnySync(lineSyncs)
                     val startedAt = race?.timeModeStartedAtMillis
                     val stoppedAt = race?.timeModeStoppedAtMillis
                     val liveElapsed = when {
@@ -105,7 +110,7 @@ class TimeModeViewModel(
                                 action = it.action,
                                 elapsedMillis = startedAt?.let { s -> it.timestampMillis - s } ?: 0L,
                                 note = it.note,
-                                synced = it.syncedAtMillis != null,
+                                syncState = lineSyncState(it.syncedAtMillis, it.lineNumber in linesWithAnySync),
                             )
                         },
                         canUndo = splits.isNotEmpty(),

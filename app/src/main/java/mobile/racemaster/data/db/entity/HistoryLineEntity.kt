@@ -51,6 +51,13 @@ data class HistoryLineEntity(
     // records from multiple phones are merged by Mule, so this is what travels over BLE/HTTP
     // and is used for sync dedup instead.
     val recordUuid: String = java.util.UUID.randomUUID().toString(),
+    // Non-null once this line is confirmed at a genuine data sink — the racemaster server, or
+    // a Bluetooth device that identifies as one (see LineSyncEntity.isSink) — the green
+    // threshold. Deliberately NOT set just because some device (mule or otherwise) has taken a
+    // relay copy of this line; that intermediate "relayed but not yet sink-confirmed" (orange)
+    // state is instead read off whether any LineSyncEntity row exists at all for this line,
+    // regardless of isSink — see RaceRepository.observeLineSyncs and each mode's own
+    // ViewModel-level LineSyncState computation.
     val syncedAtMillis: Long? = null,
     // No per-row deviceName: every row in a race's local history was always written by this
     // same physical device (Mule-pulled records live in the wholly separate PulledRecordEntity

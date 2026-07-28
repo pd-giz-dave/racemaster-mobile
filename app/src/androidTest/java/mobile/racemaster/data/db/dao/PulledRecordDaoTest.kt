@@ -221,6 +221,30 @@ class PulledRecordDaoTest {
     }
 
     @Test
+    fun sinkConfirmedRecordUuidsForSourceOnlyReturnsSyncedRowsFromThatSource() = runTest {
+        dao.insertAll(
+            listOf(
+                record("synced", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
+                record("unsynced", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
+                // Synced, but a different source — must not leak into device-2's own list.
+                record("other-source-synced", sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label"),
+            ),
+        )
+        dao.markSynced(listOf("synced", "other-source-synced"), syncedAtMillis = 1_000L)
+
+        val confirmed = dao.getSinkConfirmedRecordUuidsForSource("device-2", "Shared Label")
+
+        assertEquals(listOf("synced"), confirmed)
+    }
+
+    @Test
+    fun sinkConfirmedRecordUuidsForSourceIsEmptyWhenNothingIsSyncedYet() = runTest {
+        dao.insertAll(listOf(record("a", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label")))
+
+        assertEquals(emptyList<String>(), dao.getSinkConfirmedRecordUuidsForSource("device-2", "Shared Label"))
+    }
+
+    @Test
     fun lastTouchedByRaceLabelSpansEveryContributingDevice() = runTest {
         // Unlike observeSourceSummaries/observeForSource (scoped to one device), this must
         // consider every row for a race label together — mirrors MuleRepository.pushToServer's

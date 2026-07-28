@@ -8,6 +8,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.toHistoryAction
+import mobile.racemaster.data.repository.LineSyncState
 import mobile.racemaster.data.repository.findDuplicateSplitRefsPerSegment
 import mobile.racemaster.di.appContainer
 import kotlinx.coroutines.flow.SharingStarted
@@ -23,7 +24,11 @@ data class MulePulledRecordUi(
     val lineNumber: Long,
     val elapsedMillis: Long,
     val note: String?,
-    val synced: Boolean,
+    // Deliberately never LineSyncState.RELAYED — a mule's own held copy of another device's
+    // data has no "relayed onward to someone else" tracking of its own (unlike a local race's
+    // own LineSyncEntity-backed lines), so this stays the plain two-state red/green it always
+    // was, just expressed via the same shared type HistoryLineRow renders either way.
+    val syncState: LineSyncState,
     // Mirrors a local race's own HistoryLineRow.syncedToLabel exactly (same PulledRecordEntity
     // column a local race's LineSyncEntity.targetName parallels) — see
     // PulledRecordEntity.syncedTargetName's own doc.
@@ -91,7 +96,7 @@ class MuleSourceDetailViewModel(
                         lineNumber = it.record.lineNumber,
                         elapsedMillis = parseElapsedClock(it.record.splitTime),
                         note = it.record.note,
-                        synced = it.syncedAtMillis != null,
+                        syncState = if (it.syncedAtMillis != null) LineSyncState.SYNCED else LineSyncState.NOT_SYNCED,
                         syncedToLabel = it.syncedToLabel,
                         isTimeRecord = it.record.splitTime != null,
                         isUndoMarker = it.record.toHistoryAction() == HistoryAction.UNDO,

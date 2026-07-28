@@ -266,7 +266,7 @@ private fun TimeModeContent(
                             splitNumber = split.splitNumber,
                             elapsedMillis = split.elapsedMillis,
                             note = split.note,
-                            synced = split.synced,
+                            syncState = split.syncState,
                             onClick = if (isMarkerRow) null else { { editingSplitId = split.id } },
                         )
                     }

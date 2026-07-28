@@ -18,6 +18,8 @@ import mobile.racemaster.data.repository.findDuplicateSplitRefs
 import mobile.racemaster.data.repository.hasRealEntries
 import mobile.racemaster.data.repository.isBibInLegalRange
 import mobile.racemaster.data.repository.isRaceInProgress
+import mobile.racemaster.data.repository.lineSyncState
+import mobile.racemaster.data.repository.linesWithAnySync
 import mobile.racemaster.data.repository.outstandingBibs
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
@@ -40,6 +42,7 @@ private data class RaceContext(
     val entries: List<HistoryLineEntity>,
     val unsyncedCount: Int,
     val lastSyncedAtMillis: Long?,
+    val linesWithAnySync: Set<Long>,
 )
 
 data class BibsModeUiState(
@@ -102,15 +105,16 @@ class BibsModeViewModel(
 
     private val raceAndEntriesFlow = raceIdFlow.flatMapLatest { raceId ->
         if (raceId == null) {
-            flowOf(RaceContext(null, emptyList(), 0, null))
+            flowOf(RaceContext(null, emptyList(), 0, null, emptySet()))
         } else {
             combine(
                 raceRepository.observeRace(raceId),
                 bibsModeRepository.observeCurrentSegmentEntries(raceId),
                 bibsModeRepository.observeUnsyncedCount(raceId),
                 bibsModeRepository.observeLastSyncedAtMillis(raceId),
-            ) { race, entries, unsyncedCount, lastSyncedAtMillis ->
-                RaceContext(race, entries, unsyncedCount, lastSyncedAtMillis)
+                raceRepository.observeLineSyncs(raceId),
+            ) { race, entries, unsyncedCount, lastSyncedAtMillis, lineSyncs ->
+                RaceContext(race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync(lineSyncs))
             }
         }
     }
@@ -121,7 +125,7 @@ class BibsModeViewModel(
         pendingTypeFlow,
         errorFlow,
     ) { context, digits, pendingType, error ->
-        val (race, entries, unsyncedCount, lastSyncedAtMillis) = context
+        val (race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync) = context
         val dupRefs = findDuplicateSplitRefs(entries)
         val needsBib = pendingType in BIB_REQUIRED_ACTIONS
         val outstanding = outstandingBibs(entries, race?.bibsRangeStart, race?.bibsRangeCount)
@@ -142,7 +146,7 @@ class BibsModeViewModel(
                     type = it.action,
                     note = it.note,
                     dupSplitRefs = dupRefs[it.id].orEmpty(),
-                    synced = it.syncedAtMillis != null,
+                    syncState = lineSyncState(it.syncedAtMillis, it.lineNumber in linesWithAnySync),
                 )
             },
             canSubmit = race != null && race.bibsModeStoppedAtMillis == null && (if (needsBib) digits.isNotEmpty() else true),

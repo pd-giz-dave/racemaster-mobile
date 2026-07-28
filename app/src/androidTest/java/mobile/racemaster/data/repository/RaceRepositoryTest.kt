@@ -68,7 +68,7 @@ class RaceRepositoryTest {
 
     @Test
     fun recordLineSyncsIsAttributedToTheGivenTarget() = runTest {
-        repository.recordLineSyncs(raceId, listOf(1L, 2L), targetId = "puller-device-id", targetName = "lively-otter")
+        repository.recordLineSyncs(raceId, listOf(1L, 2L), targetId = "puller-device-id", targetName = "lively-otter", isSink = false)
 
         val rows = repository.observeLineSyncs(raceId).first()
         assertEquals(setOf(1L, 2L), rows.map { it.lineNumber }.toSet())
@@ -77,7 +77,7 @@ class RaceRepositoryTest {
 
     @Test
     fun recordLineSyncsForServerUsesTheReservedConstant() = runTest {
-        repository.recordLineSyncs(raceId, listOf(3L), targetId = SERVER_TARGET_ID, targetName = "Server")
+        repository.recordLineSyncs(raceId, listOf(3L), targetId = SERVER_TARGET_ID, targetName = "Server", isSink = true)
 
         val rows = repository.observeLineSyncs(raceId).first()
         assertEquals(SERVER_TARGET_ID, rows.single().targetId)
@@ -85,8 +85,8 @@ class RaceRepositoryTest {
 
     @Test
     fun sameLineCanBeSyncedToMultipleDistinctTargets() = runTest {
-        repository.recordLineSyncs(raceId, listOf(1L), targetId = "puller-a", targetName = "lively-otter")
-        repository.recordLineSyncs(raceId, listOf(1L), targetId = SERVER_TARGET_ID, targetName = "Server")
+        repository.recordLineSyncs(raceId, listOf(1L), targetId = "puller-a", targetName = "lively-otter", isSink = false)
+        repository.recordLineSyncs(raceId, listOf(1L), targetId = SERVER_TARGET_ID, targetName = "Server", isSink = true)
 
         val targets = repository.observeLineSyncs(raceId).first().map { it.targetId }.toSet()
         assertEquals(setOf("puller-a", SERVER_TARGET_ID), targets)
@@ -94,8 +94,8 @@ class RaceRepositoryTest {
 
     @Test
     fun reAckingTheSameLineAndTargetReplacesRatherThanDuplicates() = runTest {
-        repository.recordLineSyncs(raceId, listOf(1L), targetId = "puller-a", targetName = "lively-otter", syncedAtMillis = 1_000L)
-        repository.recordLineSyncs(raceId, listOf(1L), targetId = "puller-a", targetName = "lively-otter", syncedAtMillis = 2_000L)
+        repository.recordLineSyncs(raceId, listOf(1L), targetId = "puller-a", targetName = "lively-otter", isSink = false, syncedAtMillis = 1_000L)
+        repository.recordLineSyncs(raceId, listOf(1L), targetId = "puller-a", targetName = "lively-otter", isSink = false, syncedAtMillis = 2_000L)
 
         val rows = repository.observeLineSyncs(raceId).first()
         assertEquals(1, rows.size)
@@ -104,11 +104,21 @@ class RaceRepositoryTest {
 
     @Test
     fun recordLineSyncsPersistsTheDisplayNameDistinctFromTheRawTargetId() = runTest {
-        repository.recordLineSyncs(raceId, listOf(1L), targetId = "b3b711bd-95d1-408b-99a0-2a4523df2fc4", targetName = "quiet-thicket")
+        repository.recordLineSyncs(raceId, listOf(1L), targetId = "b3b711bd-95d1-408b-99a0-2a4523df2fc4", targetName = "quiet-thicket", isSink = false)
 
         val row = repository.observeLineSyncs(raceId).first().single()
         assertEquals("b3b711bd-95d1-408b-99a0-2a4523df2fc4", row.targetId)
         assertEquals("quiet-thicket", row.targetName)
+    }
+
+    @Test
+    fun recordLineSyncsPersistsWhetherTheTargetIsASink() = runTest {
+        repository.recordLineSyncs(raceId, listOf(1L), targetId = "relay-mule", targetName = "quiet-thicket", isSink = false)
+        repository.recordLineSyncs(raceId, listOf(2L), targetId = SERVER_TARGET_ID, targetName = "Server", isSink = true)
+
+        val rows = repository.observeLineSyncs(raceId).first().associateBy { it.lineNumber }
+        assertEquals(false, rows.getValue(1L).isSink)
+        assertEquals(true, rows.getValue(2L).isSink)
     }
 
     @Test
@@ -196,7 +206,7 @@ class RaceRepositoryTest {
 
     @Test
     fun deleteRaceAlsoRemovesItsLineSyncs() = runTest {
-        repository.recordLineSyncs(raceId, listOf(1L), targetId = SERVER_TARGET_ID, targetName = "Server")
+        repository.recordLineSyncs(raceId, listOf(1L), targetId = SERVER_TARGET_ID, targetName = "Server", isSink = true)
 
         repository.deleteRace(raceId)
 

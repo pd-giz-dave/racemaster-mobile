@@ -8,10 +8,18 @@ import androidx.room.PrimaryKey
 const val SERVER_TARGET_ID = "SERVER"
 
 // Simple per-line "who's confirmed to have this" feedback for a *local* race's own history —
-// deliberately not a gossip/multi-hop relay: every row here is written directly by whichever
-// hop on THIS device actually observed the confirmation (a BLE ack its own GATT server
-// received from a puller, or its own successful push to the server for a self-originated
-// line) — nothing here is learned from, or re-broadcast to, another device's own knowledge.
+// each row here is written directly by whichever hop on THIS device actually observed the
+// confirmation (a BLE ack its own GATT server received from a puller, or its own successful
+// push to the server for a self-originated line). [isSink] is what that confirmation actually
+// means: true when [targetId] is a genuine data sink (the server, or a Bluetooth device that
+// identified as one) — the green threshold — versus false, meaning [targetId] merely took a
+// relay copy — the intermediate orange threshold (see HistoryLineEntity.syncedAtMillis's own
+// doc for how the two combine). A row's own [targetId]/[targetName] still only ever names the
+// immediate hop that told this device, even for a confirmation that itself arrived via
+// [mobile.racemaster.data.mule.AckPayload.sinkConfirmedRecordUuids] (i.e. one relayed here from
+// further up an N-hop mule chain) — the wire protocol carries no chain-of-custody field for the
+// true originating sink's own identity through arbitrary hop depth, so "Synced to: X" may name
+// an intermediate mule rather than the actual sink once data has crossed more than one hop.
 @Entity(
     tableName = "line_syncs",
     indices = [Index("raceId", "lineNumber", "targetId", unique = true)],
@@ -27,4 +35,5 @@ data class LineSyncEntity(
     // this particular puller.
     val targetName: String = "",
     val syncedAtMillis: Long,
+    val isSink: Boolean = false,
 )

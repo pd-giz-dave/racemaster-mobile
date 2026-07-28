@@ -9,9 +9,12 @@ import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.CpModeRepository
+import mobile.racemaster.data.repository.LineSyncState
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.repository.findDuplicateSplitRefsPerSegment
+import mobile.racemaster.data.repository.lineSyncState
+import mobile.racemaster.data.repository.linesWithAnySync
 import mobile.racemaster.di.appContainer
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -32,7 +35,7 @@ data class ArchivedHistoryLineUi(
     // Only meaningful for a BIBS/CP-mode row — empty for a TIME-mode row.
     val dupSplitRefs: List<Int>,
     val timestampMillis: Long,
-    val synced: Boolean,
+    val syncState: LineSyncState,
     val isUndoMarker: Boolean,
     val editedFromLineNumber: Long?,
     val syncedTo: List<String>,
@@ -70,6 +73,7 @@ class RaceHistoryDetailViewModel(
         // multi-hop relay. The unique (raceId, lineNumber, targetId) index already dedups;
         // targetName is what's actually shown, since a raw deviceId isn't user-friendly.
         val syncedToByLine = lineSyncs.groupBy({ it.lineNumber }, { it.targetName })
+        val linesWithAnySync = linesWithAnySync(lineSyncs)
 
         // Duplicate bib detection, scoped per Bibs/CP segment (bounded by RESET markers) rather
         // than across the whole history — a bib legitimately reused in a later segment must
@@ -104,7 +108,7 @@ class RaceHistoryDetailViewModel(
                 note = it.note,
                 dupSplitRefs = dupRefs[it.id].orEmpty(),
                 timestampMillis = it.timestampMillis,
-                synced = it.syncedAtMillis != null,
+                syncState = lineSyncState(it.syncedAtMillis, it.lineNumber in linesWithAnySync),
                 isUndoMarker = it.action == HistoryAction.UNDO,
                 // The ROOT row's lineNumber — used both as the "edited from line #N" caption
                 // on an edit-echo and as the target reference on an undo-marker's own

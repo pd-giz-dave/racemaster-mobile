@@ -132,6 +132,21 @@ class MuleRepository(
     suspend fun relayedRecordsSince(sourceDeviceId: String, sourceRaceLabel: String, sinceLineNumber: Long): List<SyncRecord> =
         pulledRecordDao.getRecordsSince(sourceDeviceId, sourceRaceLabel, sinceLineNumber).mapNotNull { decodeSyncRecord(it, json) }
 
+    // The BLE-ack counterpart to pushToServer's own confirmed-via-status-check marking — lets a
+    // relayed pulled_records row be recognized as sink-confirmed the moment a downstream device
+    // says so (PeripheralSyncService.markSynced), rather than only ever learning that from this
+    // device's own next server push. Deliberately no orange/"relayed onward" state for
+    // pulled_records rows (unlike a local race's own LineSyncEntity) — Mule Source Detail stays
+    // plain red/green, so a plain (not yet sink-confirmed) relay ack needs no write here at all;
+    // only genuinely sink-confirmed uuids are ever passed to this. Safe to call with uuids that
+    // don't belong to this device's own pulled_records inbox at all (e.g. they're actually this
+    // device's own directly-recorded lines) — see PeripheralSyncService.markSynced's own doc for
+    // why that's always a harmless no-op rather than needing to be filtered out first.
+    suspend fun markRelayedRecordsSynced(recordUuids: List<String>, targetName: String) {
+        if (recordUuids.isEmpty()) return
+        pulledRecordDao.markSynced(recordUuids, System.currentTimeMillis(), targetName)
+    }
+
     suspend fun setAutoSyncStopped(stopped: Boolean) {
         settingsRepository.setAutoSyncStopped(stopped)
     }
@@ -148,6 +163,14 @@ class MuleRepository(
     // everything) if nothing's ever been pulled from it before.
     suspend fun lastPulledLineNumber(sourceDeviceId: String, sourceRaceLabel: String): Long =
         pulledRecordDao.getLastPulledLineNumber(sourceDeviceId, sourceRaceLabel) ?: 0
+
+    // Lets MuleSyncEngine.pullAllVisibleDevices decide whether to reconnect to a source that has
+    // no new lines to pull, purely to relay a sink confirmation it's already holding for that
+    // source (see pullFrom's own doc on sinkConfirmedRecordUuids) — without this, a source that's
+    // already fully pulled would never get told its data has since reached a sink, since the
+    // normal delta-driven pull would never fire again for it.
+    suspend fun hasSinkConfirmationToRelay(sourceDeviceId: String, sourceRaceLabel: String): Boolean =
+        pulledRecordDao.getSinkConfirmedRecordUuidsForSource(sourceDeviceId, sourceRaceLabel).isNotEmpty()
 
     // count starts at 0 and is only ever set from inside pullClient.pull()'s onReceived
     // callback — which runs (and must complete, storing the records) strictly before pull()
@@ -175,7 +198,21 @@ class MuleRepository(
         var count = 0
         val myDeviceId = settingsRepository.getOrCreateDeviceId()
         val myDeviceName = settingsRepository.getOrCreateDeviceName()
-        pullClient.pull(advertisement, myDeviceId, myDeviceName, sinceLineNumber, requestOriginDeviceId, requestOriginRaceLabel) { records ->
+        // Piggybacked onto whatever ack this pull ends up sending (see MulePullClient.pull's
+        // own doc) — everything already held for this exact source (direct or relayed, the
+        // pulled_records inbox doesn't distinguish, see storePulledRecords below) that's since
+        // become sink-confirmed, so that confirmation keeps climbing back toward wherever this
+        // source's data originally came from, one hop per sync tick.
+        val sinkConfirmedRecordUuids = pulledRecordDao.getSinkConfirmedRecordUuidsForSource(sourceDeviceId, sourceRaceLabel)
+        pullClient.pull(
+            advertisement,
+            myDeviceId,
+            myDeviceName,
+            sinceLineNumber,
+            requestOriginDeviceId,
+            requestOriginRaceLabel,
+            sinkConfirmedRecordUuids,
+        ) { records ->
             count = storePulledRecords(sourceRaceLabel, sourceDeviceId, sourceDeviceName, records)
         }
         return count
@@ -360,7 +397,7 @@ class MuleRepository(
                     // having actually reached the server, not just having been handed to a
                     // local inbox the way the old mirrored-copy design used to mark it.
                     raceRepository.markHistorySyncedByUuid(confirmedUuids, now)
-                    raceRepository.recordLineSyncs(localRace.id, confirmedSelfRecords.map { it.lineNumber }, SERVER_TARGET_ID, targetName = baseUrl, syncedAtMillis = now)
+                    raceRepository.recordLineSyncs(localRace.id, confirmedSelfRecords.map { it.lineNumber }, SERVER_TARGET_ID, targetName = baseUrl, isSink = true, syncedAtMillis = now)
                 }
             }
         }
