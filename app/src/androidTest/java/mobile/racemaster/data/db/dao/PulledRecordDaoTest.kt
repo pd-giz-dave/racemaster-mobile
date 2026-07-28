@@ -221,7 +221,7 @@ class PulledRecordDaoTest {
     }
 
     @Test
-    fun sinkConfirmedRecordUuidsForSourceOnlyReturnsSyncedRowsFromThatSource() = runTest {
+    fun unrelayedSinkConfirmedRecordUuidsForSourceOnlyReturnsSyncedRowsFromThatSource() = runTest {
         dao.insertAll(
             listOf(
                 record("synced", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
@@ -232,16 +232,37 @@ class PulledRecordDaoTest {
         )
         dao.markSynced(listOf("synced", "other-source-synced"), syncedAtMillis = 1_000L)
 
-        val confirmed = dao.getSinkConfirmedRecordUuidsForSource("device-2", "Shared Label")
+        val confirmed = dao.getUnrelayedSinkConfirmedRecordUuidsForSource("device-2", "Shared Label")
 
         assertEquals(listOf("synced"), confirmed)
     }
 
     @Test
-    fun sinkConfirmedRecordUuidsForSourceIsEmptyWhenNothingIsSyncedYet() = runTest {
+    fun unrelayedSinkConfirmedRecordUuidsForSourceIsEmptyWhenNothingIsSyncedYet() = runTest {
         dao.insertAll(listOf(record("a", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label")))
 
-        assertEquals(emptyList<String>(), dao.getSinkConfirmedRecordUuidsForSource("device-2", "Shared Label"))
+        assertEquals(emptyList<String>(), dao.getUnrelayedSinkConfirmedRecordUuidsForSource("device-2", "Shared Label"))
+    }
+
+    @Test
+    fun markConfirmationRelayedExcludesARowFromFurtherUnrelayedQueries() = runTest {
+        // The whole point of tracking this separately from syncedAtMillis: once a confirmation
+        // has actually been told back to its source, it must stop being offered up again on
+        // every subsequent tick — otherwise a large race's ack payload only ever grows.
+        dao.insertAll(
+            listOf(
+                record("told", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
+                record("not-yet-told", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
+            ),
+        )
+        dao.markSynced(listOf("told", "not-yet-told"), syncedAtMillis = 1_000L)
+
+        dao.markConfirmationRelayed(listOf("told"), relayedAtMillis = 2_000L)
+
+        assertEquals(
+            listOf("not-yet-told"),
+            dao.getUnrelayedSinkConfirmedRecordUuidsForSource("device-2", "Shared Label"),
+        )
     }
 
     @Test

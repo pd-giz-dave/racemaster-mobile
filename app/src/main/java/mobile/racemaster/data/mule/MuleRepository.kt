@@ -170,7 +170,7 @@ class MuleRepository(
     // already fully pulled would never get told its data has since reached a sink, since the
     // normal delta-driven pull would never fire again for it.
     suspend fun hasSinkConfirmationToRelay(sourceDeviceId: String, sourceRaceLabel: String): Boolean =
-        pulledRecordDao.getSinkConfirmedRecordUuidsForSource(sourceDeviceId, sourceRaceLabel).isNotEmpty()
+        pulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource(sourceDeviceId, sourceRaceLabel).isNotEmpty()
 
     // count starts at 0 and is only ever set from inside pullClient.pull()'s onReceived
     // callback — which runs (and must complete, storing the records) strictly before pull()
@@ -201,9 +201,11 @@ class MuleRepository(
         // Piggybacked onto whatever ack this pull ends up sending (see MulePullClient.pull's
         // own doc) — everything already held for this exact source (direct or relayed, the
         // pulled_records inbox doesn't distinguish, see storePulledRecords below) that's since
-        // become sink-confirmed, so that confirmation keeps climbing back toward wherever this
-        // source's data originally came from, one hop per sync tick.
-        val sinkConfirmedRecordUuids = pulledRecordDao.getSinkConfirmedRecordUuidsForSource(sourceDeviceId, sourceRaceLabel)
+        // become sink-confirmed but hasn't yet been told back to it, so that confirmation keeps
+        // climbing back toward wherever this source's data originally came from, one hop per
+        // sync tick — see getUnrelayedSinkConfirmedRecordUuidsForSource's own doc for why this
+        // is scoped to unrelayed ones only, not this source's whole confirmed history.
+        val sinkConfirmedRecordUuids = pulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource(sourceDeviceId, sourceRaceLabel)
         pullClient.pull(
             advertisement,
             myDeviceId,
@@ -212,9 +214,13 @@ class MuleRepository(
             requestOriginDeviceId,
             requestOriginRaceLabel,
             sinkConfirmedRecordUuids,
-        ) { records ->
-            count = storePulledRecords(sourceRaceLabel, sourceDeviceId, sourceDeviceName, records)
-        }
+            onReceived = { records ->
+                count = storePulledRecords(sourceRaceLabel, sourceDeviceId, sourceDeviceName, records)
+            },
+            onConfirmationsRelayed = { relayedUuids ->
+                pulledRecordDao.markConfirmationRelayed(relayedUuids, System.currentTimeMillis())
+            },
+        )
         return count
     }
 

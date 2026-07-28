@@ -169,11 +169,23 @@ fun HelpScreen(onBack: () -> Unit) {
                     "a saved server login, you're asked whether to also sync to the RaceMaster server " +
                     "(recommended when the phone has a working internet connection) or stay purely " +
                     "device-to-device for now — this choice can be changed later via Setup Server in " +
-                    "the title bar. Nearby devices lists every device Mule can currently see, coloured " +
-                    "red while it still has unsynced data and green once it's fully synced. Force " +
-                    "sync now triggers an immediate pull-and-push cycle instead of waiting for the " +
-                    "automatic few-second tick; Stop auto-sync/Resume auto-sync pauses or resumes that " +
-                    "background cycle.",
+                    "the title bar. A phone can also be connected to directly over Bluetooth by the " +
+                    "RaceMaster web app, which counts as a second, independent destination — a race " +
+                    "can reach race control via the server, a Bluetooth-connected laptop, or both. " +
+                    "Nearby devices lists every device Mule can currently see, coloured red while it " +
+                    "still has unsynced data and green once it's fully pulled. Force sync now triggers " +
+                    "an immediate pull-and-push cycle instead of waiting for the automatic few-second " +
+                    "tick; Stop auto-sync/Resume auto-sync pauses or resumes that background cycle.",
+            )
+            HelpSection(
+                title = "Sync status colours",
+                body = "Every logged split/entry is coloured to show how far it's actually travelled: " +
+                    "red means it hasn't left this phone yet, orange means a Mule has picked it up but " +
+                    "it hasn't yet reached a genuine destination, and green means it's confirmed " +
+                    "reaching one — the RaceMaster server, or a Bluetooth device that identifies as " +
+                    "one (e.g. the web app). Data can pass through several Mule phones before reaching " +
+                    "a destination, so green can take a few sync ticks to appear after a line is first " +
+                    "recorded — orange in the meantime just means it's safely off this phone, not stuck.",
             )
             HelpSection(
                 title = "External triggers",

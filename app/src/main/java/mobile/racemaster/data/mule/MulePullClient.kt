@@ -105,15 +105,23 @@ class MulePullClient {
      *  (records are deduped by `recordUuid` on the way in), not the source silently marking
      *  data synced that the mule never actually captured.
      *
-     *  [sinkConfirmedRecordUuids] piggybacks a *separate* set of (typically older) recordUuids
-     *  this caller already knows are confirmed at a genuine sink — see AckPayload's own doc.
-     *  Included in the ack whenever non-empty, regardless of whether this particular pull
+     *  [sinkConfirmedRecordUuids] piggybacks a *separate* set of recordUuids this caller already
+     *  knows are confirmed at a genuine sink but hasn't yet told this specific source about — see
+     *  AckPayload's own doc, and PulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource
+     *  for why this is scoped to *un*relayed ones only rather than every confirmed uuid this
+     *  caller has ever held for the source (an unbounded, only-ever-growing set would eventually
+     *  overflow a single GATT write for any long-running or large race — see ackBatches' own
+     *  doc). Included in the ack whenever non-empty, regardless of whether this particular pull
      *  itself returned anything new: a mule fully caught up on a device's data may still owe it
      *  a freshly-learned sink confirmation, so the ack must still fire in that case even though
-     *  `records` ends up empty. This device's own `isSink` is always false here (an ordinary
-     *  racemaster-mobile phone acting as Mule is never itself a sink — see AckPayload's own
-     *  default), left to AckPayload's default rather than a parameter this call site would
-     *  always pass the same value for. */
+     *  `records` ends up empty. [onConfirmationsRelayed] fires once per batch, only after that
+     *  batch's ack write has actually succeeded — same "only mark it done once truly sent"
+     *  principle as [onReceived]/`records` above, so a write that fails partway through a large
+     *  backlog leaves whatever didn't get out eligible to be retried next tick rather than
+     *  silently marked told-but-not-actually-sent. This device's own `isSink` is always false
+     *  here (an ordinary racemaster-mobile phone acting as Mule is never itself a sink — see
+     *  AckPayload's own default), left to AckPayload's default rather than a parameter this call
+     *  site would always pass the same value for. */
     suspend fun pull(
         advertisement: Advertisement,
         pullerDeviceId: String,
@@ -126,6 +134,7 @@ class MulePullClient {
         originRaceLabel: String? = null,
         sinkConfirmedRecordUuids: List<String> = emptyList(),
         onReceived: suspend (List<SyncRecord>) -> Unit,
+        onConfirmationsRelayed: suspend (List<String>) -> Unit = {},
     ): Unit = coroutineScope {
         val peripheral = peripheralFor(advertisement)
         // Same reasoning as readDeviceInfo's own CONNECT_TIMEOUT — bounds just the connect
@@ -171,16 +180,15 @@ class MulePullClient {
             if (records.isNotEmpty()) {
                 onReceived(records)
             }
-            if (records.isNotEmpty() || sinkConfirmedRecordUuids.isNotEmpty()) {
-                val ackPayload = json.encodeToString(
-                    AckPayload(
-                        deviceId = pullerDeviceId,
-                        recordUuids = records.map { it.recordUuid },
-                        deviceName = pullerDeviceName,
-                        sinkConfirmedRecordUuids = sinkConfirmedRecordUuids,
-                    ),
-                )
-                peripheral.write(ackCharacteristic, ackPayload.toByteArray(Charsets.UTF_8), WriteType.WithResponse)
+            // Split across as many separate, independently-complete ack writes as needed —
+            // see ackBatches' own doc for why a single unchunked write can't safely carry
+            // this, especially sinkConfirmedRecordUuids, which could otherwise cover a large
+            // race's entire backlog at once (see AckPayload's own doc).
+            for (batch in ackBatches(pullerDeviceId, pullerDeviceName, records.map { it.recordUuid }, sinkConfirmedRecordUuids) { json.encodeToString(it) }) {
+                peripheral.write(ackCharacteristic, json.encodeToString(batch).toByteArray(Charsets.UTF_8), WriteType.WithResponse)
+                if (batch.sinkConfirmedRecordUuids.isNotEmpty()) {
+                    onConfirmationsRelayed(batch.sinkConfirmedRecordUuids)
+                }
             }
         } finally {
             peripheral.disconnect()
@@ -191,4 +199,53 @@ class MulePullClient {
         private val PULL_TIMEOUT = 15_000.milliseconds
         private val CONNECT_TIMEOUT = 10_000.milliseconds
     }
+}
+
+/**
+ * Splits [recordUuids] and [sinkConfirmedRecordUuids] across as many separate [AckPayload]s as
+ * needed to keep every one of them under [maxEncodedBytes] once JSON-encoded — Android hard-caps
+ * a single GATT characteristic write at 512 bytes (`GATT_MAX_ATTR_LEN`; confirmed in the field:
+ * a write past that throws `IllegalArgumentException("value should not be longer than max
+ * length of an attribute value")`, silently failing every subsequent pull from that device). An
+ * ack has no chunking of its own the way the (notify-based) DATA stream does, so an unbounded
+ * uuid list has nowhere else to go. This matters even for [sinkConfirmedRecordUuids] despite
+ * being scoped to *un*relayed confirmations only (see
+ * `PulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource`'s own doc) — a source that's
+ * been offline a while, or a mule freshly reconnecting after a large backlog piled up, can still
+ * owe it more confirmations at once than fit in a single write. Each resulting batch is a fully valid,
+ * self-contained [AckPayload] — `PeripheralSyncService.markSynced` already applies every ack as
+ * an independent, idempotent update, so sending N small acks instead of one changes nothing
+ * about correctness, only how many separate GATT writes it costs. Batch sizing is done by
+ * actually encoding each candidate (via [encode]) rather than guessing a safe fixed
+ * uuids-per-batch count, since device names have no enforced length limit (see
+ * NameDeviceScreen) and are part of every batch's fixed overhead.
+ */
+internal fun ackBatches(
+    deviceId: String,
+    deviceName: String,
+    recordUuids: List<String>,
+    sinkConfirmedRecordUuids: List<String>,
+    maxEncodedBytes: Int = MuleGattProfile.MAX_SAFE_CHUNK_SIZE_BYTES,
+    encode: (AckPayload) -> String,
+): List<AckPayload> {
+    fun chunksOf(uuids: List<String>, toPayload: (List<String>) -> AckPayload): List<AckPayload> {
+        if (uuids.isEmpty()) return emptyList()
+        val batches = mutableListOf<AckPayload>()
+        var current: List<String> = emptyList()
+        for (uuid in uuids) {
+            val candidate = current + uuid
+            if (current.isNotEmpty() && encode(toPayload(candidate)).toByteArray(Charsets.UTF_8).size > maxEncodedBytes) {
+                batches += toPayload(current)
+                current = listOf(uuid)
+            } else {
+                current = candidate
+            }
+        }
+        batches += toPayload(current)
+        return batches
+    }
+    return chunksOf(recordUuids) { AckPayload(deviceId = deviceId, recordUuids = it, deviceName = deviceName) } +
+        chunksOf(sinkConfirmedRecordUuids) {
+            AckPayload(deviceId = deviceId, recordUuids = emptyList(), deviceName = deviceName, sinkConfirmedRecordUuids = it)
+        }
 }

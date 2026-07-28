@@ -46,4 +46,16 @@ data class PulledRecordEntity(
     // syncedAtMillis so a Mule-pulled record's "Synced to: X" tag matches a local race's own
     // exactly, instead of only getting a bare synced/unsynced color with no destination.
     val syncedTargetName: String? = null,
+    // Set once this record's sink confirmation (syncedAtMillis above) has actually been handed
+    // back to sourceDeviceId in a successfully-written ack — see
+    // PulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource's own doc. Without this,
+    // MuleRepository.pullFrom recomputed "every uuid ever sink-confirmed for this source" fresh
+    // on every ~10s tick with no memory of what had already been sent, so the ack payload only
+    // ever grew across a race's lifetime — fine for a handful of splits, but for a large race
+    // (hundreds of confirmed lines) it re-transfers the whole ever-growing backlog every tick
+    // forever, wasting BLE airtime/battery long after every confirmation has already landed.
+    // This is a separate concern from syncedAtMillis itself: that field means "is this
+    // confirmed at all", this one means "have I already told the device that gave me this
+    // record about that confirmation" — orthogonal, both nullable, set at different times.
+    val confirmationRelayedAtMillis: Long? = null,
 )

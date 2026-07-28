@@ -116,14 +116,36 @@ interface PulledRecordDao {
     suspend fun getLastPulledLineNumber(sourceDeviceId: String, sourceRaceLabel: String): Long?
 
     // Every recordUuid this device is holding on [sourceDeviceId]/[sourceRaceLabel]'s behalf
-    // that's already confirmed reaching a sink (syncedAtMillis set — see markSynced above, which
-    // only ever sets it once MuleRepository.pushToServer's own status check confirms server
-    // possession). Called right before acking a pull FROM that same source device, so this
-    // device's own ack can piggyback these as AckPayload.sinkConfirmedRecordUuids — the
-    // mechanism that lets a sink confirmation climb back up an N-hop mule chain to the device
-    // that originally recorded these lines. See MuleRepository.pullFrom.
-    @Query("SELECT recordUuid FROM pulled_records WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel AND syncedAtMillis IS NOT NULL")
-    suspend fun getSinkConfirmedRecordUuidsForSource(sourceDeviceId: String, sourceRaceLabel: String): List<String>
+    // that's confirmed reaching a sink (syncedAtMillis set — see markSynced above) but hasn't
+    // yet actually been told back to that source (confirmationRelayedAtMillis still null — see
+    // markConfirmationRelayed below). Called right before acking a pull FROM that same source
+    // device, so this device's own ack can piggyback these as AckPayload.sinkConfirmedRecordUuids
+    // — the mechanism that lets a sink confirmation climb back up an N-hop mule chain to the
+    // device that originally recorded these lines. See MuleRepository.pullFrom.
+    //
+    // Deliberately scoped to *un*relayed rows only, not every sink-confirmed row for this
+    // source — the earlier version of this query returned the latter, unconditionally
+    // resending the whole ever-growing "everything ever confirmed for this source" set on
+    // every ~10s tick forever; fine for a handful of splits, but for a large race (hundreds of
+    // confirmed lines) that re-transfers the whole backlog every tick long after every
+    // confirmation has already landed, wasting BLE airtime/battery without bound as the race
+    // grows. markConfirmationRelayed is what lets this genuinely shrink to nothing once a
+    // source is fully caught up, rather than only ever growing.
+    @Query(
+        "SELECT recordUuid FROM pulled_records WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel " +
+            "AND syncedAtMillis IS NOT NULL AND confirmationRelayedAtMillis IS NULL",
+    )
+    suspend fun getUnrelayedSinkConfirmedRecordUuidsForSource(sourceDeviceId: String, sourceRaceLabel: String): List<String>
+
+    // Marks [recordUuids] as told back to their source — called only once the ack write that
+    // actually carried them has succeeded (see MulePullClient.pull's per-batch confirmation
+    // callback), never optimistically before the write, so a failed/dropped write leaves them
+    // eligible to be picked up and resent by getUnrelayedSinkConfirmedRecordUuidsForSource on
+    // the very next tick rather than silently lost — the same "safe failure mode is a harmless
+    // redundant re-pull" principle MulePullClient.pull's own doc already establishes for
+    // records themselves.
+    @Query("UPDATE pulled_records SET confirmationRelayedAtMillis = :relayedAtMillis WHERE recordUuid IN (:recordUuids)")
+    suspend fun markConfirmationRelayed(recordUuids: List<String>, relayedAtMillis: Long)
 
     // Purely a relayed copy of a genuinely different device's data — the real ground truth
     // still lives on the originating device. Deleting it here is always safe to offer, at any

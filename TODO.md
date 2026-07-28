@@ -15,10 +15,6 @@ done
 ## Random ToDo's
 
 - [ ] Update readme.md and structure.md and help text
-- [ ] sync needs to show data has either got to the server or the web-app,
-      so web-app must advertise itself as a 'sink' for data,
-      make server do that too so its all the same,
-      the ultimate sync is that its reached Racemaster for the race - how?
 
 ## Bugs
 

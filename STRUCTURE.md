@@ -6,10 +6,12 @@ to change X" — not a line-by-line reference.
 ## The big picture
 
 This is a single-module Gradle Android app (module `:app`) written in Kotlin, UI in Jetpack
-Compose. There's no server-side code here, but Mule Mode does talk to two other endpoints: other
-nearby phones over Bluetooth LE, and the RaceMaster server over HTTP. Everything a phone records
-itself still lives locally first, in a local SQLite database (via Room). For Time/Bibs/CP Mode,
-data flows in one direction, top to bottom:
+Compose. There's no server-side code here, but Mule Mode does talk to other endpoints: other
+nearby phones over Bluetooth LE (some of which may themselves be genuine data "sinks" rather
+than just relaying Mules — e.g. the RaceMaster web app connecting over Bluetooth), and the
+RaceMaster server over HTTP. Everything a phone records itself still lives locally first, in a
+local SQLite database (via Room). For Time/Bibs/CP Mode, data flows in one direction, top to
+bottom:
 
 ```
 Screen (Composable)  <-- observes --  ViewModel  <-- calls -->  Repository  <-- queries -->  DAO / Room DB
@@ -72,9 +74,13 @@ app/src/main/java/mobile/racemaster/
 │   │   │   ├── HistoryAction.kt       enum of loggable actions (START, SPLIT, FINISH, PASS,
 │   │   │   │                          RETIRE, STOP, RESET, UNDO, CLOCK, ...)
 │   │   │   ├── PulledRecordEntity.kt  Mule Mode's local inbox — records pulled from other
-│   │   │   │                          devices over BLE, pending push to the server
-│   │   │   ├── LineSyncEntity.kt      Per-line "synced to server" bookkeeping for this device's
-│   │   │   │                          own history
+│   │   │   │                          devices over BLE, pending push to a sink; also tracks
+│   │   │   │                          whether a learned sink confirmation has been relayed
+│   │   │   │                          back to whoever this record came from
+│   │   │   ├── LineSyncEntity.kt      Per-line sync bookkeeping for this device's own history —
+│   │   │   │                          one row per hop it's been handed to, isSink marking
+│   │   │   │                          whether that hop is a genuine data sink (server, or a
+│   │   │   │                          sink-identifying Bluetooth device) or just another Mule
 │   │   │   └── KnownDeviceEntity.kt   Durable roster of Mule peers this phone has ever
 │   │   │                              identified over BLE (survives past the current scan)
 │   │   └── dao/                    One @Dao interface per table
@@ -94,6 +100,10 @@ app/src/main/java/mobile/racemaster/
 │   │   ├── HistoryFold.kt            `foldLatestVisible()` — collapses the append-only raw rows
 │   │   │                             (edits/undos never delete, they append) down to "what's
 │   │   │                             actually visible right now"
+│   │   ├── LineSyncState.kt          The red/orange/green tri-state a line's sync status
+│   │   │                             renders as (not synced / relayed to a Mule / confirmed at
+│   │   │                             a genuine sink) — one shared pure function every mode's
+│   │   │                             ViewModel computes it through
 │   │   ├── BibValidation.kt          Legal bib range + duplicate-flagging rules, shared by Bibs
 │   │   │                             and CP
 │   │   ├── RaceProgress.kt           `isRaceActive()` — shared "can I start/clear a race?" rule
@@ -106,10 +116,16 @@ app/src/main/java/mobile/racemaster/
 │   │   ├── MuleRepository.kt         Orchestrates pulling (BLE) into a local inbox and pushing
 │   │   │                             (HTTP) to the server; owns login/server-URL state
 │   │   ├── MulePullClient.kt         BLE central: scans/connects/pulls unsynced records from a
-│   │   │                             nearby Time/Bibs/CP/Mule phone
-│   │   ├── MuleGattProfile.kt        Shared GATT service/characteristic UUIDs + wire record shape
+│   │   │                             nearby Time/Bibs/CP/Mule phone, and batches/acks sink
+│   │   │                             confirmations back (`ackBatches` — keeps each GATT ack
+│   │   │                             write under Android's hard 512-byte cap)
+│   │   ├── MuleGattProfile.kt        Shared GATT service/characteristic UUIDs + wire record
+│   │   │                             shape, incl. `AckPayload.isSink`/`sinkConfirmedRecordUuids`
+│   │   │                             (the sink-identity + N-hop confirmation back-channel)
 │   │   ├── PeripheralSyncService.kt  Foreground service every device runs regardless of mode,
-│   │   │                             advertising itself and answering pull requests
+│   │   │                             advertising itself, answering pull requests, and deciding
+│   │   │                             (`markSynced`) which acked uuids actually count as reaching
+│   │   │                             a sink vs. merely being relayed to another Mule
 │   │   ├── MuleSyncClient.kt         Ktor HTTP client for the RaceMaster server: login, ping, push
 │   │   ├── ServerStatusRepository.kt Interprets a raw ping outcome as OFFLINE/INVALID/OK
 │   │   ├── SyncRecordMapping.kt      Maps a unified HistoryLineEntity row to the server's wire
@@ -177,8 +193,9 @@ gradle/libs.versions.toml        Dependency version catalog — add new librarie
 - `app/src/test/` — plain JVM unit tests (`./gradlew testDebugUnitTest`, no device needed).
   Covers pure logic: `HistoryFoldTest`, `BibValidationTest`, `RaceProgressTest`,
   `HistoryModeTest`, `ClockTimeFormatTest`, `DeviceNameGeneratorTest`, `HistoryActionLabelsTest`,
-  and Mule's `MuleRepositoryTest`/`MuleSyncEngineTest`/`ServerStatusRepositoryTest`/
-  `SyncRecordMappingTest`.
+  `LineSyncStateTest`, and Mule's `MuleRepositoryTest`/`MuleSyncEngineTest`/
+  `ServerStatusRepositoryTest`/`SyncRecordMappingTest`/`MulePullClientTest` (ack batching)/
+  `PeripheralSyncServiceTest` (sink-confirmed uuid decision).
 - `app/src/androidTest/` — instrumented tests requiring a device/emulator
   (`./gradlew connectedDebugAndroidTest`). Used for repository/DAO tests against a real
   in-memory Room database (`data/repository/*Test.kt`, `data/db/dao/*Test.kt`,
@@ -200,6 +217,7 @@ gradle/libs.versions.toml        Dependency version catalog — add new librarie
 | Add a new dependency | `gradle/libs.versions.toml` then reference via `libs.*` in `app/build.gradle.kts` |
 | Change what's remembered across app restarts (current mode, active race, server login) | `data/settings/SettingsRepository.kt` |
 | Change how/when a phone syncs with other phones or the server | `data/mule/MuleSyncEngine.kt` (the loop) / `MuleRepository.kt` (pull+push orchestration) |
+| Change what counts as a "sink" or the red/orange/green sync coloring | `data/repository/LineSyncState.kt` (the tri-state itself), `data/mule/PeripheralSyncService.kt`'s `markSynced` (which acked uuids count as sink-confirmed) |
 | Change the wire format sent to the RaceMaster server | `data/mule/SyncRecordMapping.kt`, `MuleSyncClient.kt` |
 | Change the app version | `versionCode`/`versionName` in `app/build.gradle.kts` |
 | Wire up a new repository so screens can use it | `di/AppContainer.kt` |
