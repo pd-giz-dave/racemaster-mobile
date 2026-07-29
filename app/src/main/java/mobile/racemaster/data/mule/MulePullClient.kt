@@ -196,8 +196,13 @@ class MulePullClient {
     }
 
     companion object {
-        private val PULL_TIMEOUT = 15_000.milliseconds
-        private val CONNECT_TIMEOUT = 10_000.milliseconds
+        // Both expressed as ratios of MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS — the single
+        // source of truth for this protocol's whole polling cadence (see its own doc) — rather
+        // than independent hardcoded numbers that could silently drift out of proportion with
+        // it. Ratios chosen to reproduce this class's original fixed 10s/15s values exactly at
+        // today's 10s interval, so this is a pure refactor, not a behavior change.
+        private val CONNECT_TIMEOUT = MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS.milliseconds
+        private val PULL_TIMEOUT = (MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS * 3 / 2).milliseconds
     }
 }
 

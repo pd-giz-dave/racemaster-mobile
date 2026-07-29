@@ -43,6 +43,9 @@ fun RaceHistoryScreen(
     val items by viewModel.historyItems.collectAsStateWithLifecycle()
     var pendingDelete by remember { mutableStateOf<HistoryItemUi.LocalRace?>(null) }
     var pendingMuleSourceDelete by remember { mutableStateOf<HistoryItemUi.MuleSource?>(null) }
+    // A separate dialog from pendingDelete above — an active race needs its stuck mode(s)
+    // cleared first (see RaceRepository.forceResetActiveModes' own doc), not immediate deletion.
+    var pendingForceReset by remember { mutableStateOf<HistoryItemUi.LocalRace?>(null) }
 
     Scaffold(
         topBar = {
@@ -77,7 +80,11 @@ fun RaceHistoryScreen(
                             supportingContent = {
                                 val parts = listOfNotNull(
                                     "From ${item.createdByDeviceName} (self)".takeIf { item.createdByDeviceName.isNotBlank() },
-                                    "Active, can't be deleted".takeIf { item.isActive },
+                                    // Names the actual mode(s) still keeping this active rather
+                                    // than a bare "Active" — the operator may be looking at this
+                                    // screen precisely because a different mode's own screen
+                                    // already looks fully idle (see activeModeLabels' own doc).
+                                    "Active in ${item.activeModeLabels.joinToString(" + ")}, can't be deleted".takeIf { item.isActive },
                                 )
                                 Column {
                                     if (parts.isNotEmpty()) Text(parts.joinToString(" — "))
@@ -95,17 +102,22 @@ fun RaceHistoryScreen(
                                 }
                             },
                             trailingContent = {
-                                // Never offered for the active race — RaceRepository.deleteRace
-                                // also refuses it as a backstop, but the UI shouldn't dangle a
-                                // control in front of the operator that would silently no-op.
+                                // An active race routes to the force-reset dialog instead of
+                                // straight to delete-confirmation — RaceRepository.deleteRace
+                                // still refuses it as a backstop either way, but the button stays
+                                // tappable rather than dangling disabled with no way forward: the
+                                // mode that's actually still active may no longer be reachable
+                                // from its own screen at all (see forceResetActiveModes' own doc
+                                // for the scenario this fixes).
                                 IconButton(
-                                    onClick = withClickSound { pendingDelete = item },
-                                    enabled = !item.isActive,
+                                    onClick = withClickSound {
+                                        if (item.isActive) pendingForceReset = item else pendingDelete = item
+                                    },
                                 ) {
                                     Icon(
                                         Icons.Filled.Delete,
                                         contentDescription = "Delete race",
-                                        tint = if (item.isActive) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f) else MaterialTheme.colorScheme.error,
+                                        tint = MaterialTheme.colorScheme.error,
                                     )
                                 }
                             },
@@ -165,6 +177,32 @@ fun RaceHistoryScreen(
             },
             dismissButton = {
                 TextButton(onClick = withClickSound { pendingDelete = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    pendingForceReset?.let { race ->
+        AlertDialog(
+            onDismissRequest = { pendingForceReset = null },
+            title = { Text("Reset before deleting?") },
+            text = {
+                Text(
+                    "\"${race.label}\" is still active in ${race.activeModeLabels.joinToString(" + ")} " +
+                        "— that mode's own screen may no longer show this race at all if you've since " +
+                        "moved on to another one. Resetting clears its unfinished segment only; the " +
+                        "rest of its history is kept, and you can then delete it separately.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = withClickSound {
+                        viewModel.forceResetActiveModes(race.id)
+                        pendingForceReset = null
+                    },
+                ) { Text("Reset") }
+            },
+            dismissButton = {
+                TextButton(onClick = withClickSound { pendingForceReset = null }) { Text("Cancel") }
             },
         )
     }

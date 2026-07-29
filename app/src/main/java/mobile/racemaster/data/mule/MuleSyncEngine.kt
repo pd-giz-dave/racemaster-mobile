@@ -639,7 +639,10 @@ class MuleSyncEngine(
 
     companion object {
         private const val TAG = "MuleSyncEngine"
-        private val AUTO_SYNC_INTERVAL = 10_000.milliseconds
+        // Centralised in MuleGattProfile so every puller on this protocol (this engine's own
+        // auto-sync loop included) shares one cadence rather than each hardcoding its own copy —
+        // see MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS's own doc.
+        private val AUTO_SYNC_INTERVAL = MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS.milliseconds
         private val BLUETOOTH_CHECK_INTERVAL = 3_000.milliseconds
         private val UNREACHABLE_DROP_THRESHOLD = 60.minutes
         private val UNRESOLVED_DROP_THRESHOLD = 2.minutes

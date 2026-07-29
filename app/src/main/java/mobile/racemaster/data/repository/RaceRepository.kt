@@ -107,6 +107,32 @@ class RaceRepository(
         }
     }
 
+    // Lets an operator un-stick a race that RaceHistoryScreen's own caption says is still
+    // "Active in X Mode", even when that mode's own screen no longer shows any sign of it.
+    // settingsRepository.activeRaceId is a single, device-wide "currently selected race"
+    // pointer, entirely independent of which race(s) still have an un-Reset startedAtMillis
+    // sitting in the database (see isRaceActive's own doc) — once the operator has moved on to
+    // a different race (a new one, or even just switched which existing one is current), an
+    // older race's own stuck flag becomes unreachable via the normal per-mode Reset button,
+    // since that button only ever acts on whichever race activeRaceId currently points to.
+    // Confirmed in the field: a race showed "Active in Time Mode, can't be deleted" in Race
+    // History while Time Mode's own screen showed no race at all — activeRaceId had since moved
+    // to a different race, leaving the old one's timeModeStartedAtMillis with no in-context way
+    // to reach it.
+    //
+    // Reuses the exact same DAO reset queries an in-context Reset already calls, unconditionally
+    // for all three modes rather than checking which one is actually active first — resetting an
+    // already-null field is a harmless no-op, the same idempotent-recheck-over-conditional
+    // tradeoff already used elsewhere in this codebase (e.g. PeripheralSyncService.markSynced).
+    // Deliberately does not delete the race itself, matching deleteRace's own two-step design:
+    // this only clears whatever's blocking isRaceActive, leaving the operator to explicitly
+    // delete afterward via the normal confirmation dialog.
+    suspend fun forceResetActiveModes(raceId: Long) {
+        raceDao.resetTimeMode(raceId)
+        raceDao.resetBibsMode(raceId)
+        raceDao.resetCpMode(raceId)
+    }
+
     // Resolves a race label back to this device's own local race — see
     // MuleRepository.pushToServer's own self-push path.
     suspend fun getRaceByLabel(label: String): RaceEntity? = raceDao.getByLabel(label)

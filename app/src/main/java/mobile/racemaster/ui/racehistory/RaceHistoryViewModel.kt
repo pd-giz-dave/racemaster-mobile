@@ -9,6 +9,7 @@ import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.db.dao.PulledSourceSummary
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.repository.RaceRepository
+import mobile.racemaster.data.repository.activeModeLabels
 import mobile.racemaster.data.repository.isRaceActive
 import mobile.racemaster.di.appContainer
 import kotlin.time.Duration.Companion.days
@@ -40,6 +41,11 @@ sealed interface HistoryItemUi {
         val label: String,
         val createdByDeviceName: String,
         val isActive: Boolean,
+        // Which mode(s) actually keep isActive true — see activeModeLabels' own doc for why
+        // this is more than a formatting nicety: the operator may be looking at a screen for a
+        // mode that's already fully reset, with no way to tell which *other* mode is really
+        // still blocking deletion without this.
+        val activeModeLabels: List<String>,
         val serverSyncSkippedAsStale: Boolean,
     ) : HistoryItemUi
     // A race pulled via Mule from a genuinely different physical device — this device's own
@@ -110,6 +116,7 @@ class RaceHistoryViewModel(
                                 label = race.label,
                                 createdByDeviceName = race.createdByDeviceName,
                                 isActive = isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.cpModeStartedAtMillis),
+                                activeModeLabels = activeModeLabels(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.cpModeStartedAtMillis),
                                 serverSyncSkippedAsStale = isSkippedAsStale(lastActivityAtMillis, maxAgeDays),
                             )
                         }
@@ -124,6 +131,13 @@ class RaceHistoryViewModel(
     // at all for an active race — see HistoryItemUi.LocalRace.isActive).
     fun deleteRace(raceId: Long) {
         viewModelScope.launch { raceRepository.deleteRace(raceId) }
+    }
+
+    // See RaceRepository.forceResetActiveModes' own doc — un-sticks a race whose active mode(s)
+    // are no longer reachable via that mode's own in-context Reset button, so it can then be
+    // deleted through the normal deleteRace flow above.
+    fun forceResetActiveModes(raceId: Long) {
+        viewModelScope.launch { raceRepository.forceResetActiveModes(raceId) }
     }
 
     // See MuleRepository.deleteSource's own doc for why a Mule source (a relayed copy, not the

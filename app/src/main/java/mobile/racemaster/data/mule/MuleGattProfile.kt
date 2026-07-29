@@ -48,6 +48,13 @@ object MuleGattProfile {
     // onMtuChanged reports.
     const val MAX_SAFE_CHUNK_SIZE_BYTES = 509
     const val END_OF_STREAM_MARKER: Byte = 0
+
+    // Single source of truth for how often anything pulling from a device on this protocol
+    // should re-poll it — this device's own [MuleSyncEngine] auto-sync loop uses it directly,
+    // and it's also reported to every puller via [DeviceInfo.pollIntervalMs] so a puller (e.g.
+    // the racemaster web app acting as a Mule) never has to hardcode/guess a cadence of its
+    // own that could drift out of step with this one.
+    const val RECOMMENDED_POLL_INTERVAL_MS = 10_000L
 }
 
 /** One other, genuinely different device this one is holding relayable data for — everything
@@ -84,6 +91,12 @@ data class DeviceInfo(
     // from anyone (an ordinary Time/Bibs phone, or a mule that hasn't relayed anything yet).
     // See RelayManifestEntry's own doc.
     val relayEntries: List<RelayManifestEntry> = emptyList(),
+    // How often (in ms) a puller should re-poll this device — see
+    // MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS's own doc for why this is reported rather
+    // than left for every puller to hardcode independently. Defaulted (rather than required) so
+    // a puller running newer code than an old, already-installed peripheral still deserializes
+    // its DeviceInfo fine and just falls back to this same default.
+    val pollIntervalMs: Long = MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS,
 )
 
 /** Written to [MuleGattProfile.CONTROL_CHARACTERISTIC_UUID] to request a delta stream of

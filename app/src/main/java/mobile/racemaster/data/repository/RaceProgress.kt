@@ -51,6 +51,23 @@ fun isRaceActive(timeModeStartedAtMillis: Long?, bibsModeStartedAtMillis: Long?,
     timeModeStartedAtMillis != null || bibsModeStartedAtMillis != null || cpModeStartedAtMillis != null
 
 /**
+ * Which mode(s) are actually keeping [isRaceActive] true for this race — i.e. which of
+ * Time/Bibs/CP still have a non-null startedAtMillis for the current segment. A race can be
+ * active in a mode entirely different from whichever one the operator is currently looking at
+ * (nothing stops switching AppMode without starting a new race — see RaceDetailsScreen's own
+ * doc): Time Mode's own screen looks fully idle right after its own Stop+Reset, with no hint
+ * that Bibs or CP was also started for this same race at some point and never separately reset.
+ * Surfaced directly so RaceHistoryScreen's "can't be deleted" caption can name the actual
+ * culprit instead of leaving the operator to guess which of three screens to go reset.
+ */
+fun activeModeLabels(timeModeStartedAtMillis: Long?, bibsModeStartedAtMillis: Long?, cpModeStartedAtMillis: Long?): List<String> =
+    listOfNotNull(
+        "Time Mode".takeIf { timeModeStartedAtMillis != null },
+        "Bibs Mode".takeIf { bibsModeStartedAtMillis != null },
+        "CP Mode".takeIf { cpModeStartedAtMillis != null },
+    )
+
+/**
  * One-shot [isRaceActive] check for [raceId]. False for a race that no longer exists (nothing
  * to protect from an action against a dangling id). This is the one function every "is this
  * race active" guard in the app should call — see NameDeviceViewModel.hasActiveRace/save() and

@@ -141,6 +141,34 @@ class RaceProgressTest {
     // "started alone counts as active" cases above; there's no separate "stopped" input here to
     // test.
 
+    // activeModeLabels — names which mode(s) isRaceActive is actually keying off, for
+    // RaceHistoryScreen's "can't be deleted" caption. Confirmed in the field: a race that's been
+    // fully Stopped+Reset in Time Mode still stayed undeletable because it had also, at some
+    // point, been started in Bibs Mode via a mode switch and never separately reset there — with
+    // no way to tell why from Time Mode's own (fully idle-looking) screen.
+
+    @Test
+    fun namesOnlyTheModeThatsActuallyStarted() {
+        assertEquals(listOf("Time Mode"), activeModeLabels(timeModeStartedAtMillis = 1_000L, bibsModeStartedAtMillis = null, cpModeStartedAtMillis = null))
+        assertEquals(listOf("Bibs Mode"), activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = 1_000L, cpModeStartedAtMillis = null))
+        assertEquals(listOf("CP Mode"), activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null, cpModeStartedAtMillis = 1_000L))
+    }
+
+    @Test
+    fun namesEveryModeStillStartedAtOnce() {
+        // The exact scenario that motivated this: Time reset (null) but Bibs still started from
+        // an earlier mode switch on the same race — must name Bibs, not silently drop it.
+        assertEquals(
+            listOf("Bibs Mode", "CP Mode"),
+            activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = 1_000L, cpModeStartedAtMillis = 2_000L),
+        )
+    }
+
+    @Test
+    fun namesNothingWhenNoModeIsActive() {
+        assertEquals(emptyList<String>(), activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null, cpModeStartedAtMillis = null))
+    }
+
     // isModeStarted — the per-mode mapping RaceDetailsScreen uses to decide which fields lock
     // read-only once a race is under way.
 

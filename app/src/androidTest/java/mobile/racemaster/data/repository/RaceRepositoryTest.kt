@@ -309,6 +309,54 @@ class RaceRepositoryTest {
         assertEquals(otherRaceId, settingsRepository.activeRaceId.first())
     }
 
+    // forceResetActiveModes — un-sticks a race whose active mode is no longer reachable via
+    // that mode's own in-context Reset button (e.g. activeRaceId has since moved to a different
+    // race), so it can then go through the normal deleteRace flow above.
+
+    @Test
+    fun forceResetActiveModesClearsWhicheverModeIsStillStarted() = runTest {
+        db.raceDao().setTimeModeStartedAt(raceId, 1_000L)
+
+        repository.forceResetActiveModes(raceId)
+
+        assertNull(repository.getRace(raceId)?.timeModeStartedAtMillis)
+    }
+
+    @Test
+    fun forceResetActiveModesClearsEveryModeAtOnceRegardlessOfWhichIsActive() = runTest {
+        // Deliberately unconditional (see the function's own doc) — must be safe to call even
+        // when more than one mode happens to be started for the same race.
+        db.raceDao().setTimeModeStartedAt(raceId, 1_000L)
+        db.raceDao().setBibsModeStartedAt(raceId, 2_000L)
+        db.raceDao().setCpModeStartedAt(raceId, 3_000L)
+
+        repository.forceResetActiveModes(raceId)
+
+        val race = repository.getRace(raceId)
+        assertNull(race?.timeModeStartedAtMillis)
+        assertNull(race?.bibsModeStartedAtMillis)
+        assertNull(race?.cpModeStartedAtMillis)
+    }
+
+    @Test
+    fun forceResetActiveModesMakesTheRaceDeletable() = runTest {
+        db.raceDao().setBibsModeStartedAt(raceId, 1_000L)
+
+        repository.forceResetActiveModes(raceId)
+        repository.deleteRace(raceId)
+
+        assertNull(repository.getRace(raceId))
+    }
+
+    @Test
+    fun forceResetActiveModesIsANoOpOnARaceWithNothingStarted() = runTest {
+        // Every reset query is a harmless no-op against an already-null field — must not throw
+        // or otherwise misbehave against a race that was never started at all.
+        repository.forceResetActiveModes(raceId)
+
+        assertEquals(raceId, repository.getRace(raceId)?.id)
+    }
+
     // blockedModeSwitchReason — Bibs and CP are mutually exclusive for the same race; see the
     // function's own doc for why (both are alternate ways of logging the same station).
 
