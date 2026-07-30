@@ -34,7 +34,7 @@ private val ACCOUNTED_FOR_ACTIONS = setOf(HistoryAction.FINISH, HistoryAction.PA
  * a bib out of a group makes the flags disappear automatically with no separate invalidation
  * step.
  */
-fun findDuplicateSplitRefs(entries: List<HistoryLineEntity>): Map<Long, List<Int>> =
+fun findDuplicateSplitRefs(entries: List<HistoryLineEntity>): Map<Long, List<Int?>> =
     findDuplicateSplitRefs(entries, { it.id }, { it.bibNumber }, { it.action }, { it.splitNumber })
 
 /**
@@ -49,13 +49,13 @@ fun <T, K> findDuplicateSplitRefs(
     keyOf: (T) -> K,
     bibNumberOf: (T) -> Int?,
     actionOf: (T) -> HistoryAction,
-    splitNumberOf: (T) -> Int,
-): Map<K, List<Int>> {
+    splitNumberOf: (T) -> Int?,
+): Map<K, List<Int?>> {
     val groups = entries
         .filter { actionOf(it) in BIB_REQUIRED_ACTIONS && bibNumberOf(it) != null }
         .groupBy { bibNumberOf(it) }
 
-    val result = mutableMapOf<K, List<Int>>()
+    val result = mutableMapOf<K, List<Int?>>()
     for (group in groups.values) {
         flagExcess(group.filter { actionOf(it) == HistoryAction.START }, keyOf, splitNumberOf, result)
         flagExcess(group.filter { actionOf(it) in ACCOUNTED_FOR_ACTIONS }, keyOf, splitNumberOf, result)
@@ -63,7 +63,7 @@ fun <T, K> findDuplicateSplitRefs(
     return result
 }
 
-private fun <T, K> flagExcess(group: List<T>, keyOf: (T) -> K, splitNumberOf: (T) -> Int, result: MutableMap<K, List<Int>>) {
+private fun <T, K> flagExcess(group: List<T>, keyOf: (T) -> K, splitNumberOf: (T) -> Int?, result: MutableMap<K, List<Int?>>) {
     if (group.size <= 1) return
     for (entry in group) {
         val key = keyOf(entry)
@@ -85,7 +85,7 @@ private fun <T, K> flagExcess(group: List<T>, keyOf: (T) -> K, splitNumberOf: (T
  * duplicate — only whatever's still actually visible should ever be flagged, same as the operator
  * would see live.
  */
-fun findDuplicateSplitRefsPerSegment(entries: List<HistoryLineEntity>): Map<Long, List<Int>> =
+fun findDuplicateSplitRefsPerSegment(entries: List<HistoryLineEntity>): Map<Long, List<Int?>> =
     findDuplicateSplitRefsPerSegment(
         entries,
         lineNumberOf = { it.lineNumber },
@@ -112,8 +112,8 @@ fun <T, K> findDuplicateSplitRefsPerSegment(
     keyOf: (T) -> K,
     bibNumberOf: (T) -> Int?,
     actionOf: (T) -> HistoryAction,
-    splitNumberOf: (T) -> Int,
-): Map<K, List<Int>> {
+    splitNumberOf: (T) -> Int?,
+): Map<K, List<Int?>> {
     val ascending = entries.sortedBy { lineNumberOf(it) }
     val segments = mutableListOf<MutableList<T>>()
     var current = mutableListOf<T>()
@@ -125,7 +125,7 @@ fun <T, K> findDuplicateSplitRefsPerSegment(
         }
     }
     if (current.isNotEmpty()) segments.add(current)
-    val result = mutableMapOf<K, List<Int>>()
+    val result = mutableMapOf<K, List<Int?>>()
     for (segment in segments) {
         val visible = foldLatestVisible(segment, lineNumberOf, refLineNumberOf, isUndoMarker)
         result.putAll(findDuplicateSplitRefs(visible, keyOf, bibNumberOf, actionOf, splitNumberOf))

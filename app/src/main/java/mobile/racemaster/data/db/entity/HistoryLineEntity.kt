@@ -33,7 +33,13 @@ data class HistoryLineEntity(
     // UNDO marker (copied from the root row it hides, purely so the marker itself can display
     // which bib got undone) — never meaningful for any other action.
     val bibNumber: Int? = null,
-    val splitNumber: Int,
+    // Null for a RETIRE row (never crosses any timing point) or a CP-mode PASS row (a real
+    // checkpoint crossing, but CP's own checkpoint is never paired with a Time Mode device the
+    // way Bibs Mode's finish line is) — see EntryLogModeEngine.NO_SPLIT_ACTIONS. Neither gets
+    // a splitNumber nor consumes the shared counter, so the very next real crossing still gets
+    // the number it would otherwise have gotten. Every other action, including markers like
+    // STOP/RESET/CLOCK, still gets one.
+    val splitNumber: Int?,
     // Permanent, ascending, race-wide history position — see RaceEntity.nextLineNumber.
     // Assigned once at insert, immutable afterward, never reused even if this row is deleted.
     val lineNumber: Long,

@@ -123,14 +123,16 @@ interface PulledRecordDao {
     // — the mechanism that lets a sink confirmation climb back up an N-hop mule chain to the
     // device that originally recorded these lines. See MuleRepository.pullFrom.
     //
-    // Deliberately scoped to *un*relayed rows only, not every sink-confirmed row for this
-    // source — the earlier version of this query returned the latter, unconditionally
-    // resending the whole ever-growing "everything ever confirmed for this source" set on
-    // every ~10s tick forever; fine for a handful of splits, but for a large race (hundreds of
-    // confirmed lines) that re-transfers the whole backlog every tick long after every
-    // confirmation has already landed, wasting BLE airtime/battery without bound as the race
-    // grows. markConfirmationRelayed is what lets this genuinely shrink to nothing once a
-    // source is fully caught up, rather than only ever growing.
+    // Scoped to *un*relayed rows only, not every sink-confirmed row for this source — the ack
+    // this piggybacks on must stay bounded by what's genuinely new (a "delta" — what this device
+    // just learned from the server or a sink mule), not the source's entire ever-growing
+    // confirmed history, since a large race (e.g. 300 runners) would otherwise re-transfer that
+    // whole backlog every ~10s tick forever. Trusting confirmationRelayedAtMillis here is safe
+    // specifically because PeripheralSyncService now defers its GATT write-response until
+    // markSynced (which calls markConfirmationRelayed's sibling on the *receiving* end — see
+    // that class's own doc) has genuinely finished, closing the fire-and-forget window that used
+    // to let a confirmation get marked "told" on this side before the peripheral had actually
+    // durably processed it.
     @Query(
         "SELECT recordUuid FROM pulled_records WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel " +
             "AND syncedAtMillis IS NOT NULL AND confirmationRelayedAtMillis IS NULL",
@@ -138,12 +140,20 @@ interface PulledRecordDao {
     suspend fun getUnrelayedSinkConfirmedRecordUuidsForSource(sourceDeviceId: String, sourceRaceLabel: String): List<String>
 
     // Marks [recordUuids] as told back to their source — called only once the ack write that
-    // actually carried them has succeeded (see MulePullClient.pull's per-batch confirmation
-    // callback), never optimistically before the write, so a failed/dropped write leaves them
-    // eligible to be picked up and resent by getUnrelayedSinkConfirmedRecordUuidsForSource on
-    // the very next tick rather than silently lost — the same "safe failure mode is a harmless
-    // redundant re-pull" principle MulePullClient.pull's own doc already establishes for
-    // records themselves.
+    // actually carried them has succeeded, which (thanks to PeripheralSyncService's deferred
+    // GATT response — see its own doc) now genuinely means the peripheral finished applying it,
+    // not just that the bytes arrived. Never called optimistically before the write completes,
+    // so a failed/dropped write leaves these rows eligible to be picked up and resent by
+    // getUnrelayedSinkConfirmedRecordUuidsForSource on the very next tick rather than lost.
+    //
+    // Only ever called by MuleRepository.pullFrom for a *direct* pull (the peripheral just acked
+    // IS sourceDeviceId itself), never for a relay pull to some other intermediate mule — see
+    // that call site's own doc. Confirmed in the field: two mules that both hold a copy of the
+    // same leaf's data (and also pull from each other, e.g. via a mule-to-mule relay chain) can
+    // each independently learn a confirmation and each try to relay it — if either one marked it
+    // relayed after merely telling the *other* mule, the confirmation could get "used up" between
+    // them and never reach the leaf that actually recorded the line, even though both mules'
+    // own bookkeeping showed it as sink-confirmed.
     @Query("UPDATE pulled_records SET confirmationRelayedAtMillis = :relayedAtMillis WHERE recordUuid IN (:recordUuids)")
     suspend fun markConfirmationRelayed(recordUuids: List<String>, relayedAtMillis: Long)
 

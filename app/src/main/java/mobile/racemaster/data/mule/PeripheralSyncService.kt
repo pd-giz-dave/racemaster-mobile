@@ -81,11 +81,30 @@ class PeripheralSyncService : Service() {
         Log.e(TAG, "Uncaught exception in PeripheralSyncService — swallowed to avoid crashing the app", throwable)
     }
     private val serviceScope = CoroutineScope(serviceJob + Dispatchers.IO + exceptionHandler)
-    private val json = Json { ignoreUnknownKeys = true }
+    // encodeDefaults = true — kotlinx.serialization otherwise omits a field entirely from the
+    // wire JSON whenever its value equals its Kotlin default, e.g. DeviceInfo.pollIntervalMs
+    // when this device is running the stock RECOMMENDED_POLL_INTERVAL_MS value. That's harmless
+    // for a same-codebase decoder (it just falls back to the identical Kotlin default), but the
+    // racemaster web app's own JS decoder has its own, independently-hardcoded fallback
+    // (mule-ble.js's DEFAULT_POLL_INTERVAL_MS) that can silently drift out of sync with this
+    // one — confirmed in the field: the phone's actual interval was never reaching the web app
+    // at all, it was just always using its own stale local default instead.
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     private var gattServer: BluetoothGattServer? = null
     private var advertiser: BluetoothLeAdvertiser? = null
     private var dataCharacteristic: BluetoothGattCharacteristic? = null
+
+    // Tracks whether the last startAdvertising() call actually succeeded, independent of
+    // gattServer's own lifecycle — the two can and do fail independently (the GATT server
+    // opens fine while advertising itself is rejected, e.g. ADVERTISE_FAILED_TOO_MANY_ADVERTISERS
+    // after a previous crash/force-stop left a stale advertiser handle in the OS BT stack).
+    // startAdvertisingRetryLoop() uses this to retry advertising on its own, without
+    // needlessly tearing down and reopening an already-healthy GATT server. Written from both
+    // the advertiseCallback (BLE stack's own callback thread) and the serviceScope loop, same
+    // cross-thread visibility need as deviceName/servingState above.
+    @Volatile
+    private var isAdvertising = false
 
     private var deviceId: String = ""
 
@@ -129,6 +148,7 @@ class PeripheralSyncService : Service() {
         observeServingState()
         observeDeviceName()
         observeRelayManifest()
+        observeAdvertisingWarning()
         startAdvertisingRetryLoop()
         container.muleSyncEngine.start()
     }
@@ -156,6 +176,18 @@ class PeripheralSyncService : Service() {
     private fun observeRelayManifest() {
         serviceScope.launch {
             container.muleRepository.sourceSummaries.collect { summaries -> relayManifest = summaries }
+        }
+    }
+
+    // Surfaces BluetoothStateRepository.advertisingWarning (see its own doc) in the ongoing
+    // foreground notification too, not just MuleModeScreen — this service, and the
+    // wedged-advertising failure it exists to report, both keep running whether or not the
+    // operator has that screen open at the time.
+    private fun observeAdvertisingWarning() {
+        serviceScope.launch {
+            container.bluetoothStateRepository.advertisingWarning.collect { warning ->
+                updateNotification(warning)
+            }
         }
     }
 
@@ -196,7 +228,19 @@ class PeripheralSyncService : Service() {
                         stopAdvertisingIfPossible()
                         gattServer = null
                     }
-                    if (gattServer == null) startGattServerAndAdvertising()
+                    if (gattServer == null) {
+                        startGattServerAndAdvertising()
+                    } else if (!isAdvertising) {
+                        // The GATT server is up but the last (or only) startAdvertising()
+                        // attempt never actually succeeded — confirmed in the field on a
+                        // device whose BLE stack rejected advertising (ADVERTISE_FAILED_
+                        // TOO_MANY_ADVERTISERS, from a stale handle left by an earlier
+                        // crash/force-stop) while the GATT server opened fine, leaving it
+                        // permanently unadvertised for the rest of the process's life since
+                        // nothing ever retried advertising specifically. Retried here on its
+                        // own cadence, independent of the GATT server's own health.
+                        retryAdvertisingOnly()
+                    }
                 } else if (wasActive) {
                     stopAdvertisingIfPossible()
                     closeGattServerIfPossible()
@@ -325,9 +369,29 @@ class PeripheralSyncService : Service() {
         advertiserLocal.startAdvertising(settings, data, advertiseCallback)
     }
 
+    // The GATT-server-retry path (startGattServerAndAdvertising) and this advertising-only
+    // retry path (called from startAdvertisingRetryLoop when gattServer is already healthy)
+    // both need a live BluetoothAdapter reference — pulled out so the checks stay identical
+    // rather than duplicated/drifting between the two call sites.
+    @SuppressLint("MissingPermission")
+    private fun retryAdvertisingOnly() {
+        if (!hasAdvertisePermission()) return
+        val bluetoothManager = getSystemService(BluetoothManager::class.java) ?: return
+        val adapter = bluetoothManager.adapter ?: return
+        if (!adapter.isEnabled) return
+        startAdvertising(adapter)
+    }
+
     private val advertiseCallback = object : AdvertiseCallback() {
+        override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
+            isAdvertising = true
+            container.bluetoothStateRepository.recordAdvertisingSuccess()
+        }
+
         override fun onStartFailure(errorCode: Int) {
+            isAdvertising = false
             Log.w(TAG, "BLE advertising failed to start: $errorCode")
+            container.bluetoothStateRepository.recordAdvertisingFailure()
         }
     }
 
@@ -336,6 +400,12 @@ class PeripheralSyncService : Service() {
         if (hasAdvertisePermission()) {
             advertiser?.stopAdvertising(advertiseCallback)
         }
+        isAdvertising = false
+        // A deliberate stop (radio disabled, operator turned Bluetooth off in-app) is not the
+        // wedged-firmware failure this warning exists for — clear it so the UI doesn't keep
+        // telling the operator to restart the phone while this device isn't even trying to
+        // advertise right now.
+        container.bluetoothStateRepository.recordAdvertisingSuccess()
     }
 
     @SuppressLint("MissingPermission")
@@ -394,16 +464,39 @@ class PeripheralSyncService : Service() {
                             streamRelayedRecords(device, originDeviceId, request.originRaceLabel.orEmpty(), request.sinceLineNumber)
                         }
                     }
+                    if (responseNeeded) {
+                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
+                    }
                 }
                 MuleGattProfile.ACK_CHARACTERISTIC_UUID -> {
                     val ack = runCatching { json.decodeFromString<AckPayload>(String(value, Charsets.UTF_8)) }.getOrNull()
+                    // Deliberately waits for markSynced to actually finish before sending the
+                    // GATT write-response, rather than firing the response immediately and
+                    // processing in the background — the central (MulePullClient.pull) treats a
+                    // successful write as license to stop re-offering this ack's
+                    // sinkConfirmedRecordUuids (see MuleRepository.pullFrom's
+                    // markConfirmationRelayed). A response sent before markSynced even started
+                    // left a window where a crash/disconnect right after could silently lose a
+                    // confirmation the central had already marked told — confirmed as the root
+                    // cause of unreliable sink-ack delivery in the field. No thread is blocked
+                    // waiting for this: the response is just sent later, once genuinely true,
+                    // which is ordinary (and well within spec) for a GATT write-with-response.
                     if (ack != null) {
-                        serviceScope.launch { markSynced(ack) }
+                        serviceScope.launch {
+                            markSynced(ack)
+                            if (responseNeeded) {
+                                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
+                            }
+                        }
+                    } else if (responseNeeded) {
+                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
                     }
                 }
-            }
-            if (responseNeeded) {
-                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
+                else -> {
+                    if (responseNeeded) {
+                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
+                    }
+                }
             }
         }
 
@@ -568,7 +661,7 @@ class PeripheralSyncService : Service() {
     // --- Notification / permissions -----------------------------------------------------
 
     private fun startForegroundWithNotification() {
-        val notification = buildNotification()
+        val notification = buildNotification(warning = null)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
         } else {
@@ -576,7 +669,16 @@ class PeripheralSyncService : Service() {
         }
     }
 
-    private fun buildNotification(): Notification {
+    // Re-posts the same ongoing notification with updated text — startForeground() itself is
+    // only for the initial post, a plain NotificationManager.notify() against the same ID is
+    // the normal way to update it afterward without re-entering the foreground-service start
+    // path (and its Android 12+ restrictions — see startIfPermitted's own doc).
+    private fun updateNotification(warning: String?) {
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        manager.notify(NOTIFICATION_ID, buildNotification(warning))
+    }
+
+    private fun buildNotification(warning: String?): Notification {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = getSystemService(NotificationManager::class.java)
             if (manager.getNotificationChannel(CHANNEL_ID) == null) {
@@ -592,8 +694,8 @@ class PeripheralSyncService : Service() {
             PendingIntent.FLAG_IMMUTABLE,
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("RaceMaster sync")
-            .setContentText("Ready for a Mule to connect")
+            .setContentTitle(if (warning != null) "RaceMaster sync — action needed" else "RaceMaster sync")
+            .setContentText(warning ?: "Ready for a Mule to connect")
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setContentIntent(openAppIntent)
             .setOngoing(true)

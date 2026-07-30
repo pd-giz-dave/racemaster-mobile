@@ -199,12 +199,12 @@ class MuleRepository(
         val myDeviceId = settingsRepository.getOrCreateDeviceId()
         val myDeviceName = settingsRepository.getOrCreateDeviceName()
         // Piggybacked onto whatever ack this pull ends up sending (see MulePullClient.pull's
-        // own doc) — everything already held for this exact source (direct or relayed, the
-        // pulled_records inbox doesn't distinguish, see storePulledRecords below) that's since
-        // become sink-confirmed but hasn't yet been told back to it, so that confirmation keeps
-        // climbing back toward wherever this source's data originally came from, one hop per
-        // sync tick — see getUnrelayedSinkConfirmedRecordUuidsForSource's own doc for why this
-        // is scoped to unrelayed ones only, not this source's whole confirmed history.
+        // own doc) — everything already held for this exact source that's since become
+        // sink-confirmed but not yet told back to it, so that confirmation keeps climbing back
+        // toward wherever this source's data originally came from, one hop per sync tick — see
+        // getUnrelayedSinkConfirmedRecordUuidsForSource's own doc for why this is scoped to
+        // unrelayed ones only (a bounded delta), and only trustworthy to mark relayed at all
+        // because of PeripheralSyncService's deferred GATT response.
         val sinkConfirmedRecordUuids = pulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource(sourceDeviceId, sourceRaceLabel)
         pullClient.pull(
             advertisement,
@@ -218,7 +218,21 @@ class MuleRepository(
                 count = storePulledRecords(sourceRaceLabel, sourceDeviceId, sourceDeviceName, records)
             },
             onConfirmationsRelayed = { relayedUuids ->
-                pulledRecordDao.markConfirmationRelayed(relayedUuids, System.currentTimeMillis())
+                // Only retire the "needs relaying" flag once this confirmation has actually
+                // reached [sourceDeviceId] itself — requestOriginDeviceId == null means the
+                // peripheral this pull just acked IS sourceDeviceId (a direct pull), not merely
+                // another intermediate mule that also happens to hold/relay the same origin's
+                // data (a relay pull). Confirmed in the field: two mules that both independently
+                // relay the same leaf's data (and also pull from each other) would otherwise
+                // mark a confirmation "relayed" the moment either told the *other* about it,
+                // never actually reaching the leaf that originally recorded the line — each
+                // mule's own bookkeeping believed it had already done its job. The
+                // sinkConfirmedRecordUuids are still included in a relay-pull's ack either way
+                // (so the intermediate mule also learns/can itself relay it onward) — this only
+                // gates whether *this* device stops re-offering it.
+                if (requestOriginDeviceId == null) {
+                    pulledRecordDao.markConfirmationRelayed(relayedUuids, System.currentTimeMillis())
+                }
             },
         )
         return count

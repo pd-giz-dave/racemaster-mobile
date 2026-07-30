@@ -25,7 +25,11 @@ import kotlin.uuid.toKotlinUuid
  *  phone, and pulls whatever unsynced records it's holding. */
 @OptIn(ExperimentalUuidApi::class)
 class MulePullClient {
-    private val json = Json { ignoreUnknownKeys = true }
+    // encodeDefaults = true — see PeripheralSyncService's own doc on its identically-configured
+    // Json instance for why a default-valued field (e.g. AckPayload.isSink, PullRequest's null
+    // origin fields) must not be silently omitted from the wire payload just because it
+    // happens to equal its Kotlin default.
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     // Deliberately unfiltered at the Scanner level — Kable's `filters { match { services = ... } }`
     // compiles down to a single native android.bluetooth.le.ScanFilter.setServiceUuid(), which
@@ -108,20 +112,23 @@ class MulePullClient {
      *  [sinkConfirmedRecordUuids] piggybacks a *separate* set of recordUuids this caller already
      *  knows are confirmed at a genuine sink but hasn't yet told this specific source about — see
      *  AckPayload's own doc, and PulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource
-     *  for why this is scoped to *un*relayed ones only rather than every confirmed uuid this
-     *  caller has ever held for the source (an unbounded, only-ever-growing set would eventually
-     *  overflow a single GATT write for any long-running or large race — see ackBatches' own
-     *  doc). Included in the ack whenever non-empty, regardless of whether this particular pull
-     *  itself returned anything new: a mule fully caught up on a device's data may still owe it
-     *  a freshly-learned sink confirmation, so the ack must still fire in that case even though
-     *  `records` ends up empty. [onConfirmationsRelayed] fires once per batch, only after that
-     *  batch's ack write has actually succeeded — same "only mark it done once truly sent"
-     *  principle as [onReceived]/`records` above, so a write that fails partway through a large
-     *  backlog leaves whatever didn't get out eligible to be retried next tick rather than
-     *  silently marked told-but-not-actually-sent. This device's own `isSink` is always false
-     *  here (an ordinary racemaster-mobile phone acting as Mule is never itself a sink — see
-     *  AckPayload's own default), left to AckPayload's default rather than a parameter this call
-     *  site would always pass the same value for. */
+     *  for why this is scoped to *un*relayed ones only (a bounded delta of what's genuinely new,
+     *  not this source's entire ever-growing confirmed history — required for a large race, e.g.
+     *  300 runners, where the full set would otherwise be re-sent every tick forever). Included
+     *  in the ack whenever non-empty, regardless of whether this particular pull itself returned
+     *  anything new: a mule fully caught up on a device's data may still owe it a freshly-learned
+     *  sink confirmation, so the ack must still fire in that case even though `records` ends up
+     *  empty. [onConfirmationsRelayed] fires once per batch, only after that batch's ack write
+     *  has actually succeeded — same "only mark it done once truly sent" principle as
+     *  [onReceived]/`records` above, so a write that fails partway through a large backlog leaves
+     *  whatever didn't get out eligible to be retried next tick rather than silently marked
+     *  told-but-not-actually-sent. This is now trustworthy end-to-end because
+     *  PeripheralSyncService defers its own GATT write-response until it's genuinely finished
+     *  applying the ack (see that class's own doc) — a successful write here means the
+     *  peripheral durably processed it, not just that the bytes arrived. This device's own
+     *  `isSink` is always false here (an ordinary racemaster-mobile phone acting as Mule is
+     *  never itself a sink — see AckPayload's own default), left to AckPayload's default rather
+     *  than a parameter this call site would always pass the same value for. */
     suspend fun pull(
         advertisement: Advertisement,
         pullerDeviceId: String,
@@ -196,13 +203,13 @@ class MulePullClient {
     }
 
     companion object {
-        // Both expressed as ratios of MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS — the single
-        // source of truth for this protocol's whole polling cadence (see its own doc) — rather
-        // than independent hardcoded numbers that could silently drift out of proportion with
-        // it. Ratios chosen to reproduce this class's original fixed 10s/15s values exactly at
-        // today's 10s interval, so this is a pure refactor, not a behavior change.
-        private val CONNECT_TIMEOUT = MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS.milliseconds
-        private val PULL_TIMEOUT = (MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS * 3 / 2).milliseconds
+        // Deliberately independent of MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS — see that
+        // constant's own doc for why. These bound how long a single real BLE connect/pull
+        // handshake is allowed to take, a hardware-bound concern unrelated to how often the
+        // sync loop chooses to re-poll; fixed at their original values regardless of how
+        // aggressively the poll interval is tuned for latency.
+        private val CONNECT_TIMEOUT = 10_000.milliseconds
+        private val PULL_TIMEOUT = 15_000.milliseconds
     }
 }
 
@@ -213,11 +220,11 @@ class MulePullClient {
  * a write past that throws `IllegalArgumentException("value should not be longer than max
  * length of an attribute value")`, silently failing every subsequent pull from that device). An
  * ack has no chunking of its own the way the (notify-based) DATA stream does, so an unbounded
- * uuid list has nowhere else to go. This matters even for [sinkConfirmedRecordUuids] despite
- * being scoped to *un*relayed confirmations only (see
- * `PulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource`'s own doc) — a source that's
- * been offline a while, or a mule freshly reconnecting after a large backlog piled up, can still
- * owe it more confirmations at once than fit in a single write. Each resulting batch is a fully valid,
+ * uuid list has nowhere else to go. [sinkConfirmedRecordUuids] is kept bounded to a genuine delta
+ * (see `PulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource`'s own doc), but a source
+ * that's been offline a while, or a mule freshly reconnecting after a large backlog piled up
+ * (e.g. a 300-runner race), can still owe it more confirmations at once than fit in a single
+ * write. Each resulting batch is a fully valid,
  * self-contained [AckPayload] — `PeripheralSyncService.markSynced` already applies every ack as
  * an independent, idempotent update, so sending N small acks instead of one changes nothing
  * about correctness, only how many separate GATT writes it costs. Batch sizing is done by

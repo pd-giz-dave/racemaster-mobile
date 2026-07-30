@@ -26,14 +26,14 @@ data class ArchivedHistoryLineUi(
     val mode: HistoryMode,
     val action: HistoryAction,
     val bibNumber: Int?,
-    val splitNumber: Int,
+    val splitNumber: Int?,
     val lineNumber: Long,
     // Only meaningful for a TIME-mode row (elapsed since its segment's most recent Start
     // marker) — 0 for a BIBS-mode row, which has no stopwatch of its own.
     val elapsedMillis: Long,
     val note: String?,
     // Only meaningful for a BIBS/CP-mode row — empty for a TIME-mode row.
-    val dupSplitRefs: List<Int>,
+    val dupSplitRefs: List<Int?>,
     val timestampMillis: Long,
     val syncState: LineSyncState,
     val isUndoMarker: Boolean,

@@ -19,10 +19,10 @@ import mobile.racemaster.ui.bibsmode.displayName
 data class EntryLogUi(
     val id: Long,
     val bibNumber: Int?,
-    val splitNumber: Int,
+    val splitNumber: Int?,
     val type: HistoryAction,
     val note: String?,
-    val dupSplitRefs: List<Int>,
+    val dupSplitRefs: List<Int?>,
     val syncState: LineSyncState,
 )
 

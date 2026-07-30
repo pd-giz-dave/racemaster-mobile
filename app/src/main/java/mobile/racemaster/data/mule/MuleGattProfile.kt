@@ -54,7 +54,16 @@ object MuleGattProfile {
     // and it's also reported to every puller via [DeviceInfo.pollIntervalMs] so a puller (e.g.
     // the racemaster web app acting as a Mule) never has to hardcode/guess a cadence of its
     // own that could drift out of step with this one.
-    const val RECOMMENDED_POLL_INTERVAL_MS = 10_000L
+    //
+    // Deliberately NOT the basis for MulePullClient's own CONNECT_TIMEOUT/PULL_TIMEOUT (they
+    // used to scale off this 1:1) — a low poll interval is safe to tune on its own for latency
+    // (N-hop sink-confirmation propagation is roughly hops × this value), but a real BLE
+    // connect/pull handshake has its own, unrelated, hardware-bound timing floor. Coupling them
+    // meant lowering this to shave latency also shrank how long a single pull is allowed to
+    // take, which risked spurious failures on exactly the budget/older chipsets this codebase
+    // already has extensive field notes about struggling with connection setup — see those
+    // constants' own doc.
+    const val RECOMMENDED_POLL_INTERVAL_MS = 5_000L
 }
 
 /** One other, genuinely different device this one is holding relayable data for — everything

@@ -98,6 +98,31 @@ fun RaceDetailsScreen(
         prefilled = true
     }
 
+    // Auto-fills Course/Location with the most-recently-used value for a brand-new race only
+    // (editing an existing race already pre-fills from its own real saved values above) — each
+    // history list is already stored most-recent-first (see
+    // SettingsRepository.addToStringHistory), so the first entry is exactly that. Race name is
+    // deliberately left alone, unlike Course/Location which usually repeat across races at the
+    // same event — auto-filling it risks silently resubmitting an old race's name for what
+    // should be a genuinely new one. Each guarded by both a one-shot flag (so picking a
+    // different value afterward doesn't get stomped once the flow re-emits) and a "still at its
+    // untouched initial value" check (so a fast operator who starts typing before the history
+    // flow's first real emission arrives never gets overwritten).
+    var courseAutoFilled by remember { mutableStateOf(false) }
+    LaunchedEffect(courseHistory) {
+        if (existingRaceId == null && !courseAutoFilled && course.isBlank() && courseHistory.isNotEmpty()) {
+            course = courseHistory.first()
+            courseAutoFilled = true
+        }
+    }
+    var locationAutoFilled by remember { mutableStateOf(false) }
+    LaunchedEffect(locationHistory) {
+        if (existingRaceId == null && !locationAutoFilled && location == "Finish" && locationHistory.isNotEmpty()) {
+            location = locationHistory.first()
+            locationAutoFilled = true
+        }
+    }
+
     // Identical field set for Time, Bibs, and CP, both for create and edit — Time Mode never
     // actually reads the first bib number for anything, but the form (and the feedback shown
     // on-screen later) stays the same either way, per instruction.

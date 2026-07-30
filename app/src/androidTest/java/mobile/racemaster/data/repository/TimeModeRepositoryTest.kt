@@ -47,7 +47,7 @@ class TimeModeRepositoryTest {
         repository.recordSplit(raceId)
         repository.recordSplit(raceId)
 
-        val numbers = db.historyLineDao().observeAllForRace(raceId).first().map { it.splitNumber }.sorted()
+        val numbers = db.historyLineDao().observeAllForRace(raceId).first().map { it.splitNumber }.sortedBy { it }
         assertEquals(listOf(1, 2, 3), numbers)
     }
 
@@ -59,7 +59,7 @@ class TimeModeRepositoryTest {
             jobs.awaitAll()
         }
 
-        val numbers = db.historyLineDao().observeAllForRace(raceId).first().map { it.splitNumber }.sorted()
+        val numbers = db.historyLineDao().observeAllForRace(raceId).first().map { it.splitNumber }.sortedBy { it }
         assertEquals((1..count).toList(), numbers)
     }
 
@@ -72,7 +72,7 @@ class TimeModeRepositoryTest {
         repository.recordSplit(raceId)
 
         // Live view: the undone split disappears and its number is reused by the new one.
-        val numbers = repository.observeCurrentSegmentSplits(raceId).first().map { it.splitNumber }.sorted()
+        val numbers = repository.observeCurrentSegmentSplits(raceId).first().map { it.splitNumber }.sortedBy { it }
         assertEquals(listOf(1, 2, 3), numbers)
 
         // Nothing was ever deleted from the permanent log — 3 splits + 1 undo-marker + 1 new
@@ -117,7 +117,7 @@ class TimeModeRepositoryTest {
         assertEquals(null, db.raceDao().getById(raceId)?.timeModeStoppedAtMillis)
         // The consumed split number is freed up again, same as undoing a normal split.
         repository.recordSplit(raceId)
-        val numbers = repository.observeCurrentSegmentSplits(raceId).first().map { it.splitNumber }.sorted()
+        val numbers = repository.observeCurrentSegmentSplits(raceId).first().map { it.splitNumber }.sortedBy { it }
         assertEquals(listOf(0, 1, 2), numbers)
     }
 
@@ -164,7 +164,7 @@ class TimeModeRepositoryTest {
         repository.startStopwatch(raceId, startedAtMillis = 9_000L)
         repository.recordSplit(raceId)
         val currentSegmentNumbers =
-            db.historyLineDao().observeCurrentSegment(raceId, HistoryMode.TIME, HistoryAction.RESET).first().map { it.splitNumber }.sorted()
+            db.historyLineDao().observeCurrentSegment(raceId, HistoryMode.TIME, HistoryAction.RESET).first().map { it.splitNumber }.sortedBy { it }
         assertEquals(listOf(0, 1), currentSegmentNumbers)
         assertEquals(7, db.historyLineDao().observeAllForRace(raceId).first().size)
     }

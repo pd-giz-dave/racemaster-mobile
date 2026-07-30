@@ -106,7 +106,10 @@ class TimeModeViewModel(
                         splits = splits.map {
                             FinishSplitUi(
                                 id = it.id,
-                                splitNumber = it.splitNumber,
+                                // Time Mode rows are never RETIRE, so splitNumber is never
+                                // actually null here — the fallback only satisfies the type
+                                // system now that the shared entity column allows it.
+                                splitNumber = it.splitNumber ?: 0,
                                 action = it.action,
                                 elapsedMillis = startedAt?.let { s -> it.timestampMillis - s } ?: 0L,
                                 note = it.note,

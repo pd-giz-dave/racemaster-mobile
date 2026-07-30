@@ -35,6 +35,7 @@ data class MuleModeUiState(
     val autoSyncArmed: Boolean = false,
     val bluetoothOff: Boolean = false,
     val serverSyncOff: Boolean = false,
+    val advertisingWarning: String? = null,
 )
 
 /**
@@ -70,6 +71,7 @@ class MuleModeViewModel(
         muleRepository.serverSyncOff,
         muleSyncEngine.relayDevices,
         muleRepository.knownDevices,
+        muleSyncEngine.advertisingWarning,
     ) { values ->
         val isLoggedIn = values[4] as Boolean
         val autoSyncStopped = values[8] as Boolean
@@ -78,6 +80,7 @@ class MuleModeViewModel(
         val serverSyncOff = values[12] as Boolean
         val relayDevices = values[13] as Map<String, DiscoveredDevice>
         val knownDevices = values[14] as List<KnownDeviceEntity>
+        val advertisingWarning = values[15] as String?
         val directDevices = values[0] as Map<String, DiscoveredDevice>
         val liveDeviceIds = (directDevices.values + relayDevices.values).mapNotNull { it.deviceId }.toSet()
         // Stale rows: a device this phone has resolved before but can't currently see, given
@@ -114,6 +117,7 @@ class MuleModeViewModel(
             autoSyncArmed = isLoggedIn && !autoSyncStopped && !serverSyncOff,
             bluetoothOff = bluetoothOff,
             serverSyncOff = serverSyncOff,
+            advertisingWarning = advertisingWarning,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MuleModeUiState())
 

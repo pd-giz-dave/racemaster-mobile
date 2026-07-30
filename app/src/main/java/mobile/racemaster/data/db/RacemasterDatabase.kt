@@ -22,7 +22,7 @@ import mobile.racemaster.data.db.entity.RaceEntity
         LineSyncEntity::class,
         KnownDeviceEntity::class,
     ],
-    version = 23,
+    version = 26,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

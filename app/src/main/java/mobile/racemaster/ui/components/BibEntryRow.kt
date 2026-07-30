@@ -30,11 +30,11 @@ import mobile.racemaster.util.withClickSound
  *  contexts — the row just isn't clickable there. */
 @Composable
 fun BibEntryRow(
-    splitNumber: Int,
+    splitNumber: Int?,
     bibNumber: Int?,
     typeLabel: String,
     note: String?,
-    dupSplitRefs: List<Int>,
+    dupSplitRefs: List<Int?>,
     syncState: LineSyncState,
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,

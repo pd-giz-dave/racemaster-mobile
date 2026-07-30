@@ -34,4 +34,13 @@ class HistoryModeTest {
         assertEquals("S1", formatSplitRef(1))
         assertEquals("L12", formatLineRef(12L))
     }
+
+    @Test
+    fun nullSplitNumberShowsAsADashRatherThanAFakeNumber() {
+        // A RETIRE row has no splitNumber at all (see HistoryLineEntity.splitNumber's own doc)
+        // — both forms must show that plainly, never silently coerce it to 0 or reuse another
+        // row's number.
+        assertEquals("S–", formatSplitRef(null))
+        assertEquals("S–", formatSplitColumn(null))
+    }
 }

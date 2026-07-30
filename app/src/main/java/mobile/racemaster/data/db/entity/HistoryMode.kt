@@ -22,11 +22,14 @@ enum class HistoryMode { TIME, BIBS, CP }
 /** Column form — always 3+ digits, overflowing rather than truncating past 999 (e.g. "L1000"). */
 fun formatLineColumn(lineNumber: Long): String = "L${lineNumber.toString().padStart(3, '0')}"
 
-/** Column form — always 3+ digits, overflowing rather than truncating past 999 (e.g. "S1000"). */
-fun formatSplitColumn(splitNumber: Int): String = "S${splitNumber.toString().padStart(3, '0')}"
+/** Column form — always 3+ digits, overflowing rather than truncating past 999 (e.g. "S1000").
+ *  Null (a RETIRE row, or a CP-mode PASS row — see HistoryLineEntity.splitNumber's own doc)
+ *  shows as "S–", never a fake/reused number. */
+fun formatSplitColumn(splitNumber: Int?): String = "S${splitNumber?.toString()?.padStart(3, '0') ?: "–"}"
 
 /** Inline-prose form — a plain, unpadded number ("L5", not "L005"). */
 fun formatLineRef(lineNumber: Long): String = "L$lineNumber"
 
-/** Inline-prose form — a plain, unpadded number ("S1", not "S001"). */
-fun formatSplitRef(splitNumber: Int): String = "S$splitNumber"
+/** Inline-prose form — a plain, unpadded number ("S1", not "S001"). Null (a RETIRE row, or a
+ *  CP-mode PASS row) shows as "S–", never a fake/reused number. */
+fun formatSplitRef(splitNumber: Int?): String = "S${splitNumber ?: "–"}"

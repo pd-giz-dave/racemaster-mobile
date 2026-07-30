@@ -44,7 +44,7 @@ import mobile.racemaster.util.withClickSound
 @Composable
 fun HistoryLineRow(
     lineNumber: Long,
-    splitNumber: Int,
+    splitNumber: Int?,
     actionLabel: String,
     bibNumber: Int?,
     elapsedMillis: Long?,
@@ -53,7 +53,7 @@ fun HistoryLineRow(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
     syncedToLabel: String? = null,
-    dupSplitRefs: List<Int> = emptyList(),
+    dupSplitRefs: List<Int?> = emptyList(),
     editedFromLineNumber: Long? = null,
     isUndoMarker: Boolean = false,
 ) {
@@ -120,14 +120,14 @@ fun HistoryLineRow(
  *  forEach/HistoryLineRow loop. */
 data class HistoryLineDisplay(
     val lineNumber: Long,
-    val splitNumber: Int,
+    val splitNumber: Int?,
     val actionLabel: String,
     val bibNumber: Int?,
     val elapsedMillis: Long?,
     val note: String?,
     val syncState: LineSyncState,
     val syncedToLabel: String? = null,
-    val dupSplitRefs: List<Int> = emptyList(),
+    val dupSplitRefs: List<Int?> = emptyList(),
     val isUndoMarker: Boolean = false,
     val editedFromLineNumber: Long? = null,
 )

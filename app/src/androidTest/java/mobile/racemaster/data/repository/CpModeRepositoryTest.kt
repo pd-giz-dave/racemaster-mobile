@@ -53,7 +53,7 @@ class CpModeRepositoryTest {
     }
 
     @Test
-    fun passAndRetireConsumeTheSharedCounter() = runTest {
+    fun neitherPassNorRetireGetASplitNumberOrConsumeTheCounter() = runTest {
         repository.recordEntry(raceId, HistoryAction.PASS, 101, note = null)
         repository.recordEntry(raceId, HistoryAction.RETIRE, 102, note = null)
         repository.recordEntry(raceId, HistoryAction.PASS, 103, note = null)
@@ -62,18 +62,24 @@ class CpModeRepositoryTest {
             .sortedBy { it.id }
             .map { it.splitNumber }
 
-        assertEquals(listOf(1, 2, 3), splitNumbers)
+        // Unlike Bibs Mode's Finish (paired with a Time Mode device at the same finish line),
+        // a CP checkpoint is never paired with a Time Mode device of its own — so neither a
+        // Pass nor a Retire has a corresponding split to align with, and neither consumes the
+        // shared counter — see EntryLogModeEngine.NO_SPLIT_ACTIONS.
+        assertEquals(listOf(null, null, null), splitNumbers)
+        assertEquals(1, db.raceDao().getById(raceId)?.cpModeNextSplit)
     }
 
     @Test
-    fun undoAfterPassDecrementsCounter() = runTest {
+    fun undoAfterPassLeavesCounterUnaffected() = runTest {
         repository.recordEntry(raceId, HistoryAction.PASS, 101, note = null)
         repository.undoMostRecent(raceId)
         repository.recordEntry(raceId, HistoryAction.PASS, 102, note = null)
 
         val entries = repository.observeCurrentSegmentEntries(raceId).first().sortedBy { it.lineNumber }
         assertEquals(1, entries.size)
-        assertEquals(1, entries[0].splitNumber)
+        assertNull(entries[0].splitNumber)
+        assertEquals(1, db.raceDao().getById(raceId)?.cpModeNextSplit)
     }
 
     @Test
@@ -128,9 +134,13 @@ class CpModeRepositoryTest {
 
         repository.recordEntry(raceId, HistoryAction.PASS, 201, note = null)
 
-        // CP's own counter started fresh at 1, unaffected by Bibs already being at 2.
+        // CP's own counter is untouched by Bibs (already at 3, having consumed splits 1 and 2)
+        // — and also untouched by its own Pass, which (like Retire) has no corresponding Time
+        // Mode split to align with.
         val cpEntry = repository.observeCurrentSegmentEntries(raceId).first().single()
-        assertEquals(1, cpEntry.splitNumber)
+        assertNull(cpEntry.splitNumber)
+        assertEquals(1, db.raceDao().getById(raceId)?.cpModeNextSplit)
+        assertEquals(3, db.raceDao().getById(raceId)?.bibsModeNextSplit)
 
         bibsRepository.stopBibsMode(raceId)
 

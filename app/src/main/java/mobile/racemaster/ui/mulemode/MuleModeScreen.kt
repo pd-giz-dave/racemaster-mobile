@@ -110,6 +110,15 @@ private fun BluetoothAndServerSyncToggles(uiState: MuleModeUiState, viewModel: M
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
             )
+            // Distinct from bluetoothWarning below (this device failing to *scan*) — this is
+            // this device failing to be *seen*, reported by PeripheralSyncService via
+            // BluetoothStateRepository.advertisingWarning. Confirmed in the field: a plain
+            // Bluetooth off/on toggle doesn't always clear it (the underlying BLE chipset
+            // firmware itself can get wedged), which is why the message names a phone restart
+            // explicitly rather than leaving the operator to guess.
+            uiState.advertisingWarning?.let { warning ->
+                Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
         }
         if (uiState.serverSyncOff) {
             Text(

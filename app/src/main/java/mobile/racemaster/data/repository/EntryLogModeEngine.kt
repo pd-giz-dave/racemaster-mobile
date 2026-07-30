@@ -18,6 +18,15 @@ import mobile.racemaster.data.db.entity.RaceEntity
 // holds even if a bug elsewhere let an echo's displayed action drift from its root.
 private val NON_EDITABLE_ROOT_ACTIONS = setOf(HistoryAction.STOP, HistoryAction.RESET, HistoryAction.UNDO)
 
+// Actions with no corresponding Time Mode split to align with, so they neither get a
+// splitNumber nor consume the shared counter — see HistoryLineEntity.splitNumber's own doc.
+// RETIRE never crosses the timing point at all (Bibs or CP). PASS joins it here for the same
+// underlying reason even though it IS a real checkpoint crossing: unlike Bibs Mode's FINISH
+// (paired with a Time Mode device running at the very same finish line — see README), CP
+// Mode's checkpoints are never paired with a Time Mode device of their own, so a CP row's
+// splitNumber never actually aligned with anything to begin with.
+private val NO_SPLIT_ACTIONS = setOf(HistoryAction.RETIRE, HistoryAction.PASS)
+
 /** Per-mode wiring for the display-counter/stopped-at [RaceEntity] columns [EntryLogModeEngine]
  *  needs — one implementation per [HistoryMode] family (see `BibsModeRepository`/
  *  `CpModeRepository`), each a thin pass-through to that family's own dedicated [RaceDao]
@@ -86,8 +95,11 @@ internal class EntryLogModeEngine(
     ) {
         db.withTransaction {
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
-            val splitNumber = columns.nextSplitOf(race)
-            columns.incrementCounter(raceId)
+            val splitNumber = if (action in NO_SPLIT_ACTIONS) {
+                null
+            } else {
+                columns.nextSplitOf(race).also { columns.incrementCounter(raceId) }
+            }
             historyLineDao.insert(
                 HistoryLineEntity(
                     raceId = raceId,
@@ -183,7 +195,11 @@ internal class EntryLogModeEngine(
             if (root.action == HistoryAction.STOP) {
                 columns.clearStoppedAt(raceId)
             }
-            columns.decrementCounter(raceId)
+            // Neither RETIRE nor PASS ever consumed the counter in the first place (see
+            // recordEntry/NO_SPLIT_ACTIONS), so undoing one must not decrement it either.
+            if (root.action !in NO_SPLIT_ACTIONS) {
+                columns.decrementCounter(raceId)
+            }
         }
     }
 

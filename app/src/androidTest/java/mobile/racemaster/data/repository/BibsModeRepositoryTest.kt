@@ -40,7 +40,7 @@ class BibsModeRepositoryTest {
     }
 
     @Test
-    fun allTypesConsumeTheSharedCounterIncludingRetire() = runTest {
+    fun everyTypeExceptRetireConsumesTheSharedCounter() = runTest {
         repository.recordEntry(raceId, HistoryAction.START, 101, note = null)
         repository.recordEntry(raceId, HistoryAction.START, 102, note = null)
         repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
@@ -52,11 +52,14 @@ class BibsModeRepositoryTest {
             .sortedBy { it.id }
             .map { it.splitNumber }
 
-        assertEquals(listOf(1, 2, 3, 4, 5, 6), splitNumbers)
+        // A retiree never crosses this timing point, so it has no corresponding Time Mode
+        // split — it gets no splitNumber of its own, and the very next real crossing still
+        // gets the number it would have gotten had the retiree never been logged.
+        assertEquals(listOf(1, 2, 3, null, 4, 5), splitNumbers)
     }
 
     @Test
-    fun undoAfterRetireDecrementsCounter() = runTest {
+    fun undoAfterRetireLeavesCounterUnaffected() = runTest {
         repository.recordEntry(raceId, HistoryAction.START, 101, note = null)
         repository.recordEntry(raceId, HistoryAction.RETIRE, 103, note = null)
         repository.undoMostRecent(raceId)
@@ -93,11 +96,15 @@ class BibsModeRepositoryTest {
     }
 
     @Test
-    fun retireGetsASplitNumber() = runTest {
+    fun retireGetsNoSplitNumberAndDoesNotConsumeTheCounter() = runTest {
         repository.recordEntry(raceId, HistoryAction.RETIRE, 105, note = null)
+        val retireEntry = db.historyLineDao().observeAllForRace(raceId).first().single()
+        assertNull(retireEntry.splitNumber)
 
-        val entry = db.historyLineDao().observeAllForRace(raceId).first().single()
-        assertEquals(1, entry.splitNumber)
+        // The next real crossing still gets split 1 — the retiree never consumed it.
+        repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
+        val finishEntry = db.historyLineDao().observeAllForRace(raceId).first().single { it.action == HistoryAction.FINISH }
+        assertEquals(1, finishEntry.splitNumber)
     }
 
     @Test

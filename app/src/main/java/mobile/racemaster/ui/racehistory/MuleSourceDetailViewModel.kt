@@ -20,7 +20,7 @@ data class MulePulledRecordUi(
     val recordUuid: String,
     val action: HistoryAction,
     val bibNumber: Int?,
-    val splitNumber: Int,
+    val splitNumber: Int?,
     val lineNumber: Long,
     val elapsedMillis: Long,
     val note: String?,
@@ -46,7 +46,7 @@ data class MulePulledRecordUi(
     // doc for the rule. Computed the exact same way a local race's own Race History
     // (RaceHistoryDetailViewModel) computes it for its HistoryLineEntity rows, via that
     // function's generic extractor-lambda core — not a hand-duplicated copy of the rule.
-    val dupSplitRefs: List<Int>,
+    val dupSplitRefs: List<Int?>,
 )
 
 data class MuleSourceDetailUiState(
@@ -82,7 +82,7 @@ class MuleSourceDetailViewModel(
                 // same null this function (and the rest of the app) already treats as "no bib".
                 bibNumberOf = { it.record.bibNumber?.toIntOrNull() },
                 actionOf = { it.record.toHistoryAction() },
-                splitNumberOf = { it.record.splitNumber ?: 0 },
+                splitNumberOf = { it.record.splitNumber },
             )
             MuleSourceDetailUiState(
                 raceLabel = raceLabel,
@@ -92,7 +92,7 @@ class MuleSourceDetailViewModel(
                         recordUuid = it.record.recordUuid,
                         action = it.record.toHistoryAction(),
                         bibNumber = it.record.bibNumber?.toIntOrNull(),
-                        splitNumber = it.record.splitNumber ?: 0,
+                        splitNumber = it.record.splitNumber,
                         lineNumber = it.record.lineNumber,
                         elapsedMillis = parseElapsedClock(it.record.splitTime),
                         note = it.record.note,

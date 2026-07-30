@@ -175,6 +175,12 @@ class MuleSyncEngine(
     val statusMessage: StateFlow<String?> = statusMessageFlow.asStateFlow()
     val autoWarning: StateFlow<String?> = autoWarningFlow.asStateFlow()
     val bluetoothWarning: StateFlow<String?> = bluetoothWarningFlow.asStateFlow()
+    // Forwarded rather than duplicated — PeripheralSyncService (this device's advertising
+    // side) is the one that actually records failures/successes into it, since only it drives
+    // startAdvertising(); this engine has no visibility into that itself, but MuleModeViewModel
+    // already sources every other Mule Mode warning from here, so it's exposed here too rather
+    // than adding a second repository reference to the ViewModel just for this one field.
+    val advertisingWarning: StateFlow<String?> = bluetoothStateRepository.advertisingWarning
     val isBusy: StateFlow<Boolean> = busyFlow.asStateFlow()
 
     // This device's own unsynced data, shaped as one more DiscoveredDevice (isSelf = true) so
