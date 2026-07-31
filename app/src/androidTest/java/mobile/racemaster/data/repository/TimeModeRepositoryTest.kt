@@ -92,18 +92,21 @@ class TimeModeRepositoryTest {
     }
 
     @Test
-    fun stopStopwatchAddsStopMarkerConsumingNextNumber() = runTest {
+    fun stopStopwatchAddsStopMarkerWithoutConsumingASplitNumber() = runTest {
         repository.startStopwatch(raceId, startedAtMillis = 1_000L)
         repository.recordSplit(raceId)
         repository.recordSplit(raceId)
         repository.stopStopwatch(raceId, stoppedAtMillis = 5_000L)
 
-        val splits = db.historyLineDao().observeAllForRace(raceId).first().sortedBy { it.splitNumber }
-        assertEquals(listOf(0, 1, 2, 3), splits.map { it.splitNumber })
-        val stopSplit = splits.first { it.splitNumber == 3 }
-        assertEquals(HistoryAction.STOP, stopSplit.action)
+        val stopSplit = db.historyLineDao().observeAllForRace(raceId).first().single { it.action == HistoryAction.STOP }
+        assertEquals(null, stopSplit.splitNumber)
         assertEquals(5_000L, stopSplit.timestampMillis)
         assertEquals(5_000L, db.raceDao().getById(raceId)?.timeModeStoppedAtMillis)
+
+        // The next real split still gets the number Stop would otherwise have consumed.
+        repository.recordSplit(raceId, timestampMillis = 6_000L)
+        val nextSplit = db.historyLineDao().observeAllForRace(raceId).first().single { it.timestampMillis == 6_000L }
+        assertEquals(3, nextSplit.splitNumber)
     }
 
     @Test
@@ -115,7 +118,8 @@ class TimeModeRepositoryTest {
         repository.undoMostRecent(raceId)
 
         assertEquals(null, db.raceDao().getById(raceId)?.timeModeStoppedAtMillis)
-        // The consumed split number is freed up again, same as undoing a normal split.
+        // Stop never consumed a split number, so undoing it doesn't need to free one up
+        // either — the next real split just continues the sequence normally.
         repository.recordSplit(raceId)
         val numbers = repository.observeCurrentSegmentSplits(raceId).first().map { it.splitNumber }.sortedBy { it }
         assertEquals(listOf(0, 1, 2), numbers)

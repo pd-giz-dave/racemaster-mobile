@@ -60,20 +60,21 @@ class TimeModeRepository(
         }
     }
 
-    // The stop marker consumes the next split number like a normal split, so it sorts
-    // naturally as the last entry and undoes the same way a normal split would.
+    // The stop marker never crosses any timing point of its own, so — like a Bibs-family
+    // RETIRE/PASS row (see HistoryLineEntity.splitNumber's own doc) — it gets no splitNumber
+    // and doesn't consume the counter; the very next real split still gets the number Stop
+    // would otherwise have taken. This also keeps it from being mistaken for a genuine split
+    // in the live screen's list (see SplitRow), which shows it via its action label instead.
     suspend fun stopStopwatch(raceId: Long, stoppedAtMillis: Long = System.currentTimeMillis()) {
         db.withTransaction {
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
-            val splitNumber = race.timeModeNextSplit
-            raceDao.incrementTimeCounter(raceId)
             raceDao.setTimeModeStoppedAt(raceId, stoppedAtMillis)
             historyLineDao.insert(
                 HistoryLineEntity(
                     raceId = raceId,
                     mode = HistoryMode.TIME,
                     action = HistoryAction.STOP,
-                    splitNumber = splitNumber,
+                    splitNumber = null,
                     lineNumber = race.nextLineNumber,
                     timestampMillis = stoppedAtMillis,
                 ),
@@ -199,10 +200,9 @@ class TimeModeRepository(
             raceDao.incrementLineNumber(raceId)
             when (root.action) {
                 HistoryAction.START -> raceDao.clearTimeModeStartedAt(raceId)
-                HistoryAction.STOP -> {
-                    raceDao.clearTimeModeStoppedAt(raceId)
-                    raceDao.decrementTimeCounter(raceId)
-                }
+                // Stop never consumed the counter (see stopStopwatch's own doc), so undoing it
+                // doesn't decrement one either — same treatment as Start.
+                HistoryAction.STOP -> raceDao.clearTimeModeStoppedAt(raceId)
                 else -> raceDao.decrementTimeCounter(raceId)
             }
         }

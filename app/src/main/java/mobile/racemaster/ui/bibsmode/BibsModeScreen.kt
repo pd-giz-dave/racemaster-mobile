@@ -42,12 +42,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.MainActivity
 import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
 import mobile.racemaster.data.db.entity.HistoryAction
-import mobile.racemaster.data.db.entity.formatSplitRef
 import mobile.racemaster.ui.components.ActionPickerDialog
 import mobile.racemaster.ui.components.DigitKeypad
 import mobile.racemaster.ui.components.EditEntryPanel
 import mobile.racemaster.ui.components.EntryLogList
-import mobile.racemaster.ui.components.EntryLogUi
 import mobile.racemaster.ui.components.EntryModeHeaderInfo
 import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.StopOrResetButton
@@ -261,7 +259,6 @@ private fun BibsModeContent(
                         ) { Text("Event") }
                         StopOrResetButton(
                             isStopped = uiState.stopped,
-                            stopDescription = "No more bib entries can be logged. Undo the Stop entry to resume.",
                             resetDescription = "This clears every bib entry and resets ready to start again from scratch.",
                             onStop = onStop,
                             onReset = onReset,
@@ -271,8 +268,7 @@ private fun BibsModeContent(
                         )
                         UndoLastButton(
                             enabled = uiState.raceId != null && uiState.canUndo,
-                            description = uiState.entries.firstOrNull()?.let { undoDescription(it) }.orEmpty(),
-                            onConfirm = onUndo,
+                            onClick = onUndo,
                             contentPadding = BUTTON_ROW_CONTENT_PADDING,
                             modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
                         )
@@ -319,9 +315,4 @@ private fun BibsModeContent(
             }
         }
     }
-}
-
-private fun undoDescription(entry: EntryLogUi): String {
-    val subject = entry.bibNumber?.let { "bib $it (${entry.type.displayName()})" } ?: entry.type.displayName()
-    return "Remove $subject ${formatSplitRef(entry.splitNumber)}"
 }

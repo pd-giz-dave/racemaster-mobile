@@ -42,6 +42,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.MainActivity
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.formatSplitRef
+import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.SplitRow
 import mobile.racemaster.ui.components.StopOrResetButton
@@ -214,7 +215,6 @@ private fun TimeModeContent(
                     ) {
                         StopOrResetButton(
                             isStopped = uiState.stopwatchStopped,
-                            stopDescription = "The clock will stop and no more splits can be recorded. The clock will resume (with no loss of time) if you undo the Stop split line.",
                             resetDescription = "This clears every split and resets ready to start again from scratch (under the same race name).",
                             onStop = onStop,
                             onReset = onReset,
@@ -222,11 +222,7 @@ private fun TimeModeContent(
                         )
                         UndoLastButton(
                             enabled = uiState.canUndo,
-                            description = uiState.splits.firstOrNull()?.let {
-                                val noteSuffix = it.note?.let { note -> " · $note" }.orEmpty()
-                                "Remove split ${formatSplitRef(it.splitNumber)}$noteSuffix (${formatElapsedSplitTime(it.elapsedMillis)})"
-                            }.orEmpty(),
-                            onConfirm = onUndo,
+                            onClick = onUndo,
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -265,6 +261,7 @@ private fun TimeModeContent(
                         SplitRow(
                             splitNumber = split.splitNumber,
                             elapsedMillis = split.elapsedMillis,
+                            actionLabel = split.action.displayName(),
                             note = split.note,
                             syncState = split.syncState,
                             onClick = if (isMarkerRow) null else { { editingSplitId = split.id } },

@@ -22,17 +22,22 @@ import mobile.racemaster.ui.theme.UnsyncedRed
 import mobile.racemaster.util.formatElapsedSplitTime
 import mobile.racemaster.util.withClickSound
 
-/** One line per Time Mode split — split number, elapsed time, note — the live Time Mode screen's
- *  own current-segment view (Race History uses the separate, more detailed HistoryLineRow
- *  instead, since it needs to show every mode/segment together). Sync state is shown by
- *  coloring the row (red until relayed to a mule, orange until that reaches a genuine sink,
- *  green once it does — see LineSyncState) rather than a separate status line, keeping rows
- *  compact enough that more fit on screen at once. [onClick] is left null in read-only
- *  contexts — the row just isn't clickable there. */
+/** One line per Time Mode split — split number, elapsed time, action, note, matching Bibs
+ *  Mode's own row layout (see BibEntryRow) column for column — the live Time Mode screen's own
+ *  current-segment view (Race History uses the separate, more detailed HistoryLineRow instead,
+ *  since it needs to show every mode/segment together). [splitNumber] is null for a Stop row
+ *  (it never crosses any timing point of its own — see HistoryLineEntity.splitNumber's own
+ *  doc), rendered as "–" via formatSplitRef same as any other row without one; [actionLabel]
+ *  is what makes a Stop row (or a Start row) visibly distinct from a genuine split rather than
+ *  looking like one. Sync state is shown by coloring the row (red until relayed to a mule,
+ *  orange until that reaches a genuine sink, green once it does — see LineSyncState) rather
+ *  than a separate status line, keeping rows compact enough that more fit on screen at once.
+ *  [onClick] is left null in read-only contexts — the row just isn't clickable there. */
 @Composable
 fun SplitRow(
-    splitNumber: Int,
+    splitNumber: Int?,
     elapsedMillis: Long,
+    actionLabel: String,
     note: String?,
     syncState: LineSyncState,
     modifier: Modifier = Modifier,
@@ -57,9 +62,10 @@ fun SplitRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(formatSplitRef(splitNumber), style = MaterialTheme.typography.bodyLarge, color = rowColor, modifier = Modifier.width(40.dp))
-            Text(formatElapsedSplitTime(elapsedMillis), style = MaterialTheme.typography.bodyLarge, color = rowColor)
+            Text(formatElapsedSplitTime(elapsedMillis), style = MaterialTheme.typography.bodyLarge, color = rowColor, modifier = Modifier.width(72.dp))
+            Text(actionLabel, style = MaterialTheme.typography.bodyLarge, color = rowColor, modifier = Modifier.weight(1f))
             if (!note.isNullOrBlank()) {
-                Text(note, style = MaterialTheme.typography.bodySmall, color = rowColor)
+                Text(note, style = MaterialTheme.typography.bodySmall, color = rowColor, modifier = Modifier.weight(1f))
             }
         }
         if (editedFromLineNumber != null) {

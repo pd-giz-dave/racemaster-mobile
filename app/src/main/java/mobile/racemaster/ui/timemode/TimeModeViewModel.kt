@@ -28,7 +28,9 @@ import kotlinx.coroutines.launch
 
 data class FinishSplitUi(
     val id: Long,
-    val splitNumber: Int,
+    // Null for a Stop row — see HistoryLineEntity.splitNumber's own doc — displayed as "–" via
+    // formatSplitRef, with the action column (see SplitRow) carrying "Stop" instead.
+    val splitNumber: Int?,
     val action: HistoryAction,
     val elapsedMillis: Long,
     val note: String?,
@@ -106,10 +108,7 @@ class TimeModeViewModel(
                         splits = splits.map {
                             FinishSplitUi(
                                 id = it.id,
-                                // Time Mode rows are never RETIRE, so splitNumber is never
-                                // actually null here — the fallback only satisfies the type
-                                // system now that the shared entity column allows it.
-                                splitNumber = it.splitNumber ?: 0,
+                                splitNumber = it.splitNumber,
                                 action = it.action,
                                 elapsedMillis = startedAt?.let { s -> it.timestampMillis - s } ?: 0L,
                                 note = it.note,
@@ -129,7 +128,7 @@ class TimeModeViewModel(
                         lastSyncedAtMillis = lastSyncedAtMillis,
                         firstBibNumber = race?.bibsRangeStart,
                         expectedRunnerCount = race?.bibsRangeCount,
-                        finishedCount = splits.count { it.splitNumber != 0 },
+                        finishedCount = splits.count { it.action == HistoryAction.SPLIT },
                     )
                 }
             }

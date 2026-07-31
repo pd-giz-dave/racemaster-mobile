@@ -20,7 +20,6 @@ import mobile.racemaster.util.withClickSound
 @Composable
 fun StopOrResetButton(
     isStopped: Boolean,
-    stopDescription: String,
     resetDescription: String,
     onStop: () -> Unit,
     onReset: () -> Unit,
@@ -29,10 +28,13 @@ fun StopOrResetButton(
     labelStyle: TextStyle = MaterialTheme.typography.labelLarge,
     contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
 ) {
+    // Stop is easily undoable (the Undo button brings the clock straight back with no loss of
+    // time), so it fires immediately with no confirm, same as Undo. Reset is destructive
+    // (clears every entry) and keeps its confirm dialog.
     var showConfirm by remember { mutableStateOf(false) }
 
     OutlinedButton(
-        onClick = withClickSound { showConfirm = true },
+        onClick = withClickSound { if (isStopped) showConfirm = true else onStop() },
         enabled = enabled,
         contentPadding = contentPadding,
         modifier = modifier.fillMaxWidth(),
@@ -43,13 +45,13 @@ fun StopOrResetButton(
     if (showConfirm) {
         AlertDialog(
             onDismissRequest = { showConfirm = false },
-            title = { Text(if (isStopped) "Reset?" else "Stop?") },
-            text = { Text(if (isStopped) resetDescription else stopDescription) },
+            title = { Text("Reset?") },
+            text = { Text(resetDescription) },
             confirmButton = {
                 TextButton(onClick = withClickSound {
-                    if (isStopped) onReset() else onStop()
+                    onReset()
                     showConfirm = false
-                }) { Text(if (isStopped) "Reset" else "Stop") }
+                }) { Text("Reset") }
             },
             dismissButton = {
                 TextButton(onClick = withClickSound { showConfirm = false }) { Text("Cancel") }

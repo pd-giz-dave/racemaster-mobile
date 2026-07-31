@@ -40,13 +40,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.MainActivity
 import mobile.racemaster.data.db.entity.HistoryAction
-import mobile.racemaster.data.db.entity.formatSplitRef
 import mobile.racemaster.ui.bibsmode.CP_ACTION_OPTIONS
-import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.ui.components.DigitKeypad
 import mobile.racemaster.ui.components.EditEntryPanel
 import mobile.racemaster.ui.components.EntryLogList
-import mobile.racemaster.ui.components.EntryLogUi
 import mobile.racemaster.ui.components.EntryModeHeaderInfo
 import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.StopOrResetButton
@@ -230,7 +227,6 @@ private fun CpModeContent(
                         ) { Text("Retire") }
                         StopOrResetButton(
                             isStopped = uiState.stopped,
-                            stopDescription = "No more checkpoint entries can be logged. Undo the Stop entry to resume.",
                             resetDescription = "This clears every checkpoint entry and resets ready to start again from scratch.",
                             onStop = onStop,
                             onReset = onReset,
@@ -240,8 +236,7 @@ private fun CpModeContent(
                         )
                         UndoLastButton(
                             enabled = uiState.raceId != null && uiState.canUndo,
-                            description = uiState.entries.firstOrNull()?.let { undoDescription(it) }.orEmpty(),
-                            onConfirm = onUndo,
+                            onClick = onUndo,
                             contentPadding = BUTTON_ROW_CONTENT_PADDING,
                             modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
                         )
@@ -276,9 +271,4 @@ private fun CpModeContent(
             }
         }
     }
-}
-
-private fun undoDescription(entry: EntryLogUi): String {
-    val subject = entry.bibNumber?.let { "bib $it (${entry.type.displayName()})" } ?: entry.type.displayName()
-    return "Remove $subject ${formatSplitRef(entry.splitNumber)}"
 }
