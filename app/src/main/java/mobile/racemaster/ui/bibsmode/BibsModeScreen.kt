@@ -49,6 +49,7 @@ import mobile.racemaster.ui.components.EntryLogList
 import mobile.racemaster.ui.components.EntryModeHeaderInfo
 import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.StopOrResetButton
+import mobile.racemaster.ui.components.rememberListClickGuard
 import mobile.racemaster.ui.components.UndoLastButton
 import mobile.racemaster.util.withClickSound
 
@@ -163,6 +164,7 @@ private fun BibsModeContent(
             var editingEntryId by remember { mutableStateOf<Long?>(null) }
             val editingEntry = uiState.entries.firstOrNull { it.id == editingEntryId }
             var showEventPicker by remember { mutableStateOf(false) }
+            val listClickGuard = rememberListClickGuard()
 
             // The header (title/keypad/buttons/edit panel) is itself scrollable so that when the
             // keyboard comes up to edit a split, it can scroll to keep the edit panel's Save/Cancel
@@ -246,7 +248,7 @@ private fun BibsModeContent(
 
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(
-                            onClick = withClickSound(onSubmit),
+                            onClick = withClickSound { listClickGuard.trigger(); onSubmit() },
                             enabled = uiState.canSubmit,
                             contentPadding = BUTTON_ROW_CONTENT_PADDING,
                             modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
@@ -311,6 +313,7 @@ private fun BibsModeContent(
                     entries = uiState.entries,
                     onEntryClick = { editingEntryId = it.id },
                     modifier = Modifier.weight(1f),
+                    clickGuard = listClickGuard,
                 )
             }
         }

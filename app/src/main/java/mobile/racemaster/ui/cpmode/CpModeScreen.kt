@@ -48,6 +48,7 @@ import mobile.racemaster.ui.components.EntryModeHeaderInfo
 import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.StopOrResetButton
 import mobile.racemaster.ui.components.UndoLastButton
+import mobile.racemaster.ui.components.rememberListClickGuard
 import mobile.racemaster.util.withClickSound
 
 private const val BUTTON_HEIGHT_DP = 48
@@ -155,6 +156,7 @@ private fun CpModeContent(
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             var editingEntryId by remember { mutableStateOf<Long?>(null) }
             val editingEntry = uiState.entries.firstOrNull { it.id == editingEntryId }
+            val listClickGuard = rememberListClickGuard()
 
             // See BibsModeScreen's own doc for why the header is itself scrollable and why it's
             // re-keyed on the live ime inset rather than just editingEntryId.
@@ -214,13 +216,13 @@ private fun CpModeContent(
 
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(
-                            onClick = withClickSound(onPass),
+                            onClick = withClickSound { listClickGuard.trigger(); onPass() },
                             enabled = uiState.canSubmit,
                             contentPadding = BUTTON_ROW_CONTENT_PADDING,
                             modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
                         ) { Text("Pass") }
                         Button(
-                            onClick = withClickSound(onRetire),
+                            onClick = withClickSound { listClickGuard.trigger(); onRetire() },
                             enabled = uiState.canSubmit,
                             contentPadding = BUTTON_ROW_CONTENT_PADDING,
                             modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
@@ -267,6 +269,7 @@ private fun CpModeContent(
                     entries = uiState.entries,
                     onEntryClick = { editingEntryId = it.id },
                     modifier = Modifier.weight(1f),
+                    clickGuard = listClickGuard,
                 )
             }
         }

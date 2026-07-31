@@ -37,6 +37,7 @@ fun EntryLogList(
     entries: List<EntryLogUi>,
     onEntryClick: (EntryLogUi) -> Unit,
     modifier: Modifier = Modifier,
+    clickGuard: ListClickGuard? = null,
 ) {
     val listState = rememberLazyListState()
     LaunchedEffect(entries.firstOrNull()?.id) {
@@ -56,7 +57,7 @@ fun EntryLogList(
                 note = entry.note,
                 dupSplitRefs = entry.dupSplitRefs,
                 syncState = entry.syncState,
-                onClick = if (isMarkerRow) null else { { onEntryClick(entry) } },
+                onClick = if (isMarkerRow || clickGuard?.isSuppressed == true) null else { { onEntryClick(entry) } },
             )
         }
     }

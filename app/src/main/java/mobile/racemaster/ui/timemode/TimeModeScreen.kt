@@ -48,6 +48,7 @@ import mobile.racemaster.ui.components.SplitRow
 import mobile.racemaster.ui.components.StopOrResetButton
 import mobile.racemaster.ui.components.SyncStatusLine
 import mobile.racemaster.ui.components.UndoLastButton
+import mobile.racemaster.ui.components.rememberListClickGuard
 import mobile.racemaster.util.formatElapsedSplitTime
 import mobile.racemaster.util.formatTimeSplitsText
 import mobile.racemaster.util.withClickSound
@@ -143,6 +144,7 @@ private fun TimeModeContent(
             // see what they're tweaking while they type.
             var editingSplitId by remember { mutableStateOf<Long?>(null) }
             val editingSplit = uiState.splits.firstOrNull { it.id == editingSplitId }
+            val listClickGuard = rememberListClickGuard()
 
             // This header (ticker/main button/Stop-Reset/Undo/editor) is itself scrollable so
             // that on a short screen with the keyboard up, it can scroll to keep the note
@@ -194,7 +196,14 @@ private fun TimeModeContent(
                 // must both register as splits; any gesture-disambiguation delay would risk
                 // swallowing or merging the second one.
                 Button(
-                    onClick = withClickSound(if (uiState.stopwatchStarted) onSplit else onStart),
+                    onClick = withClickSound {
+                        if (uiState.stopwatchStarted) {
+                            listClickGuard.trigger()
+                            onSplit()
+                        } else {
+                            onStart()
+                        }
+                    },
                     enabled = uiState.raceId != null && !uiState.stopwatchStopped,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -264,7 +273,7 @@ private fun TimeModeContent(
                             actionLabel = split.action.displayName(),
                             note = split.note,
                             syncState = split.syncState,
-                            onClick = if (isMarkerRow) null else { { editingSplitId = split.id } },
+                            onClick = if (isMarkerRow || listClickGuard.isSuppressed) null else { { editingSplitId = split.id } },
                         )
                     }
                 }
