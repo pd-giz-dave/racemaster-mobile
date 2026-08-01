@@ -19,8 +19,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.ui.bibsmode.displayName
+import mobile.racemaster.data.db.entity.displayName as modeDisplayName
 import mobile.racemaster.ui.components.HistoryLineDisplay
 import mobile.racemaster.ui.components.HistoryLinesList
 import mobile.racemaster.util.formatWallClock
@@ -85,6 +87,7 @@ fun RaceHistoryDetailScreen(
                         dupSplitRefs = it.dupSplitRefs,
                         editedFromLineNumber = it.editedFromLineNumber,
                         isUndoMarker = it.isUndoMarker,
+                        splitLabelOverride = if (it.action == HistoryAction.MODE_START) it.mode.modeDisplayName() else null,
                     )
                 },
                 emptyMessage = "No history recorded",

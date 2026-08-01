@@ -61,6 +61,10 @@ private fun HistoryAction.toServerAction(): String = when (this) {
     HistoryAction.STOP -> "Stop"
     HistoryAction.RESET -> "Reset"
     HistoryAction.UNDO -> "Undo"
+    // Deliberately distinct from "Start" on the wire — the whole point is letting the web app
+    // tell this boundary marker apart from a mode's own real Start/Clock row (see
+    // HistoryAction.MODE_START's own doc), even though both show as "Start" in this app's UI.
+    HistoryAction.MODE_START -> "ModeStart"
 }
 
 /**
@@ -89,6 +93,7 @@ fun SyncRecord.toHistoryAction(): HistoryAction = when (action) {
     "Stop" -> HistoryAction.STOP
     "Reset" -> HistoryAction.RESET
     "Undo" -> HistoryAction.UNDO
+    "ModeStart" -> HistoryAction.MODE_START
     // An unrecognized wire value - should not get here
     else -> HistoryAction.IGNORE
 }

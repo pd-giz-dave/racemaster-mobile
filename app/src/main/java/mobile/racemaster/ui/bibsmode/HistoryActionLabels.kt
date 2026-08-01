@@ -17,6 +17,10 @@ fun HistoryAction.displayName(): String = when (this) {
     HistoryAction.STOP -> "Stop"
     HistoryAction.RESET -> "Reset"
     HistoryAction.UNDO -> "Undo"
+    // Race History is the only place this is ever shown (see HistoryAction.MODE_START's own
+    // doc) — same "Start" text its own real Start/Clock marker already shows there, just on
+    // its own separate boundary-marker row.
+    HistoryAction.MODE_START -> "Start"
 }
 
 // Deliberately excludes every marker action (CLOCK/STOP/RESET/UNDO, plus the Time-only SPLIT,

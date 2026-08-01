@@ -14,7 +14,11 @@ import kotlinx.coroutines.flow.map
 // Root row kinds that must never be edited or undone through the generic path — Undo/Edit
 // guards below key off this set, keyed off the ROOT row (never the target/echo) so the
 // guard holds even if a bug elsewhere let an echo's displayed action drift from its root.
-private val NON_EDITABLE_ROOT_ACTIONS = setOf(HistoryAction.START, HistoryAction.STOP, HistoryAction.RESET, HistoryAction.UNDO)
+// MODE_START is never reachable here anyway (see observeCurrentSegmentSplits/undoMostRecent's
+// own filtering — it's excluded from the live view entirely), but listed for the same
+// belt-and-braces reason the other markers are.
+private val NON_EDITABLE_ROOT_ACTIONS =
+    setOf(HistoryAction.START, HistoryAction.STOP, HistoryAction.RESET, HistoryAction.UNDO, HistoryAction.MODE_START)
 
 class TimeModeRepository(
     private val db: RacemasterDatabase,
@@ -24,10 +28,17 @@ class TimeModeRepository(
     // Only the current segment (since the most recent Reset, if any) — for the live screen.
     // Folded (see HistoryFold): Undo/Edit no longer delete/mutate rows, they append an
     // undo-marker or edit-echo instead, so the raw DAO rows must be collapsed down to "one
-    // row per still-visible logical entry" before the screen ever sees them.
+    // row per still-visible logical entry" before the screen ever sees them. MODE_START rows
+    // are filtered out before folding — they're a boundary marker for Race History/the web app
+    // (see HistoryAction.MODE_START's own doc), never meant for the live screen at all.
     fun observeCurrentSegmentSplits(raceId: Long): Flow<List<HistoryLineEntity>> =
         historyLineDao.observeCurrentSegment(raceId, HistoryMode.TIME, HistoryAction.RESET).map {
-            foldLatestVisible(it, { s -> s.lineNumber }, { s -> s.refLineNumber }, { s -> s.action == HistoryAction.UNDO })
+            foldLatestVisible(
+                it.filter { s -> s.action != HistoryAction.MODE_START },
+                { s -> s.lineNumber },
+                { s -> s.refLineNumber },
+                { s -> s.action == HistoryAction.UNDO },
+            )
         }
 
     fun observeUnsyncedCount(raceId: Long): Flow<Int> = historyLineDao.observeUnsyncedCountForRace(raceId, HistoryMode.TIME)
@@ -47,7 +58,10 @@ class TimeModeRepository(
 
     // The start marker is a fixed split #0 outside the normal 1,2,3... sequence, so it
     // doesn't consume the display counter — it still consumes a permanent line number, same
-    // as every other row.
+    // as every other row. Immediately preceded by its own MODE_START boundary marker (see that
+    // action's own doc) — a second, separate row purely for the web app's later benefit, never
+    // shown on this (or any) live screen; the real Start marker right after it is completely
+    // unaffected, exactly as it always was.
     suspend fun startStopwatch(raceId: Long, startedAtMillis: Long = System.currentTimeMillis()) {
         db.withTransaction {
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
@@ -56,9 +70,20 @@ class TimeModeRepository(
                 HistoryLineEntity(
                     raceId = raceId,
                     mode = HistoryMode.TIME,
+                    action = HistoryAction.MODE_START,
+                    splitNumber = null,
+                    lineNumber = race.nextLineNumber,
+                    timestampMillis = startedAtMillis,
+                ),
+            )
+            raceDao.incrementLineNumber(raceId)
+            historyLineDao.insert(
+                HistoryLineEntity(
+                    raceId = raceId,
+                    mode = HistoryMode.TIME,
                     action = HistoryAction.START,
                     splitNumber = START_SPLIT_NUMBER,
-                    lineNumber = race.nextLineNumber,
+                    lineNumber = race.nextLineNumber + 1,
                     timestampMillis = startedAtMillis,
                 ),
             )
@@ -140,11 +165,12 @@ class TimeModeRepository(
         }
     }
 
-    // Inserts a Reset marker (consuming the current display-counter value + a permanent line
-    // number, exactly like Stop already does) instead of deleting anything — every prior
-    // split/marker for this race stays in the table untouched, only now excluded from the
-    // live screen's current-segment view. Still resets the display counter/clock state to
-    // their pre-start defaults, same as before.
+    // Inserts a Reset marker (consuming a permanent line number, same as every other row) instead
+    // of deleting anything — every prior split/marker for this race stays in the table untouched,
+    // only now excluded from the live screen's current-segment view. Still resets the display
+    // counter/clock state to their pre-start defaults, same as before. No splitNumber of its own
+    // — like Stop (see stopStopwatch's own doc), it's a boundary marker for the web app's own
+    // later segmentation, not a real logged split.
     suspend fun resetStopwatch(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()) {
         db.withTransaction {
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
@@ -153,7 +179,7 @@ class TimeModeRepository(
                     raceId = raceId,
                     mode = HistoryMode.TIME,
                     action = HistoryAction.RESET,
-                    splitNumber = race.timeModeNextSplit,
+                    splitNumber = null,
                     lineNumber = race.nextLineNumber,
                     timestampMillis = resetAtMillis,
                 ),
@@ -186,7 +212,10 @@ class TimeModeRepository(
     // edited echo whose displayed content no longer matches its original semantic.
     suspend fun undoMostRecent(raceId: Long) {
         db.withTransaction {
+            // MODE_START excluded, same as observeCurrentSegmentSplits — it must never become an
+            // undo target (the operator can't even see it to know it's there).
             val raw = historyLineDao.getCurrentSegmentSnapshot(raceId, HistoryMode.TIME, HistoryAction.RESET)
+                .filter { it.action != HistoryAction.MODE_START }
             val folded = foldLatestVisible(raw, { s -> s.lineNumber }, { s -> s.refLineNumber }, { s -> s.action == HistoryAction.UNDO })
             val target = folded.firstOrNull() ?: return@withTransaction
             val rootLineNumber = target.refLineNumber ?: target.lineNumber

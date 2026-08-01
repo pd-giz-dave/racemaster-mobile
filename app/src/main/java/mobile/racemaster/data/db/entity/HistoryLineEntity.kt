@@ -34,13 +34,15 @@ data class HistoryLineEntity(
     // which bib got undone) — never meaningful for any other action.
     val bibNumber: Int? = null,
     // Null for a RETIRE row (never crosses any timing point — see
-    // EntryLogModeEngine.NO_SPLIT_ACTIONS) or a Time Mode STOP row (see
-    // TimeModeRepository.stopStopwatch's own doc). Neither gets a splitNumber nor consumes the
-    // shared counter, so the very next real crossing still gets the number it would otherwise
-    // have gotten. Every other action, including markers like START/RESET/CLOCK, still gets
-    // one — for a CP-mode PASS row in particular, this is a plain running count ("how many have
-    // passed since Start/Reset"), not a real timing split (CP's own checkpoint is never paired
-    // with a Time Mode device the way Bibs Mode's finish line is).
+    // EntryLogModeEngine.NO_SPLIT_ACTIONS), or a STOP/RESET row in any mode (boundary markers
+    // meant for the web app's own later segmentation, not real logged entries — see
+    // TimeModeRepository.stopStopwatch/resetStopwatch and EntryLogModeEngine.stop/reset). None
+    // of these get a splitNumber nor consume the shared counter, so the very next real crossing
+    // still gets the number it would otherwise have gotten. Every other action, including the
+    // fixed START/CLOCK start marker, still gets one — for a CP-mode PASS row in particular,
+    // this is a plain running count ("how many have passed since Start/Reset"), not a real
+    // timing split (CP's own checkpoint is never paired with a Time Mode device the way Bibs
+    // Mode's finish line is).
     val splitNumber: Int?,
     // Permanent, ascending, race-wide history position — see RaceEntity.nextLineNumber.
     // Assigned once at insert, immutable afterward, never reused even if this row is deleted.

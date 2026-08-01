@@ -27,6 +27,17 @@ enum class HistoryAction {
 
     // Shared — see this file's own doc for why START/STOP/RESET/UNDO are safe to share.
     START, STOP, RESET, UNDO,
+
+    // Shared — written once by every mode's own start (TimeModeRepository.startStopwatch/
+    // BibsModeRepository.startBibsMode/CpModeRepository.startCpMode), immediately before that
+    // mode's own real Start/Clock marker, which stays completely unchanged. A separate,
+    // dedicated marker rather than reusing START/CLOCK: it's purely a boundary flag for the
+    // racemaster web app to later recognise "a mode began here" once this race's history file
+    // reaches it, not something the operator is meant to see or interact with — so it's excluded
+    // from every live current-segment view/undo target (see EntryLogModeEngine/
+    // TimeModeRepository's own current-segment queries) and only ever shows up in Race History's
+    // full chronology.
+    MODE_START,
 }
 
 /** Actions that carry a real bib number and participate in range/duplicate checks. */

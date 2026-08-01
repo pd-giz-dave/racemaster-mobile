@@ -104,7 +104,15 @@ class RaceHistoryDetailViewModel(
                 bibNumber = it.bibNumber,
                 splitNumber = it.splitNumber,
                 lineNumber = it.lineNumber,
-                elapsedMillis = if (it.mode == HistoryMode.TIME) segmentStartedAt?.let { s -> it.timestampMillis - s } ?: 0L else 0L,
+                // A Time-mode MODE_START row always reads 0 — it's written in the same instant
+                // as (immediately before) the real Start marker that's about to set
+                // segmentStartedAt, so computing against whatever the PREVIOUS segment's own
+                // start was would show a stale, misleading number instead.
+                elapsedMillis = when {
+                    it.mode != HistoryMode.TIME -> 0L
+                    it.action == HistoryAction.MODE_START -> 0L
+                    else -> segmentStartedAt?.let { s -> it.timestampMillis - s } ?: 0L
+                },
                 note = it.note,
                 dupSplitRefs = dupRefs[it.id].orEmpty(),
                 timestampMillis = it.timestampMillis,

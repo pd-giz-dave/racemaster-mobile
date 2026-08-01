@@ -49,6 +49,10 @@ class CpModeRepository(
 
     suspend fun getLineNumbersForUuids(recordUuids: List<String>): List<Long> = engine.getLineNumbersForUuids(recordUuids)
 
+    // Immediately preceded by its own MODE_START boundary marker (see that action's own doc) —
+    // a second, separate row purely for the web app's later benefit, never shown on any live
+    // screen; the real Clock marker right after it is completely unaffected, exactly as it
+    // always was.
     suspend fun startCpMode(raceId: Long, startedAtMillis: Long = System.currentTimeMillis()) {
         db.withTransaction {
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
@@ -57,10 +61,23 @@ class CpModeRepository(
                 HistoryLineEntity(
                     raceId = raceId,
                     mode = HistoryMode.CP,
+                    action = HistoryAction.MODE_START,
+                    bibNumber = null,
+                    splitNumber = null,
+                    lineNumber = race.nextLineNumber,
+                    note = null,
+                    timestampMillis = startedAtMillis,
+                ),
+            )
+            raceDao.incrementLineNumber(raceId)
+            historyLineDao.insert(
+                HistoryLineEntity(
+                    raceId = raceId,
+                    mode = HistoryMode.CP,
                     action = HistoryAction.CLOCK,
                     bibNumber = null,
                     splitNumber = CLOCK_SPLIT_NUMBER,
-                    lineNumber = race.nextLineNumber,
+                    lineNumber = race.nextLineNumber + 1,
                     note = null,
                     timestampMillis = startedAtMillis,
                 ),

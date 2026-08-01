@@ -22,6 +22,7 @@ class HistoryActionLabelsTest {
         assertEquals("Stop", HistoryAction.STOP.displayName())
         assertEquals("Reset", HistoryAction.RESET.displayName())
         assertEquals("Undo", HistoryAction.UNDO.displayName())
+        assertEquals("Start", HistoryAction.MODE_START.displayName())
     }
 
     @Test

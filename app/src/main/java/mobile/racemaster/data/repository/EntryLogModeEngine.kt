@@ -21,8 +21,11 @@ const val CLOCK_SPLIT_NUMBER = 0
 
 // Root row kinds that must never be edited or undone through the generic path — Undo/Edit
 // guards below key off this set, keyed off the ROOT row (never the target/echo) so the guard
-// holds even if a bug elsewhere let an echo's displayed action drift from its root.
-private val NON_EDITABLE_ROOT_ACTIONS = setOf(HistoryAction.STOP, HistoryAction.RESET, HistoryAction.UNDO)
+// holds even if a bug elsewhere let an echo's displayed action drift from its root. MODE_START
+// is never reachable here anyway (see observeCurrentSegmentEntries/undoMostRecent's own
+// filtering — it's excluded from the live view entirely), but listed for the same
+// belt-and-braces reason the other markers are.
+private val NON_EDITABLE_ROOT_ACTIONS = setOf(HistoryAction.STOP, HistoryAction.RESET, HistoryAction.UNDO, HistoryAction.MODE_START)
 
 // RETIRE never crosses the timing point at all (Bibs or CP), so it gets no splitNumber and
 // doesn't consume the shared counter — see HistoryLineEntity.splitNumber's own doc. PASS, by
@@ -30,8 +33,11 @@ private val NON_EDITABLE_ROOT_ACTIONS = setOf(HistoryAction.STOP, HistoryAction.
 // the way Bibs Mode's finish line is, so a CP row's splitNumber never aligns with any real
 // timing split, CP Mode still wants it as a plain running count of "how many have passed since
 // Start/Reset" (see CpModeRepository's own doc) — exactly the same counter mechanism Bibs Mode
-// already used for FINISH, just repurposed here as a count rather than a split-time index.
-private val NO_SPLIT_ACTIONS = setOf(HistoryAction.RETIRE)
+// already used for FINISH, just repurposed here as a count rather than a split-time index. STOP
+// is here too (checked directly in stop() below, since it's never routed through recordEntry) —
+// like Clock, Stop/Reset markers exist for the web app's own later boundary detection, not as
+// something meant to occupy a slot in the operator-facing count.
+private val NO_SPLIT_ACTIONS = setOf(HistoryAction.RETIRE, HistoryAction.STOP)
 
 /** Per-mode wiring for the display-counter/stopped-at [RaceEntity] columns [EntryLogModeEngine]
  *  needs — one implementation per [HistoryMode] family (see `BibsModeRepository`/
@@ -79,10 +85,17 @@ internal class EntryLogModeEngine(
     // Only the current segment (since the most recent Reset, if any) — for the live screen.
     // Folded (see HistoryFold): Undo/Edit no longer delete/mutate rows, they append an
     // undo-marker or edit-echo instead, so the raw DAO rows must be collapsed down to "one row
-    // per still-visible logical entry" before the screen ever sees them.
+    // per still-visible logical entry" before the screen ever sees them. MODE_START rows are
+    // filtered out before folding — they're a boundary marker for Race History/the web app (see
+    // HistoryAction.MODE_START's own doc), never meant for the live screen at all.
     fun observeCurrentSegmentEntries(raceId: Long): Flow<List<HistoryLineEntity>> =
         historyLineDao.observeCurrentSegment(raceId, mode, HistoryAction.RESET).map {
-            foldLatestVisible(it, { e -> e.lineNumber }, { e -> e.refLineNumber }, { e -> e.action == HistoryAction.UNDO })
+            foldLatestVisible(
+                it.filter { e -> e.action != HistoryAction.MODE_START },
+                { e -> e.lineNumber },
+                { e -> e.refLineNumber },
+                { e -> e.action == HistoryAction.UNDO },
+            )
         }
 
     fun observeUnsyncedCount(raceId: Long): Flow<Int> = historyLineDao.observeUnsyncedCountForRace(raceId, mode)
@@ -180,7 +193,10 @@ internal class EntryLogModeEngine(
     // never the target's, for the same robustness reason.
     suspend fun undoMostRecent(raceId: Long) {
         db.withTransaction {
+            // MODE_START excluded, same as observeCurrentSegmentEntries — it must never become
+            // an undo target (the operator can't even see it to know it's there).
             val raw = historyLineDao.getCurrentSegmentSnapshot(raceId, mode, HistoryAction.RESET)
+                .filter { it.action != HistoryAction.MODE_START }
             val folded = foldLatestVisible(raw, { e -> e.lineNumber }, { e -> e.refLineNumber }, { e -> e.action == HistoryAction.UNDO })
             val target = folded.firstOrNull() ?: return@withTransaction
             val rootLineNumber = target.refLineNumber ?: target.lineNumber
@@ -209,19 +225,21 @@ internal class EntryLogModeEngine(
             if (root.action == HistoryAction.STOP) {
                 columns.clearStoppedAt(raceId)
             }
-            // Neither RETIRE nor PASS ever consumed the counter in the first place (see
-            // recordEntry/NO_SPLIT_ACTIONS), so undoing one must not decrement it either.
+            // Neither RETIRE nor STOP ever consumed the counter in the first place (see
+            // recordEntry/stop()/NO_SPLIT_ACTIONS), so undoing one must not decrement it either.
             if (root.action !in NO_SPLIT_ACTIONS) {
                 columns.decrementCounter(raceId)
             }
         }
     }
 
+    // Stop is a boundary marker for the web app's own later segmentation, not a real logged
+    // entry — like a RETIRE row, it gets no splitNumber and doesn't consume the display counter
+    // (see NO_SPLIT_ACTIONS' own doc), so the very next real entry (after a Reset) still gets
+    // the number Stop would otherwise have taken.
     suspend fun stop(raceId: Long, stoppedAtMillis: Long = System.currentTimeMillis()) {
         db.withTransaction {
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
-            val splitNumber = columns.nextSplitOf(race)
-            columns.incrementCounter(raceId)
             columns.setStoppedAt(raceId, stoppedAtMillis)
             historyLineDao.insert(
                 HistoryLineEntity(
@@ -229,7 +247,7 @@ internal class EntryLogModeEngine(
                     mode = mode,
                     action = HistoryAction.STOP,
                     bibNumber = null,
-                    splitNumber = splitNumber,
+                    splitNumber = null,
                     lineNumber = race.nextLineNumber,
                     note = null,
                     timestampMillis = stoppedAtMillis,
@@ -239,11 +257,12 @@ internal class EntryLogModeEngine(
         }
     }
 
-    // Inserts a Reset marker (consuming the current display-counter value + a permanent line
-    // number, exactly like Stop already does) instead of deleting anything — every prior
-    // entry/marker for this race stays in the table untouched, only now excluded from the live
-    // screen's current-segment view. Still resets the display counter/stopped state to their
-    // pre-start defaults via columns.resetCounters, same as before.
+    // Inserts a Reset marker (consuming a permanent line number, same as every other row, but
+    // — like Stop above — no splitNumber, since it's a boundary marker for the web app's own
+    // later segmentation rather than a real logged entry) instead of deleting anything — every
+    // prior entry/marker for this race stays in the table untouched, only now excluded from the
+    // live screen's current-segment view. Still resets the display counter/stopped state to
+    // their pre-start defaults via columns.resetCounters, same as before.
     suspend fun reset(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()) {
         db.withTransaction {
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
@@ -253,7 +272,7 @@ internal class EntryLogModeEngine(
                     mode = mode,
                     action = HistoryAction.RESET,
                     bibNumber = null,
-                    splitNumber = columns.nextSplitOf(race),
+                    splitNumber = null,
                     lineNumber = race.nextLineNumber,
                     note = null,
                     timestampMillis = resetAtMillis,

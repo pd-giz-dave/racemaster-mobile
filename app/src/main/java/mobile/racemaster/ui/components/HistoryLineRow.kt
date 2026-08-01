@@ -56,6 +56,10 @@ fun HistoryLineRow(
     dupSplitRefs: List<Int?> = emptyList(),
     editedFromLineNumber: Long? = null,
     isUndoMarker: Boolean = false,
+    // Verbatim text for the split column in place of formatSplitColumn(splitNumber) — used only
+    // for the MODE_START boundary-marker row (see HistoryAction.MODE_START's own doc), whose
+    // split slot names which mode started rather than showing a split number it never had.
+    splitLabelOverride: String? = null,
 ) {
     val rowColor = when (syncState) {
         LineSyncState.SYNCED -> SyncedGreen
@@ -74,7 +78,12 @@ fun HistoryLineRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(formatLineColumn(lineNumber), style = MaterialTheme.typography.bodySmall, color = rowColor, modifier = Modifier.width(40.dp))
-            Text(formatSplitColumn(splitNumber), style = MaterialTheme.typography.bodySmall, color = rowColor, modifier = Modifier.width(40.dp))
+            Text(
+                splitLabelOverride ?: formatSplitColumn(splitNumber),
+                style = MaterialTheme.typography.bodySmall,
+                color = rowColor,
+                modifier = Modifier.width(40.dp),
+            )
             Text(actionLabel, style = MaterialTheme.typography.bodyMedium, color = rowColor, modifier = Modifier.width(64.dp))
             Text(
                 // elapsedMillis == null is exactly "this is a Bibs-family row" (both callers
@@ -130,6 +139,8 @@ data class HistoryLineDisplay(
     val dupSplitRefs: List<Int?> = emptyList(),
     val isUndoMarker: Boolean = false,
     val editedFromLineNumber: Long? = null,
+    // See HistoryLineRow's own splitLabelOverride param doc.
+    val splitLabelOverride: String? = null,
 )
 
 /** Renders [lines] via [HistoryLineRow], or [emptyMessage] if there are none — the one shared
@@ -159,6 +170,7 @@ fun HistoryLinesList(
                     dupSplitRefs = line.dupSplitRefs,
                     editedFromLineNumber = line.editedFromLineNumber,
                     isUndoMarker = line.isUndoMarker,
+                    splitLabelOverride = line.splitLabelOverride,
                 )
             }
         }

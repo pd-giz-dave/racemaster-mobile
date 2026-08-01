@@ -11,6 +11,14 @@ package mobile.racemaster.data.db.entity
 // see EntryLogModeEngine, which both BIBS and CP repositories are built on.
 enum class HistoryMode { TIME, BIBS, CP }
 
+// Used only by Race History's own MODE_START boundary-marker row (see HistoryAction.MODE_START's
+// own doc) to name which mode started, in place of a split number it never had.
+fun HistoryMode.displayName(): String = when (this) {
+    HistoryMode.TIME -> "Time"
+    HistoryMode.BIBS -> "Bibs"
+    HistoryMode.CP -> "CP"
+}
+
 // Every history line is now shown in one rationalized column format regardless of mode — a
 // line no longer needs a mode-prefixed label (the old "B003"/"T012") to identify it, since
 // which of a row's bib/time columns is populated already says which mode it belongs to. In
@@ -23,7 +31,7 @@ enum class HistoryMode { TIME, BIBS, CP }
 fun formatLineColumn(lineNumber: Long): String = "L${lineNumber.toString().padStart(3, '0')}"
 
 /** Column form — always 3+ digits, overflowing rather than truncating past 999 (e.g. "S1000").
- *  Null (a RETIRE row, or a CP-mode PASS row — see HistoryLineEntity.splitNumber's own doc)
+ *  Null (a RETIRE row, or a Stop/Reset marker — see HistoryLineEntity.splitNumber's own doc)
  *  shows as "S–", never a fake/reused number. */
 fun formatSplitColumn(splitNumber: Int?): String = "S${splitNumber?.toString()?.padStart(3, '0') ?: "–"}"
 
@@ -31,5 +39,5 @@ fun formatSplitColumn(splitNumber: Int?): String = "S${splitNumber?.toString()?.
 fun formatLineRef(lineNumber: Long): String = "L$lineNumber"
 
 /** Inline-prose form — a plain, unpadded number ("S1", not "S001"). Null (a RETIRE row, or a
- *  CP-mode PASS row) shows as "S–", never a fake/reused number. */
+ *  Stop/Reset marker) shows as "S–", never a fake/reused number. */
 fun formatSplitRef(splitNumber: Int?): String = "S${splitNumber ?: "–"}"

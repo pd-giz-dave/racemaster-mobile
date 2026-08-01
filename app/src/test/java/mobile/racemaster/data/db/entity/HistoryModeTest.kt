@@ -43,4 +43,11 @@ class HistoryModeTest {
         assertEquals("S–", formatSplitRef(null))
         assertEquals("S–", formatSplitColumn(null))
     }
+
+    @Test
+    fun everyModeHasADisplayName() {
+        assertEquals("Time", HistoryMode.TIME.displayName())
+        assertEquals("Bibs", HistoryMode.BIBS.displayName())
+        assertEquals("CP", HistoryMode.CP.displayName())
+    }
 }

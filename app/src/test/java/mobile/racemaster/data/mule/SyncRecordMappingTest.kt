@@ -267,6 +267,15 @@ class SyncRecordMappingTest {
     }
 
     @Test
+    fun modeStartRoundTripsThroughTheWireOnItsOwnDistinctValue() {
+        // Deliberately not "Start" on the wire — see toServerAction's own doc for why the web
+        // app needs to tell this boundary marker apart from a mode's own real Start/Clock row.
+        val record = line(HistoryMode.BIBS, HistoryAction.MODE_START, 0, 0L).toSyncRecord(null)
+        assertEquals("ModeStart", record.action)
+        assertEquals(HistoryAction.MODE_START, record.toHistoryAction())
+    }
+
+    @Test
     fun roundTripsEveryBibsModeActionThroughTheWireAndBack() {
         assertEquals(HistoryAction.FINISH, bibEntry(101, HistoryAction.FINISH, 1, 0L).toSyncRecord(null).toHistoryAction())
         assertEquals(HistoryAction.START, bibEntry(101, HistoryAction.START, 1, 0L).toSyncRecord(null).toHistoryAction())

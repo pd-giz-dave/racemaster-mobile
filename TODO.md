@@ -39,13 +39,6 @@ the time events only become meaningful when they are matched up to the correspon
 
 - [ ] on the initial "Start" screen, split the "START" button into 2 - one "Start Juniors" the other "Start Seniors",
       selecting either starts the mode and adds a line tagged as either "Juniors" or "Seniors" as appropriate, ditto in the history
-- [x] CP Mode now writes a "start line" (a Clock marker, same as Bibs Mode's own) when started. The entry list shows a
-      sequence number, not the permanent line number — it counts up from 1 since Start/Reset, giving the operator a
-      running count of how many have passed their checkpoint since then (the same mechanism Bibs Mode's own split
-      number already used; a raw line number would carry no such meaning, since it's shared/global across all modes)
-- [ ] add a time-of-day column between the action column and the note column
-- [x] the location field must be of the form CP#-name when creating/editing a race from CP mode (# is a number from 1
-      upwards, the -name suffix is optional)
 
 CP mode is just a safety thing to record where on a course a runner is.
 It also provides a rough time for recording split times.
