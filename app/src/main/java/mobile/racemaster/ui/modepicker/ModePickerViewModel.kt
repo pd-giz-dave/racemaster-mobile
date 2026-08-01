@@ -10,6 +10,7 @@ import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
+import mobile.racemaster.data.repository.isRaceActive
 import mobile.racemaster.data.repository.isRaceInProgress
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
@@ -33,6 +34,7 @@ data class ActiveRaceStatus(
     val splitCount: Int,
     val bibCount: Int,
     val cpCount: Int,
+    val isStopped: Boolean,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -51,8 +53,9 @@ class ModePickerViewModel(
     val deviceName: StateFlow<String?> = settingsRepository.deviceName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    // Surfaces the in-progress race (if any) so the picker can tell the operator what's
-    // still open and which mode to return to, rather than letting them lose track of it.
+    // Surfaces the active race (if any) so the picker can tell the operator what's still
+    // open and which mode to return to, rather than letting them lose track of it. Stays
+    // visible once Stopped — only Reset (see isRaceActive) clears it.
     val activeRaceStatus: StateFlow<ActiveRaceStatus?> = settingsRepository.activeRaceId
         .flatMapLatest { raceId ->
             if (raceId == null) {
@@ -66,6 +69,12 @@ class ModePickerViewModel(
                     settingsRepository.appMode,
                 ) { race, splits, bibEntries, cpEntries, mode ->
                     if (race == null) return@combine null
+                    val active = isRaceActive(
+                        race.timeModeStartedAtMillis,
+                        race.bibsModeStartedAtMillis,
+                        race.cpModeStartedAtMillis,
+                    )
+                    if (!active) return@combine null
                     val inProgress = isRaceInProgress(
                         race.timeModeStartedAtMillis,
                         race.timeModeStoppedAtMillis,
@@ -74,13 +83,13 @@ class ModePickerViewModel(
                         race.cpModeStartedAtMillis,
                         race.cpModeStoppedAtMillis,
                     )
-                    if (!inProgress) return@combine null
                     ActiveRaceStatus(
                         raceLabel = race.label,
                         currentModeLabel = mode.displayName(),
                         splitCount = splits.count { it.splitNumber != 0 },
                         bibCount = bibEntries.count { it.action != HistoryAction.CLOCK },
                         cpCount = cpEntries.size,
+                        isStopped = !inProgress,
                     )
                 }
             }

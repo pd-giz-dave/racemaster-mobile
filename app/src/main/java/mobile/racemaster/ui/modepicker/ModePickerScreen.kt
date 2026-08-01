@@ -149,7 +149,8 @@ private fun ActiveRaceStatusCard(status: ActiveRaceStatus, modifier: Modifier = 
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Text("Race in progress: ${status.raceLabel}", style = MaterialTheme.typography.bodyMedium)
+        val statusLabel = if (status.isStopped) "Race stopped" else "Race in progress"
+        Text("$statusLabel: ${status.raceLabel}", style = MaterialTheme.typography.bodyMedium)
         if (status.splitCount > 0) {
             Text(
                 "${status.splitCount} split${if (status.splitCount == 1) "" else "s"} recorded",
@@ -168,10 +169,12 @@ private fun ActiveRaceStatusCard(status: ActiveRaceStatus, modifier: Modifier = 
                 style = MaterialTheme.typography.bodySmall,
             )
         }
-        Text(
-            "You can continue by going back to ${status.currentModeLabel}.",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        val continueText = if (status.isStopped) {
+            "Go back to ${status.currentModeLabel} to review or reset it."
+        } else {
+            "You can continue by going back to ${status.currentModeLabel}."
+        }
+        Text(continueText, style = MaterialTheme.typography.bodySmall)
     }
 }
 
