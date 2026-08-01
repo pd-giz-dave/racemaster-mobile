@@ -21,13 +21,13 @@ import mobile.racemaster.ui.theme.SyncedGreen
 import mobile.racemaster.ui.theme.UnsyncedRed
 import mobile.racemaster.util.withClickSound
 
-/** One line per Bibs Mode entry — split number, bib, type, note — the live Bibs Mode screen's own
- *  current-segment view (Race History uses the separate, more detailed HistoryLineRow
- *  instead, since it needs to show every mode/segment together). Sync state is shown by
- *  coloring the row (red until relayed to a mule, orange until that reaches a genuine sink,
- *  green once it does — see LineSyncState) rather than a separate status line, keeping rows
- *  compact enough that more fit on screen at once. [onClick] is left null in read-only
- *  contexts — the row just isn't clickable there. */
+/** One line per Bibs/CP Mode entry — split number, bib, type, note — the live screen's own
+ *  current-segment view (Race History uses the separate, more detailed HistoryLineRow instead,
+ *  since it needs to show every mode/segment together). Sync state is shown by coloring the row
+ *  (red until relayed to a mule, orange until that reaches a genuine sink, green once it does —
+ *  see LineSyncState) rather than a separate status line, keeping rows compact enough that more
+ *  fit on screen at once. [onClick] is left null in read-only contexts — the row just isn't
+ *  clickable there. */
 @Composable
 fun BibEntryRow(
     splitNumber: Int?,

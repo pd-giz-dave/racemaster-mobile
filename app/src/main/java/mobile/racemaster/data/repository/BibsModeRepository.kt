@@ -40,17 +40,17 @@ class BibsModeRepository(
 
     suspend fun getLineNumbersForUuids(recordUuids: List<String>): List<Long> = engine.getLineNumbersForUuids(recordUuids)
 
-    // The Clock marker is a fixed split #0 outside the normal 1,2,3... sequence, so it doesn't
-    // consume the display counter — it still consumes a permanent line number, same as every
-    // other row. Deliberately a separate, explicit action rather than something race creation
-    // (or a mode switch onto an already-active race — see ModePickerViewModel) does
-    // automatically: this is what makes opening Bibs Mode side-effect-free to just look at,
-    // exactly like Time Mode's own Start button — nothing is written until the operator
-    // actually presses Start. (CP Mode's own start, by contrast, writes no row at all — see
-    // CpModeRepository.startCpMode.) Also sets RaceEntity.bibsModeStartedAtMillis, exactly like
-    // Time/CP's own start methods — the Clock row above is still written (it's a real logged
-    // event, kept for the permanent record), but is no longer what "started" is derived from;
-    // see that field's own doc for why.
+    // The Clock marker is a fixed split #0 outside the normal 1,2,3... sequence (see
+    // CLOCK_SPLIT_NUMBER), so it doesn't consume the display counter — it still consumes a
+    // permanent line number, same as every other row. Deliberately a separate, explicit action
+    // rather than something race creation (or a mode switch onto an already-active race — see
+    // ModePickerViewModel) does automatically: this is what makes opening Bibs Mode
+    // side-effect-free to just look at, exactly like Time Mode's own Start button — nothing is
+    // written until the operator actually presses Start. (CP Mode's own start writes the same
+    // kind of Clock marker — see CpModeRepository.startCpMode.) Also sets
+    // RaceEntity.bibsModeStartedAtMillis, exactly like Time/CP's own start methods — the Clock
+    // row above is still written (it's a real logged event, kept for the permanent record), but
+    // is no longer what "started" is derived from; see that field's own doc for why.
     suspend fun startBibsMode(raceId: Long, startedAtMillis: Long = System.currentTimeMillis()) {
         db.withTransaction {
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
@@ -83,8 +83,4 @@ class BibsModeRepository(
     suspend fun stopBibsMode(raceId: Long, stoppedAtMillis: Long = System.currentTimeMillis()) = engine.stop(raceId, stoppedAtMillis)
 
     suspend fun resetBibsMode(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()) = engine.reset(raceId, resetAtMillis)
-
-    companion object {
-        const val CLOCK_SPLIT_NUMBER = 0
-    }
 }

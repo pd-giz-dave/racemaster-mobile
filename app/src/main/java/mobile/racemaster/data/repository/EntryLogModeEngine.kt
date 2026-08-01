@@ -13,19 +13,25 @@ import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.RaceEntity
 
+// The Clock marker's fixed split number, outside the normal 1,2,3... sequence — shared by both
+// Bibs' and CP's own start (see BibsModeRepository.startBibsMode/CpModeRepository.startCpMode),
+// so it doesn't consume either mode's own display counter (see NO_SPLIT_ACTIONS' own doc for the
+// same idea applied to RETIRE/PASS).
+const val CLOCK_SPLIT_NUMBER = 0
+
 // Root row kinds that must never be edited or undone through the generic path — Undo/Edit
 // guards below key off this set, keyed off the ROOT row (never the target/echo) so the guard
 // holds even if a bug elsewhere let an echo's displayed action drift from its root.
 private val NON_EDITABLE_ROOT_ACTIONS = setOf(HistoryAction.STOP, HistoryAction.RESET, HistoryAction.UNDO)
 
-// Actions with no corresponding Time Mode split to align with, so they neither get a
-// splitNumber nor consume the shared counter — see HistoryLineEntity.splitNumber's own doc.
-// RETIRE never crosses the timing point at all (Bibs or CP). PASS joins it here for the same
-// underlying reason even though it IS a real checkpoint crossing: unlike Bibs Mode's FINISH
-// (paired with a Time Mode device running at the very same finish line — see README), CP
-// Mode's checkpoints are never paired with a Time Mode device of their own, so a CP row's
-// splitNumber never actually aligned with anything to begin with.
-private val NO_SPLIT_ACTIONS = setOf(HistoryAction.RETIRE, HistoryAction.PASS)
+// RETIRE never crosses the timing point at all (Bibs or CP), so it gets no splitNumber and
+// doesn't consume the shared counter — see HistoryLineEntity.splitNumber's own doc. PASS, by
+// contrast, DOES get one: even though a CP checkpoint is never paired with a Time Mode device
+// the way Bibs Mode's finish line is, so a CP row's splitNumber never aligns with any real
+// timing split, CP Mode still wants it as a plain running count of "how many have passed since
+// Start/Reset" (see CpModeRepository's own doc) — exactly the same counter mechanism Bibs Mode
+// already used for FINISH, just repurposed here as a count rather than a split-time index.
+private val NO_SPLIT_ACTIONS = setOf(HistoryAction.RETIRE)
 
 /** Per-mode wiring for the display-counter/stopped-at [RaceEntity] columns [EntryLogModeEngine]
  *  needs — one implementation per [HistoryMode] family (see `BibsModeRepository`/
@@ -53,13 +59,15 @@ interface ModeProgressColumns {
  * duplicated, so a third (or later, fourth) segmented-entry mode never needs its own hand-copied
  * twin of this logic.
  *
- * Deliberately does **not** include a "start" method: Bibs Mode starts by inserting a fixed
- * Clock marker row (a whole extra concept — a permanent, non-undoable split #0 outside the
- * normal sequence); CP Mode starts by setting a plain [RaceEntity.cpModeStartedAtMillis]
- * timestamp, with no marker row at all. These are different enough operations that forcing them
- * into one shared method wouldn't actually remove duplication, just hide two genuinely different
- * things behind one signature — each mode's own thin repository keeps its own trivial start
- * method instead (`BibsModeRepository.startBibsMode`/`CpModeRepository.startCpMode`).
+ * Deliberately does **not** include a "start" method: both Bibs and CP Mode start by inserting
+ * a fixed Clock marker row (a permanent, non-undoable split #0 outside the normal sequence,
+ * consuming a real line number but not the display counter — see [CLOCK_SPLIT_NUMBER]) *and*
+ * setting their own [RaceEntity] started-at timestamp, but each writes to a different pair of
+ * columns ([ModeProgressColumns] is only wired to one mode's own display counter, not its
+ * started-at field) — different enough that forcing this into one shared method wouldn't
+ * actually remove duplication, just hide it behind one signature. Each mode's own thin
+ * repository keeps its own trivial start method instead (`BibsModeRepository.startBibsMode`/
+ * `CpModeRepository.startCpMode`).
  */
 internal class EntryLogModeEngine(
     private val mode: HistoryMode,
@@ -131,9 +139,9 @@ internal class EntryLogModeEngine(
     // the permanent history. refLineNumber is flattened to the ROOT row (never an intermediate
     // echo) so reconstructing "what's visible" only ever needs one level of grouping (see
     // HistoryFold). Refuses to edit a row whose ROOT is a Stop/Reset/Undo marker, and pins the
-    // action to CLOCK if the root is a Clock row — defense-in-depth so a Bibs Clock row's
-    // note-only edit path can never be defeated by a direct updateEntry call with a different
-    // action; this branch is simply never reachable for a CP row, which never has a Clock root.
+    // action to CLOCK if the root is a Clock row — defense-in-depth so either mode's own
+    // Clock row's note-only edit path (see EditEntryScreen's own CLOCK branch) can never be
+    // defeated by a direct updateEntry call with a different action.
     suspend fun updateEntry(id: Long, bibNumber: Int?, action: HistoryAction, note: String?) {
         db.withTransaction {
             val existing = historyLineDao.getById(id) ?: return@withTransaction
@@ -177,8 +185,8 @@ internal class EntryLogModeEngine(
             val target = folded.firstOrNull() ?: return@withTransaction
             val rootLineNumber = target.refLineNumber ?: target.lineNumber
             val root = raw.first { it.lineNumber == rootLineNumber }
-            // Never reachable for a CP row (CP never writes a Clock row) — this guard only ever
-            // actually fires for Bibs Mode's own fixed split #0 marker.
+            // Neither mode's own Start-time Clock marker can ever be undone — it's the fixed
+            // split #0 anchor everything else in the segment is relative to.
             if (root.action == HistoryAction.CLOCK) return@withTransaction
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
             historyLineDao.insert(

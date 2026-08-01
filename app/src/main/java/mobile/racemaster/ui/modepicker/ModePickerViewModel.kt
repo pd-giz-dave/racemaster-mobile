@@ -88,7 +88,7 @@ class ModePickerViewModel(
                         currentModeLabel = mode.displayName(),
                         splitCount = splits.count { it.splitNumber != 0 },
                         bibCount = bibEntries.count { it.action != HistoryAction.CLOCK },
-                        cpCount = cpEntries.size,
+                        cpCount = cpEntries.count { it.action != HistoryAction.CLOCK },
                         isStopped = !inProgress,
                     )
                 }

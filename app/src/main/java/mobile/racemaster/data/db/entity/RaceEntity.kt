@@ -46,10 +46,12 @@ data class RaceEntity(
     val bibsModeStoppedAtMillis: Long? = null,
     val cpModeNextSplit: Int = 1,
     val cpModeStoppedAtMillis: Long? = null,
-    // Time Mode's own timeModeStartedAtMillis, mirrored here since CP has no marker row of its
-    // own to derive "started" from at all (unlike Bibs' Clock row). This is what lets undoing
-    // CP's very first Pass/Retire leave the screen still showing the keypad rather than
-    // reverting to a pre-Start state.
+    // Time/Bibs' own started-at fields' own sibling — CP also writes a Clock marker row on
+    // Start (see CpModeRepository.startCpMode), but exactly like Bibs' own row, its mere
+    // presence is deliberately not what "started" is derived from (see
+    // bibsModeStartedAtMillis's own doc for why). This is what lets undoing CP's very first
+    // Pass/Retire leave the screen still showing the keypad rather than reverting to a
+    // pre-Start state.
     val cpModeStartedAtMillis: Long? = null,
     // Which AppMode (TIME/BIBS/MULE) created this race — carried metadata for the sync
     // payload, not used for any local query logic.

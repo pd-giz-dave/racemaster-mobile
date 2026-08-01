@@ -82,13 +82,17 @@ class EditEntryViewModel(
         return null
     }
 
-    // Bibs-only in practice — CP never writes a Clock row, so EditEntryScreen's CLOCK branch
-    // (the only caller of this) is simply never reached for a CP entry. Returns an error
-    // message on a bad parse (mirroring BibsModeViewModel's old updateClockTime validation) or
-    // null on success.
+    // Both modes now write a Clock row on Start (see BibsModeRepository.startBibsMode/
+    // CpModeRepository.startCpMode), so EditEntryScreen's CLOCK branch reaches this for either
+    // one — routed by [mode], same as saveEntry above. Returns an error message on a bad parse
+    // (mirroring BibsModeViewModel's old updateClockTime validation) or null on success.
     suspend fun saveClockTime(raw: String): String? {
         val canonical = parseMinutesSeconds(raw) ?: return "Enter a time as minutes and seconds, e.g. 5:30."
-        bibsModeRepository.updateEntry(entryId, bibNumber = null, action = HistoryAction.CLOCK, note = canonical)
+        if (mode == AppMode.BIBS) {
+            bibsModeRepository.updateEntry(entryId, bibNumber = null, action = HistoryAction.CLOCK, note = canonical)
+        } else {
+            cpModeRepository.updateEntry(entryId, bibNumber = null, action = HistoryAction.CLOCK, note = canonical)
+        }
         return null
     }
 

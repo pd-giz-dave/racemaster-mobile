@@ -113,9 +113,10 @@ fun EditEntryScreen(
                 return@Column
             }
 
-            // A Clock row (Bibs-only — CP never has one) is a time-only note edit, no
-            // type/bib to change, same distinct minimal form the old inline EditEntryPanel
-            // gave it.
+            // A Clock row (written by either mode's own start — see
+            // BibsModeRepository.startBibsMode/CpModeRepository.startCpMode) is a time-only
+            // note edit, no type/bib to change, same distinct minimal form the old inline
+            // EditEntryPanel gave it.
             if (entry.action == HistoryAction.CLOCK) {
                 OutlinedTextField(
                     value = noteText,

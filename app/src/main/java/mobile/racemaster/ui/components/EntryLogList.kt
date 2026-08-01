@@ -13,10 +13,10 @@ import mobile.racemaster.data.repository.LineSyncState
 import mobile.racemaster.ui.bibsmode.displayName
 
 /** One live-screen entry, shared between Bibs Mode and CP Mode's near-identical current-segment
- *  list — both modes' entries have the exact same shape (a split number, an optional bib
- *  number, an action type, an optional note, duplicate flags, a range warning, and sync
- *  state), so this is reused as-is rather than each mode declaring its own
- *  structurally-identical twin. */
+ *  list — both modes' entries have the exact same shape (a split number acting as a running
+ *  count since Start/Reset, an optional bib number, an action type, an optional note, duplicate
+ *  flags, a range warning, and sync state), so this is reused as-is rather than each mode
+ *  declaring its own structurally-identical twin. */
 data class EntryLogUi(
     val id: Long,
     val bibNumber: Int?,
@@ -34,9 +34,9 @@ data class EntryLogUi(
  *  newest entry (list index 0, since entries are already newest-first) whenever one is added.
  *  Stop/Reset marker rows are never clickable/editable — retyping either one's own type/note
  *  would break every query keyed off it (the repository also refuses this as a backstop, but
- *  the UI shouldn't offer it at all). A Clock row (Bibs Mode only — CP never has one) stays
- *  clickable via its own dedicated time-only edit form (see
- *  [mobile.racemaster.ui.editentry.EditEntryScreen]). */
+ *  the UI shouldn't offer it at all). A Clock row (written by both modes' own start — see
+ *  BibsModeRepository.startBibsMode/CpModeRepository.startCpMode) stays clickable via its own
+ *  dedicated time-only edit form (see [mobile.racemaster.ui.editentry.EditEntryScreen]). */
 @Composable
 fun EntryLogList(
     entries: List<EntryLogUi>,

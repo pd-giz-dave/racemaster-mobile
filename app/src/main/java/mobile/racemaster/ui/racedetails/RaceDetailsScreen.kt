@@ -44,6 +44,7 @@ import kotlinx.coroutines.launch
 import mobile.racemaster.data.repository.MAX_BIB_NUMBER
 import mobile.racemaster.data.repository.MIN_BIB_NUMBER
 import mobile.racemaster.data.repository.isModeStarted
+import mobile.racemaster.data.repository.isValidCpLocation
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.ui.components.HistoryTextField
@@ -145,7 +146,8 @@ fun RaceDetailsScreen(
     val rangeEnd = if (start != null && count != null) start + count - 1 else null
     val countFieldsValid = !showRunnerFields || !countFieldEnabled ||
         (start != null && start in MIN_BIB_NUMBER..MAX_BIB_NUMBER && count != null && count >= 1 && rangeEnd != null && rangeEnd <= MAX_BIB_NUMBER)
-    val canSave = prefilled && !isSaving && name.isNotBlank() && course.isNotBlank() && location.isNotBlank() && countFieldsValid
+    val locationValid = mode != AppMode.CP || isValidCpLocation(location)
+    val canSave = prefilled && !isSaving && name.isNotBlank() && course.isNotBlank() && location.isNotBlank() && countFieldsValid && locationValid
 
     Scaffold(
         topBar = {
@@ -215,7 +217,7 @@ fun RaceDetailsScreen(
             HistoryTextField(
                 value = location,
                 onValueChange = { location = it },
-                label = "Location (e.g. Finish, CP1, CP2, et al)",
+                label = if (mode == AppMode.CP) "Location (e.g. CP1, CP2-Bridge)" else "Location (e.g. Finish, CP1, CP2, et al)",
                 // Same independent-field behavior as Race name/Course above — picking a
                 // previous location only ever fills this field.
                 history = locationHistory,
@@ -226,6 +228,13 @@ fun RaceDetailsScreen(
                 keyboardActions = if (showRunnerFields) nextFieldAction else KeyboardActions(onDone = { focusManager.clearFocus() }),
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (mode == AppMode.CP && location.isNotBlank() && !locationValid) {
+                Text(
+                    "CP Mode's location must look like CP1, CP2-Bridge, etc. — \"CP\" followed by a number from 1 upwards, with an optional -name.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             if (isStarted) {
                 Text(
                     "Once the race has started, only Number of runners can still be changed — " +
