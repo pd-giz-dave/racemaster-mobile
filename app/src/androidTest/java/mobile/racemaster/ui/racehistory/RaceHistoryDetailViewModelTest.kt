@@ -76,18 +76,22 @@ class RaceHistoryDetailViewModelTest {
         // A race is not required to stick to one mode — nothing prevents switching AppMode
         // mid-race without starting a new one (see plan's mixed-mode design note). Race
         // History must show one true chronology by lineNumber, not two separate lists.
+        // startStopwatch also writes its own MODE_START boundary marker immediately before the
+        // real Start row (see HistoryAction.MODE_START's own doc), so this race ends up with 5
+        // lines: Bibs FINISH, Time MODE_START, Time Start, Time Split, Bibs FINISH.
         bibsModeRepository.recordEntry(raceId, HistoryAction.FINISH, bibNumber = 101, note = null)
         timeModeRepository.startStopwatch(raceId, startedAtMillis = 1_000L)
         timeModeRepository.recordSplit(raceId, timestampMillis = 2_000L)
         bibsModeRepository.recordEntry(raceId, HistoryAction.FINISH, bibNumber = 102, note = null)
 
-        val state = viewModel().uiState.first { it.lines.size == 4 }
+        val state = viewModel().uiState.first { it.lines.size == 5 }
 
-        assertEquals(listOf(1L, 2L, 3L, 4L), state.lines.map { it.lineNumber })
+        assertEquals(listOf(1L, 2L, 3L, 4L, 5L), state.lines.map { it.lineNumber })
         assertEquals(
-            listOf(HistoryMode.BIBS, HistoryMode.TIME, HistoryMode.TIME, HistoryMode.BIBS),
+            listOf(HistoryMode.BIBS, HistoryMode.TIME, HistoryMode.TIME, HistoryMode.TIME, HistoryMode.BIBS),
             state.lines.map { it.mode },
         )
+        assertEquals(HistoryAction.MODE_START, state.lines[1].action)
     }
 
     @Test
@@ -96,12 +100,17 @@ class RaceHistoryDetailViewModelTest {
         timeModeRepository.startStopwatch(raceId, startedAtMillis = 1_000L)
         timeModeRepository.recordSplit(raceId, timestampMillis = 5_500L)
 
-        val state = viewModel().uiState.first { it.lines.size == 3 }
+        // Bibs FINISH + Time's own MODE_START/Start pair + the Split = 4 lines.
+        val state = viewModel().uiState.first { it.lines.size == 4 }
 
         val timeRow = state.lines.single { it.mode == HistoryMode.TIME && it.action == HistoryAction.SPLIT }
         assertEquals(4_500L, timeRow.elapsedMillis)
         val bibsRow = state.lines.single { it.mode == HistoryMode.BIBS }
         assertEquals(0L, bibsRow.elapsedMillis)
+        // The Time MODE_START row always reads 0 too — it shares the real Start marker's own
+        // instant, not whatever the previous segment's own start was (there isn't one here).
+        val modeStartRow = state.lines.single { it.action == HistoryAction.MODE_START }
+        assertEquals(0L, modeStartRow.elapsedMillis)
     }
 
     @Test
@@ -110,14 +119,15 @@ class RaceHistoryDetailViewModelTest {
         // flagged against an earlier, already-reset-away segment — even with Time rows
         // interleaved in between. resetBibsMode inserts just a RESET marker (no fresh CLOCK
         // row — Bibs Mode's own Start button is what begins the new segment, see
-        // BibsModeRepository.resetBibsMode's own doc), so this race ends up with 4 lines
-        // total: Bibs FINISH, Bibs RESET, Time's own START, Bibs FINISH.
+        // BibsModeRepository.resetBibsMode's own doc); Time's own startStopwatch inserts its
+        // own MODE_START boundary marker before its real Start row. So this race ends up with
+        // 5 lines total: Bibs FINISH, Bibs RESET, Time MODE_START, Time Start, Bibs FINISH.
         bibsModeRepository.recordEntry(raceId, HistoryAction.FINISH, bibNumber = 101, note = null)
         bibsModeRepository.resetBibsMode(raceId)
         timeModeRepository.startStopwatch(raceId, startedAtMillis = 1_000L)
         bibsModeRepository.recordEntry(raceId, HistoryAction.FINISH, bibNumber = 101, note = null)
 
-        val state = viewModel().uiState.first { it.lines.size == 4 }
+        val state = viewModel().uiState.first { it.lines.size == 5 }
 
         val bibRows = state.lines.filter { it.mode == HistoryMode.BIBS && it.action == HistoryAction.FINISH }
         assertEquals(2, bibRows.size)
@@ -131,10 +141,11 @@ class RaceHistoryDetailViewModelTest {
         timeModeRepository.recordSplit(raceId, timestampMillis = 2_000L)
         timeModeRepository.stopStopwatch(raceId, stoppedAtMillis = 3_000L)
 
-        val state = viewModel().uiState.first { it.lines.size == 3 }
+        // MODE_START + Start + Split + Stop = 4 lines, all Time.
+        val state = viewModel().uiState.first { it.lines.size == 4 }
 
-        assertEquals(listOf(HistoryMode.TIME, HistoryMode.TIME, HistoryMode.TIME), state.lines.map { it.mode })
-        assertEquals(listOf(1L, 2L, 3L), state.lines.map { it.lineNumber })
+        assertEquals(listOf(HistoryMode.TIME, HistoryMode.TIME, HistoryMode.TIME, HistoryMode.TIME), state.lines.map { it.mode })
+        assertEquals(listOf(1L, 2L, 3L, 4L), state.lines.map { it.lineNumber })
     }
 
     @Test

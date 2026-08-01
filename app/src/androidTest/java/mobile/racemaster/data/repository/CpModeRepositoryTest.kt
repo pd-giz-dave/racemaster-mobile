@@ -19,9 +19,8 @@ import org.junit.runner.RunWith
 
 // CP Mode's repository is built on the same EntryLogModeEngine as Bibs Mode's — most of these
 // mirror BibsModeRepositoryTest exactly (proving the shared engine behaves identically once
-// wired to CP's own columns/mode), with the Clock-marker-specific cases dropped (CP never
-// writes one, unlike Bibs' own Clock row — see RaceEntity.bibsModeStartedAtMillis's own doc for
-// why that's a separate concern from the started-at-timestamp tracking both modes now share).
+// wired to CP's own columns/mode). CP's own startCpMode now writes the same Clock-marker (plus
+// MODE_START boundary marker) pair Bibs' startBibsMode does — see that method's own doc.
 @RunWith(AndroidJUnit4::class)
 class CpModeRepositoryTest {
 
@@ -45,15 +44,29 @@ class CpModeRepositoryTest {
     }
 
     @Test
-    fun startCpModeSetsStartedAtButWritesNoHistoryRow() = runTest {
+    fun startCpModeInsertsModeStartThenClockAndSetsStartedAt() = runTest {
         repository.startCpMode(raceId, startedAtMillis = 5_000L)
 
-        assertEquals(0, db.historyLineDao().observeAllForRace(raceId).first().size)
+        // A MODE_START boundary marker (see that action's own doc — purely for the web app's
+        // later mode-change-boundary detection) immediately followed by the real Clock marker,
+        // same pair Bibs' own startBibsMode writes.
+        val all = db.historyLineDao().observeAllForRace(raceId).first().sortedBy { it.lineNumber }
+        assertEquals(2, all.size)
+        assertEquals(HistoryAction.MODE_START, all[0].action)
+        assertNull(all[0].splitNumber)
+        assertEquals(HistoryAction.CLOCK, all[1].action)
+        assertEquals(0, all[1].splitNumber)
+        assertEquals(HistoryMode.CP, all[0].mode)
         assertEquals(5_000L, db.raceDao().getById(raceId)?.cpModeStartedAtMillis)
+
+        // MODE_START never reaches the live screen — only the Clock row does.
+        val live = repository.observeCurrentSegmentEntries(raceId).first()
+        assertEquals(1, live.size)
+        assertEquals(HistoryAction.CLOCK, live.single().action)
     }
 
     @Test
-    fun neitherPassNorRetireGetASplitNumberOrConsumeTheCounter() = runTest {
+    fun retireGetsNoSplitNumberButPassDoesAndBothConsumeAccordingly() = runTest {
         repository.recordEntry(raceId, HistoryAction.PASS, 101, note = null)
         repository.recordEntry(raceId, HistoryAction.RETIRE, 102, note = null)
         repository.recordEntry(raceId, HistoryAction.PASS, 103, note = null)
@@ -62,24 +75,25 @@ class CpModeRepositoryTest {
             .sortedBy { it.id }
             .map { it.splitNumber }
 
-        // Unlike Bibs Mode's Finish (paired with a Time Mode device at the same finish line),
-        // a CP checkpoint is never paired with a Time Mode device of its own — so neither a
-        // Pass nor a Retire has a corresponding split to align with, and neither consumes the
-        // shared counter — see EntryLogModeEngine.NO_SPLIT_ACTIONS.
-        assertEquals(listOf(null, null, null), splitNumbers)
-        assertEquals(1, db.raceDao().getById(raceId)?.cpModeNextSplit)
+        // Unlike Retire (never crosses the timing point at all, so it gets no splitNumber and
+        // doesn't consume the counter — see EntryLogModeEngine.NO_SPLIT_ACTIONS), Pass DOES get
+        // one: CP Mode wants it as a plain running count of "how many have passed since
+        // Start/Reset" even though a checkpoint has no real Time Mode split to align with (see
+        // CpModeRepository's own doc).
+        assertEquals(listOf(1, null, 2), splitNumbers)
+        assertEquals(3, db.raceDao().getById(raceId)?.cpModeNextSplit)
     }
 
     @Test
-    fun undoAfterPassLeavesCounterUnaffected() = runTest {
+    fun undoAfterPassDecrementsCounter() = runTest {
         repository.recordEntry(raceId, HistoryAction.PASS, 101, note = null)
         repository.undoMostRecent(raceId)
         repository.recordEntry(raceId, HistoryAction.PASS, 102, note = null)
 
         val entries = repository.observeCurrentSegmentEntries(raceId).first().sortedBy { it.lineNumber }
         assertEquals(1, entries.size)
-        assertNull(entries[0].splitNumber)
-        assertEquals(1, db.raceDao().getById(raceId)?.cpModeNextSplit)
+        assertEquals(1, entries[0].splitNumber)
+        assertEquals(2, db.raceDao().getById(raceId)?.cpModeNextSplit)
     }
 
     @Test
@@ -117,9 +131,10 @@ class CpModeRepositoryTest {
         assertNull(race?.cpModeStoppedAtMillis)
         assertNull(race?.cpModeStartedAtMillis)
 
-        // Nothing is deleted — the Pass and the new Reset marker are both still present.
+        // Nothing is deleted — the MODE_START/Clock pair from startCpMode, the Pass, and the
+        // new Reset marker are all still present.
         val allEntries = db.historyLineDao().observeAllForRace(raceId).first()
-        assertEquals(2, allEntries.size)
+        assertEquals(4, allEntries.size)
     }
 
     @Test
@@ -135,11 +150,10 @@ class CpModeRepositoryTest {
         repository.recordEntry(raceId, HistoryAction.PASS, 201, note = null)
 
         // CP's own counter is untouched by Bibs (already at 3, having consumed splits 1 and 2)
-        // — and also untouched by its own Pass, which (like Retire) has no corresponding Time
-        // Mode split to align with.
+        // — its own Pass consumes CP's own counter independently, starting fresh from 1.
         val cpEntry = repository.observeCurrentSegmentEntries(raceId).first().single()
-        assertNull(cpEntry.splitNumber)
-        assertEquals(1, db.raceDao().getById(raceId)?.cpModeNextSplit)
+        assertEquals(1, cpEntry.splitNumber)
+        assertEquals(2, db.raceDao().getById(raceId)?.cpModeNextSplit)
         assertEquals(3, db.raceDao().getById(raceId)?.bibsModeNextSplit)
 
         bibsRepository.stopBibsMode(raceId)

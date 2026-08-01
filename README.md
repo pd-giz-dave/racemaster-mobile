@@ -9,11 +9,11 @@ line, any number of phones run this app side by side, each logging its own stati
 - **Time Mode** — acts as a stopwatch, recording exactly when each finisher crossed the
   line, in order.
 - **Bibs Mode** — records which bib number each finisher was wearing, in the same order,
-  with a configurable legal bib range, duplicate-entry flagging, and full row editing for
-  correcting mis-keyed entries live.
+  with a configurable legal bib range (an out-of-range or duplicate entry is flagged
+  inline rather than blocked), and full row editing for correcting mis-keyed entries live.
 - **CP Mode** — a lighter checkpoint variant of Bibs Mode (a fixed Pass/Retire button pair
   instead of a full event picker) for stations out on the course rather than at the finish
-  line.
+  line, each identified by a required location like "CP1" or "CP2-Bridge".
 - **Mule Mode** — has no stopwatch/keypad of its own. Instead it continuously discovers
   every other RaceMaster Mobile device nearby over Bluetooth, pulls whatever data they're
   holding, and pushes it on to a genuine data "sink" — either the RaceMaster server, or a

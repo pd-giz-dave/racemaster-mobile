@@ -102,18 +102,20 @@ fun HelpScreen(onBack: () -> Unit) {
                 title = "Time Mode",
                 body = "START begins the stopwatch and records a fixed \"Start\" marker as split S0. " +
                     "SPLIT records the current time every time it's tapped — two fast taps always " +
-                    "produce two separate splits. STOP freezes the clock and records a \"Stop\" split; " +
-                    "undoing that Stop split resumes the clock with no time lost. Once stopped, the " +
-                    "same button becomes RESET, which wipes every split and returns to the blank " +
-                    "pre-start screen (with confirmation). Undo last removes only the most recent " +
-                    "split. Tap any split row to give it a short label.",
+                    "produce two separate splits. STOP freezes the clock and records a \"Stop\" marker " +
+                    "(shown as S– — a boundary marker, not a numbered split); undoing that Stop marker " +
+                    "resumes the clock with no time lost. Once stopped, the same button becomes RESET, " +
+                    "which wipes every split and returns to the blank pre-start screen (with " +
+                    "confirmation). Undo last removes only the most recent split. Tap any split row to " +
+                    "give it a short label.",
             )
             HelpSection(
                 title = "Bibs Mode — starting a race",
                 body = "New Race asks for the race name, the first bib number, and how many runners " +
                     "there are — together these define the legal bib range for the race. A bib " +
-                    "outside that range is rejected with an on-screen error. A fixed \"Clock\" marker " +
-                    "is automatically recorded as split S0.",
+                    "outside that range is allowed but flagged (see \"Bibs Mode — duplicates\" below) " +
+                    "rather than rejected, the same way a duplicate is. A fixed \"Clock\" marker is " +
+                    "automatically recorded as split S0.",
             )
             HelpSection(
                 title = "Bibs Mode — logging",
@@ -127,38 +129,44 @@ fun HelpScreen(onBack: () -> Unit) {
                     "S2, and so on) the next entry will get.",
             )
             HelpSection(
-                title = "Bibs Mode — duplicates",
+                title = "Bibs Mode — duplicates and out-of-range bibs",
                 body = "Entering the same bib number for the same event twice (e.g. two Finishes for " +
                     "bib 101) is still allowed — it's flagged as \"dup of S1\", referencing the other " +
                     "matching row, and a running dup count appears at the top right of the \"Next\" " +
                     "line. A Start and a Finish for the same bib is normal and never counts as a " +
-                    "duplicate. Tap any row to correct its bib number or event type — if that resolves " +
-                    "the duplicate, the flag disappears immediately.",
+                    "duplicate. A bib outside the race's configured range is logged the same way, " +
+                    "flagged inline as \"not in range M to N\" rather than being blocked. Tap any row " +
+                    "to correct its bib number or event type — if that resolves the duplicate or range " +
+                    "flag, it disappears immediately.",
             )
             HelpSection(
                 title = "Bibs Mode — editing rows",
                 body = "Tap any logged row to edit it. For a normal row this opens the event type, bib " +
-                    "number, and an optional short note. For the Clock row (split S0) it instead opens " +
-                    "an offset time field — enter it as minutes and seconds (any separator, e.g. " +
-                    "\"5:30\" or \"5 30\") or as a single number of seconds (e.g. \"90\" means 1:30). " +
-                    "This records how late the clock was started after a mass start.",
+                    "number (numeric keypad), and an optional short note. For the Clock row (split S0) " +
+                    "it instead opens an offset time field — enter it as minutes and seconds (any " +
+                    "separator, e.g. \"5:30\" or \"5 30\") or as a single number of seconds (e.g. \"90\" " +
+                    "means 1:30). This records how late the clock was started after a mass start.",
             )
             HelpSection(
                 title = "Bibs Mode — stop and reset",
                 body = "STOP freezes logging (the log button and Event are disabled) and frees up New " +
-                    "Race — this records a \"Stop\" marker that can be undone to resume logging. Once " +
-                    "stopped, the same button becomes RESET, which wipes every bib entry back to just " +
-                    "a fresh Clock marker (with confirmation).",
+                    "Race — this records a \"Stop\" marker (shown as S–, not a numbered split) that can " +
+                    "be undone to resume logging. Once stopped, the same button becomes RESET, which " +
+                    "wipes every bib entry and returns to the same Start-button screen a freshly " +
+                    "created race shows (with confirmation).",
             )
             HelpSection(
                 title = "CP Mode",
                 body = "CP Mode is a lighter checkpoint variant of Bibs Mode, for a station out on " +
                     "the course rather than at the finish line — same keypad, entry list, duplicate " +
-                    "flagging, and row editing, but with a fixed Pass/Retire button pair in place of " +
-                    "Bibs' Event picker, and no Clock marker: START just begins logging, with no " +
-                    "extra split recorded for it. Type a bib number and tap Pass (the normal case) or " +
-                    "Retire, tap any row to correct it, and STOP/RESET/Undo last all work exactly as " +
-                    "in Bibs Mode. Set the race's Location (e.g. \"CP1\") on the race details screen " +
+                    "flagging, out-of-range flagging, row editing, and Clock-marker Start (split S0), " +
+                    "but with a fixed Pass/Retire button pair in place of Bibs' Event picker. Each Pass " +
+                    "gets a running split number too, counting how many have passed since Start/Reset " +
+                    "— Retire doesn't (shown as S–), since it never actually crosses the checkpoint. " +
+                    "Type a bib number and tap Pass (the normal case) or Retire, tap any row to correct " +
+                    "it, and STOP/RESET/Undo last all work exactly as in Bibs Mode. The race's Location " +
+                    "on the race details screen must be \"CP\" followed by a number from 1 upwards, " +
+                    "with an optional \"-name\" suffix (e.g. \"CP1\", \"CP2-Bridge\") " +
                     "so its entries can be told apart from other stations recording the same race.",
             )
             HelpSection(

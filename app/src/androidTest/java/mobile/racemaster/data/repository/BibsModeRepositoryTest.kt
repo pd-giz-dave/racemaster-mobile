@@ -119,15 +119,36 @@ class BibsModeRepositoryTest {
     fun startBibsModeInsertsClockAndDoesNotConsumeCounter() = runTest {
         repository.startBibsMode(raceId)
 
+        // Also inserts a MODE_START boundary marker immediately before the Clock row (see
+        // startBibsModeAlsoInsertsAModeStartBoundaryMarker below) — the Clock row itself is
+        // unaffected by that, still the fixed split-#0 marker it always was.
         val entries = db.historyLineDao().observeAllForRace(raceId).first()
-        assertEquals(1, entries.size)
-        assertEquals(HistoryAction.CLOCK, entries.single().action)
-        assertEquals(0, entries.single().splitNumber)
+        assertEquals(2, entries.size)
+        val clockEntry = entries.single { it.action == HistoryAction.CLOCK }
+        assertEquals(0, clockEntry.splitNumber)
 
         // The counter is untouched by Clock — the next real entry still gets split 1.
         repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
         val finishEntry = repository.observeCurrentSegmentEntries(raceId).first().single { it.action == HistoryAction.FINISH }
         assertEquals(1, finishEntry.splitNumber)
+    }
+
+    @Test
+    fun startBibsModeAlsoInsertsAModeStartBoundaryMarker() = runTest {
+        // A second, separate row purely for the web app's later mode-change-boundary detection
+        // (see HistoryAction.MODE_START's own doc) — never shown on the live screen (excluded
+        // from observeCurrentSegmentEntries below), only in Race History's full chronology.
+        repository.startBibsMode(raceId, startedAtMillis = 5_000L)
+
+        val all = db.historyLineDao().observeAllForRace(raceId).first().sortedBy { it.lineNumber }
+        assertEquals(2, all.size)
+        assertEquals(HistoryAction.MODE_START, all[0].action)
+        assertNull(all[0].splitNumber)
+        assertEquals(HistoryAction.CLOCK, all[1].action)
+        assertEquals(HistoryMode.BIBS, all[0].mode)
+
+        val live = repository.observeCurrentSegmentEntries(raceId).first()
+        assertTrue(live.none { it.action == HistoryAction.MODE_START })
     }
 
     @Test
@@ -168,9 +189,11 @@ class BibsModeRepositoryTest {
 
         repository.undoMostRecent(raceId)
 
+        // Still just the MODE_START boundary marker plus the Clock row — Undo can't reach past
+        // Clock (it's never a valid target), and MODE_START isn't reachable at all.
         val entries = db.historyLineDao().observeAllForRace(raceId).first()
-        assertEquals(1, entries.size)
-        assertEquals(HistoryAction.CLOCK, entries.single().action)
+        assertEquals(2, entries.size)
+        assertTrue(entries.any { it.action == HistoryAction.CLOCK })
         assertEquals(1, db.raceDao().getById(raceId)?.bibsModeNextSplit)
     }
 
@@ -252,14 +275,16 @@ class BibsModeRepositoryTest {
     @Test
     fun updateEntryOnClockRowPinsTypeToClockRegardlessOfRequestedType() = runTest {
         repository.startBibsMode(raceId)
-        val clockRow = db.historyLineDao().observeAllForRace(raceId).first().single()
+        val clockRow = db.historyLineDao().observeAllForRace(raceId).first().single { it.action == HistoryAction.CLOCK }
 
         // Bypasses the UI's own guard (which never offers a Clock row to the generic type
         // picker, only its dedicated time-only panel) — proves the repository-level
         // defense-in-depth holds independently of the UI's cooperation.
         repository.updateEntry(clockRow.id, bibNumber = 101, action = HistoryAction.FINISH, note = "5:30")
 
-        val echo = db.historyLineDao().observeAllForRace(raceId).first().single { it.id != clockRow.id }
+        // The MODE_START boundary marker (also present, see startBibsMode) is untouched — the
+        // echo is specifically the Clock row's own edit.
+        val echo = db.historyLineDao().observeAllForRace(raceId).first().single { it.refLineNumber == clockRow.lineNumber }
         assertEquals(HistoryAction.CLOCK, echo.action)
         assertNull(echo.bibNumber)
         assertEquals("5:30", echo.note)
@@ -273,7 +298,9 @@ class BibsModeRepositoryTest {
         val afterStop = db.historyLineDao().observeAllForRace(raceId).first().sortedBy { it.id }
         assertEquals(2, afterStop.size)
         assertEquals(HistoryAction.STOP, afterStop.last().action)
-        assertEquals(2, afterStop.last().splitNumber)
+        // Stop is a boundary marker, not a real logged entry — it gets no splitNumber of its
+        // own and doesn't consume the counter (see EntryLogModeEngine.stop's own doc).
+        assertNull(afterStop.last().splitNumber)
         assertEquals(123L, db.raceDao().getById(raceId)?.bibsModeStoppedAtMillis)
 
         repository.undoMostRecent(raceId)

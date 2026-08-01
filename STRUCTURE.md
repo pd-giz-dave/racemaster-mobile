@@ -72,7 +72,10 @@ app/src/main/java/mobile/racemaster/
 │   │   │   ├── HistoryMode.kt         enum TIME/BIBS/CP — which family a HistoryLineEntity row
 │   │   │   │                          belongs to, plus the L-number/S-number display formatters
 │   │   │   ├── HistoryAction.kt       enum of loggable actions (START, SPLIT, FINISH, PASS,
-│   │   │   │                          RETIRE, STOP, RESET, UNDO, CLOCK, ...)
+│   │   │   │                          RETIRE, STOP, RESET, UNDO, CLOCK, MODE_START, ...) —
+│   │   │   │                          MODE_START is a boundary marker every mode's own start
+│   │   │   │                          also writes, shown only in Race History, for the web
+│   │   │   │                          app's later mode-change-boundary detection
 │   │   │   ├── PulledRecordEntity.kt  Mule Mode's local inbox — records pulled from other
 │   │   │   │                          devices over BLE, pending push to a sink; also tracks
 │   │   │   │                          whether a learned sink confirmation has been relayed
@@ -92,9 +95,10 @@ app/src/main/java/mobile/racemaster/
 │   │   ├── EntryLogModeEngine.kt     Shared segmented entry-logging core (record/edit/undo/
 │   │   │                             stop/reset) that Bibs and CP are both built on
 │   │   ├── BibsModeRepository.kt     Bibs Mode's thin wrapper over EntryLogModeEngine, plus its
-│   │   │                             own Clock-marker start
+│   │   │                             own Clock-marker (+ MODE_START boundary marker) start
 │   │   ├── CpModeRepository.kt       CP Mode's thin wrapper over EntryLogModeEngine, plus its
-│   │   │                             own timestamp-only (no marker row) start
+│   │   │                             own Clock-marker (+ MODE_START boundary marker) start —
+│   │   │                             structurally identical to Bibs' own now
 │   │   ├── TimeModeRepository.kt     Stopwatch start/stop/split/undo/reset logic (its own, not
 │   │   │                             on EntryLogModeEngine — Time has no bib/duplicate concept)
 │   │   ├── HistoryFold.kt            `foldLatestVisible()` — collapses the append-only raw rows
@@ -105,7 +109,10 @@ app/src/main/java/mobile/racemaster/
 │   │   │                             a genuine sink) — one shared pure function every mode's
 │   │   │                             ViewModel computes it through
 │   │   ├── BibValidation.kt          Legal bib range + duplicate-flagging rules, shared by Bibs
-│   │   │                             and CP
+│   │   │                             and CP — an out-of-range bib is flagged, not rejected, same
+│   │   │                             non-blocking treatment as a duplicate
+│   │   ├── LocationValidation.kt     `isValidCpLocation()` — CP Mode's own required location
+│   │   │                             format ("CP1", "CP2-Bridge", ...)
 │   │   ├── RaceProgress.kt           `isRaceActive()` — shared "can I start/clear a race?" rule
 │   │   └── RaceLabels.kt             `buildRaceLabel()` — turns operator input into the stored
 │   │                                 race label
@@ -140,7 +147,8 @@ app/src/main/java/mobile/racemaster/
 ├── ui/                        Compose UI, one subpackage per screen/feature
 │   ├── modepicker/             Mode Picker (choose Time/Bibs/CP/Mule, resume in-progress race)
 │   │                            + Name Device screen
-│   ├── timemode/                Time mode: stopwatch screen + `ElapsedTimeFormat.kt` helper
+│   ├── timemode/                Time mode: stopwatch screen, its own dedicated split editor
+│   │                            (`EditSplitScreen.kt`) + `ElapsedTimeFormat.kt` helper
 │   ├── bibsmode/                 Bibs mode: keypad entry screen + `HistoryActionLabels.kt`
 │   ├── cpmode/                    CP mode: same screen shell as Bibs (shared components), a
 │   │                              fixed Pass/Retire button pair instead of Bibs' event picker
@@ -148,12 +156,14 @@ app/src/main/java/mobile/racemaster/
 │   │                              Setup Server screen (device-wide server URL + login)
 │   ├── racedetails/               Shared "create/edit a race" form (name, course, location,
 │   │                              bib range) used by every mode
+│   ├── editentry/                 Dedicated Bibs/CP entry editor (`EditEntryScreen.kt`), reached
+│   │                              by navigating rather than composed inline over the live list
 │   ├── racehistory/               Race History list + read-only detail screen, and Mule Source
 │   │                              Detail (a specific pulled-in device's own records)
 │   ├── help/                      In-app Help screen (Mode Picker → Help)
 │   ├── components/              Shared widgets used across screens:
-│   │   AppBanner (top bar), ModeScreenTopBar, DigitKeypad, EntryLogList/EntryLogEditing/
-│   │   EditEntryPanel, HistoryLineRow, SplitRow, BibEntryRow, EntryModeHeaderInfo,
+│   │   AppBanner (top bar), ModeScreenTopBar, DigitKeypad, EntryLogList/EntryLogEditing,
+│   │   HistoryLineRow, SplitRow, BibEntryRow, EntryModeHeaderInfo,
 │   │   SyncStatusLine, StopOrResetButton, UndoLastButton, HistoryTextField
 │   └── theme/                   Material 3 theme: Color.kt, Theme.kt, Type.kt (app-wide look
 │                                 and feel — edit here for colors/typography, not per-screen)
@@ -191,15 +201,17 @@ gradle/libs.versions.toml        Dependency version catalog — add new librarie
 ## Test layout
 
 - `app/src/test/` — plain JVM unit tests (`./gradlew testDebugUnitTest`, no device needed).
-  Covers pure logic: `HistoryFoldTest`, `BibValidationTest`, `RaceProgressTest`,
-  `HistoryModeTest`, `ClockTimeFormatTest`, `DeviceNameGeneratorTest`, `HistoryActionLabelsTest`,
-  `LineSyncStateTest`, and Mule's `MuleRepositoryTest`/`MuleSyncEngineTest`/
-  `ServerStatusRepositoryTest`/`SyncRecordMappingTest`/`MulePullClientTest` (ack batching)/
-  `PeripheralSyncServiceTest` (sink-confirmed uuid decision).
+  Covers pure logic: `HistoryFoldTest`, `BibValidationTest`, `LocationValidationTest`,
+  `RaceProgressTest`, `HistoryModeTest`, `ClockTimeFormatTest`, `DeviceNameGeneratorTest`,
+  `HistoryActionLabelsTest`, `LineSyncStateTest`, and Mule's `MuleRepositoryTest`/
+  `MuleSyncEngineTest`/`ServerStatusRepositoryTest`/`SyncRecordMappingTest`/
+  `MulePullClientTest` (ack batching)/`PeripheralSyncServiceTest` (sink-confirmed uuid decision).
 - `app/src/androidTest/` — instrumented tests requiring a device/emulator
   (`./gradlew connectedDebugAndroidTest`). Used for repository/DAO tests against a real
-  in-memory Room database (`data/repository/*Test.kt`, `data/db/dao/*Test.kt`,
-  `data/settings/SettingsRepositoryTest.kt`) and any ViewModel test that needs that same real DB.
+  in-memory Room database (`data/repository/*Test.kt` — including `BibsModeRepositoryTest`/
+  `CpModeRepositoryTest`/`TimeModeRepositoryTest`'s own MODE_START/split-numbering coverage,
+  `data/db/dao/*Test.kt`, `data/settings/SettingsRepositoryTest.kt`) and any ViewModel test
+  that needs that same real DB (e.g. `RaceHistoryDetailViewModelTest`).
 
 ## Common "I want to..." lookups
 
@@ -210,6 +222,8 @@ gradle/libs.versions.toml        Dependency version catalog — add new librarie
 | Change record/edit/undo/stop/reset rules shared by Bibs and CP | `data/repository/EntryLogModeEngine.kt` |
 | Change Time Mode's stopwatch start/stop/split/undo/reset rules | `data/repository/TimeModeRepository.kt` |
 | Change bib range/duplicate-flagging rules | `data/repository/BibValidation.kt` |
+| Change CP Mode's required location format | `data/repository/LocationValidation.kt` |
+| Change what the MODE_START boundary marker looks like or when it's written | `data/db/entity/HistoryAction.kt` (the enum value itself), each mode's own `start*` method (`TimeModeRepository.startStopwatch`/`BibsModeRepository.startBibsMode`/`CpModeRepository.startCpMode`) |
 | Add a column to the database | `data/db/entity/`, bump `version` in `RacemasterDatabase.kt`, add a DAO query if needed |
 | Add a new screen | new `ui/<feature>/` package + a route in `navigation/Routes.kt` + a `composable {}` in `RacemasterNavHost.kt` |
 | Change app-wide theme colors/fonts | `ui/theme/Color.kt`, `Theme.kt`, `Type.kt` |
