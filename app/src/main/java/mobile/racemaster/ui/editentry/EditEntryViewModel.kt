@@ -15,8 +15,6 @@ import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
-import mobile.racemaster.data.repository.isBibInLegalRange
-import mobile.racemaster.data.repository.rangeErrorMessage
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.ui.bibsmode.CP_ACTION_OPTIONS
@@ -27,6 +25,12 @@ data class EditEntryUiState(
     val entry: HistoryLineEntity? = null,
     // False until the one-shot load-by-id completes — see EditSplitUiState's own doc for why.
     val loaded: Boolean = false,
+    // The entry's race's configured bib range, loaded alongside it — lets the screen compute a
+    // live "not in range" warning (see mobile.racemaster.data.repository.rangeWarningMessage)
+    // as the operator types, same non-blocking treatment Bibs/CP Mode's own submit() now gives
+    // an out-of-range bib rather than rejecting it.
+    val raceBibsRangeStart: Int? = null,
+    val raceBibsRangeCount: Int? = null,
 )
 
 /** Backs [EditEntryScreen] — shared by Bibs and CP Mode, same as the inline `EditEntryPanel`
@@ -53,22 +57,23 @@ class EditEntryViewModel(
     init {
         viewModelScope.launch {
             val entry = if (mode == AppMode.BIBS) bibsModeRepository.getEntry(entryId) else cpModeRepository.getEntry(entryId)
-            stateFlow.value = EditEntryUiState(entry = entry, loaded = true)
+            val race = entry?.raceId?.let { raceRepository.getRace(it) }
+            stateFlow.value = EditEntryUiState(
+                entry = entry,
+                loaded = true,
+                raceBibsRangeStart = race?.bibsRangeStart,
+                raceBibsRangeCount = race?.bibsRangeCount,
+            )
         }
     }
 
-    // Same bib-range validation BibsModeViewModel.updateEntry/CpModeViewModel.updateEntry used
-    // to do before this screen replaced their inline callers — moved here rather than left
-    // behind unreachable in either ViewModel. Returns an error message to show inline, or null
-    // on success.
+    // An out-of-range bib is flagged, not rejected — same non-blocking treatment
+    // BibsModeViewModel/CpModeViewModel's own submit() gives one (see
+    // mobile.racemaster.data.repository.rangeWarningMessage, which EditEntryScreen also uses to
+    // show the live warning as the operator types). Only a genuinely missing bib still blocks
+    // the save. Returns an error message to show inline, or null on success.
     suspend fun saveEntry(bibNumber: Int?, type: HistoryAction, note: String?): String? {
-        if (type in BIB_REQUIRED_ACTIONS) {
-            val bib = bibNumber ?: return "Enter a bib number."
-            val race = stateFlow.value.entry?.raceId?.let { raceRepository.getRace(it) }
-            if (race != null && !isBibInLegalRange(bib, race.bibsRangeStart, race.bibsRangeCount)) {
-                return rangeErrorMessage(bib, race.bibsRangeStart, race.bibsRangeCount)
-            }
-        }
+        if (type in BIB_REQUIRED_ACTIONS && bibNumber == null) return "Enter a bib number."
         if (mode == AppMode.BIBS) {
             bibsModeRepository.updateEntry(entryId, bibNumber, type, note)
         } else {

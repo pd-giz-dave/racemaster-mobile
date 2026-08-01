@@ -5,9 +5,10 @@
 - [ ] remove the course, first bib and number of runners fields from race details, a race id becomes just its name and date
 - [ ] add the ability to pull a race name and bib allocations from the server, or a mule, if neither is available
       bib number range checking is disabled, only duplicate detection remains,
-- [ ] the race name field history should include races pulled from the server, selecting one pulls the bib numbers from
+      (see racemaster web app ToDo.MD for the races folder mechanism)
+- [ ] the race name field history should include races pulled from the server (as above), selecting one pulls the bib numbers from
       the server and number validity checking, per course, becomes enabled using those, users can enter a name as now
-      if no server list available
+      if no server list available (with the current manual history unchanged, just mixed and in distinguishable via name format)
 - [ ] the above requires that the race details form has access to the setup server form      
 
 ## Re-jig time mode

@@ -16,12 +16,11 @@ import mobile.racemaster.data.repository.countDuplicateExtras
 import mobile.racemaster.data.repository.duplicateBibNumbers
 import mobile.racemaster.data.repository.findDuplicateSplitRefs
 import mobile.racemaster.data.repository.hasRealEntries
-import mobile.racemaster.data.repository.isBibInLegalRange
 import mobile.racemaster.data.repository.isRaceInProgress
 import mobile.racemaster.data.repository.lineSyncState
 import mobile.racemaster.data.repository.linesWithAnySync
 import mobile.racemaster.data.repository.outstandingBibs
-import mobile.racemaster.data.repository.rangeErrorMessage
+import mobile.racemaster.data.repository.rangeWarningMessage
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.di.applicationContext
@@ -65,7 +64,6 @@ data class BibsModeUiState(
     val canUndo: Boolean = false,
     val stopped: Boolean = false,
     val raceInProgress: Boolean = false,
-    val errorMessage: String? = null,
     val unsyncedCount: Int = 0,
     val lastSyncedAtMillis: Long? = null,
     // Set from the race details screen — so the operator knows what to expect, and how many
@@ -94,14 +92,8 @@ class BibsModeViewModel(
     val deviceName: StateFlow<String?> = settingsRepository.deviceName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    // Eagerly held so submit() can read the current bib range synchronously.
-    private val raceFlow: StateFlow<RaceEntity?> = raceIdFlow
-        .flatMapLatest { raceId -> if (raceId == null) flowOf(null) else raceRepository.observeRace(raceId) }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-
     private val digitsFlow = MutableStateFlow("")
     private val pendingTypeFlow = MutableStateFlow(HistoryAction.FINISH)
-    private val errorFlow = MutableStateFlow<String?>(null)
 
     private val raceAndEntriesFlow = raceIdFlow.flatMapLatest { raceId ->
         if (raceId == null) {
@@ -123,8 +115,7 @@ class BibsModeViewModel(
         raceAndEntriesFlow,
         digitsFlow,
         pendingTypeFlow,
-        errorFlow,
-    ) { context, digits, pendingType, error ->
+    ) { context, digits, pendingType ->
         val (race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync) = context
         val dupRefs = findDuplicateSplitRefs(entries)
         val needsBib = pendingType in BIB_REQUIRED_ACTIONS
@@ -147,6 +138,7 @@ class BibsModeViewModel(
                     note = it.note,
                     dupSplitRefs = dupRefs[it.id].orEmpty(),
                     syncState = lineSyncState(it.syncedAtMillis, it.lineNumber in linesWithAnySync),
+                    rangeWarning = rangeWarningMessage(it.bibNumber, race?.bibsRangeStart, race?.bibsRangeCount),
                 )
             },
             canSubmit = race != null && race.bibsModeStoppedAtMillis == null && (if (needsBib) digits.isNotEmpty() else true),
@@ -160,7 +152,6 @@ class BibsModeViewModel(
                 race?.cpModeStartedAtMillis,
                 race?.cpModeStoppedAtMillis,
             ),
-            errorMessage = error,
             unsyncedCount = unsyncedCount,
             lastSyncedAtMillis = lastSyncedAtMillis,
             firstBibNumber = race?.bibsRangeStart,
@@ -199,23 +190,12 @@ class BibsModeViewModel(
         val type = pendingTypeFlow.value
         val needsBib = type in BIB_REQUIRED_ACTIONS
         val bib = if (needsBib) digitsFlow.value.toIntOrNull() ?: return else null
-        if (needsBib) {
-            val race = raceFlow.value ?: return
-            if (!isBibInLegalRange(bib!!, race.bibsRangeStart, race.bibsRangeCount)) {
-                errorFlow.value = rangeErrorMessage(bib, race.bibsRangeStart, race.bibsRangeCount)
-                return
-            }
-        }
         viewModelScope.launch {
             bibsModeRepository.recordEntry(raceId, type, bib, note = null)
             digitsFlow.value = ""
             pendingTypeFlow.value = HistoryAction.FINISH
             beeper.beep()
         }
-    }
-
-    fun dismissError() {
-        errorFlow.value = null
     }
 
     fun undoLast() {

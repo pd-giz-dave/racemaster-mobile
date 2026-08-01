@@ -15,11 +15,24 @@ fun isBibInLegalRange(bib: Int, rangeStart: Int?, rangeCount: Int?): Boolean {
 }
 
 /** Shared by every place a bib gets validated against [isBibInLegalRange] and needs to explain
- *  a rejection (Bibs/CP Mode's own live submit/edit flows, and EditEntryScreen's dedicated
- *  edit screen) — kept as one function so the wording never drifts between them. */
+ *  a rejection (EditEntryScreen's dedicated edit screen, which still blocks) — kept as one
+ *  function so the wording never drifts between them. */
 fun rangeErrorMessage(bib: Int, rangeStart: Int?, rangeCount: Int?): String {
     val rangeText = if (rangeStart != null && rangeCount != null) "${rangeStart}–${rangeStart + rangeCount - 1}" else "unset"
     return "Bib $bib is outside the legal range $rangeText."
+}
+
+/**
+ * The flagged-entry counterpart of [rangeErrorMessage] for Bibs/CP Mode's own live submit
+ * flow, which records an out-of-range bib rather than rejecting it (same treatment as a
+ * duplicate — see [findDuplicateSplitRefs]) so the operator can fix it up later instead of
+ * being blocked mid-race. Null (no flag) when [bib] is null, in range, or no range is
+ * configured — same defensive default as [isBibInLegalRange].
+ */
+fun rangeWarningMessage(bib: Int?, rangeStart: Int?, rangeCount: Int?): String? {
+    if (bib == null || rangeStart == null || rangeCount == null) return null
+    if (isBibInLegalRange(bib, rangeStart, rangeCount)) return null
+    return "not in range $rangeStart to ${rangeStart + rangeCount - 1}"
 }
 
 // A bib is no longer expected to cross the line once it's FINISH (they crossed), PASS (they

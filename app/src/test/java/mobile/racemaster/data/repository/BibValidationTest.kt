@@ -54,6 +54,28 @@ class BibValidationTest {
         assertTrue(isBibInLegalRange(999_999, rangeStart = null, rangeCount = null))
     }
 
+    // rangeWarningMessage
+
+    @Test
+    fun rangeWarningMessageNullForInRangeBib() {
+        assertEquals(null, rangeWarningMessage(110, rangeStart = 100, rangeCount = 20))
+    }
+
+    @Test
+    fun rangeWarningMessageNullWhenRangeUnset() {
+        assertEquals(null, rangeWarningMessage(999_999, rangeStart = null, rangeCount = null))
+    }
+
+    @Test
+    fun rangeWarningMessageNullForNullBib() {
+        assertEquals(null, rangeWarningMessage(null, rangeStart = 100, rangeCount = 20))
+    }
+
+    @Test
+    fun rangeWarningMessageNamesFirstAndLastBibForOutOfRangeBib() {
+        assertEquals("not in range 100 to 119", rangeWarningMessage(120, rangeStart = 100, rangeCount = 20))
+    }
+
     // findDuplicateSplitRefs
 
     @Test

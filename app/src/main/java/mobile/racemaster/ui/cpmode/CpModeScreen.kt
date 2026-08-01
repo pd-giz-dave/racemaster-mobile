@@ -15,14 +15,12 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -114,15 +112,6 @@ fun CpModeScreen(
                 .fillMaxSize()
                 .imePadding()
                 .padding(horizontal = 12.dp, vertical = 6.dp),
-        )
-    }
-
-    uiState.errorMessage?.let { message ->
-        AlertDialog(
-            onDismissRequest = viewModel::dismissError,
-            title = { Text("Can't log that") },
-            text = { Text(message) },
-            confirmButton = { TextButton(onClick = withClickSound(viewModel::dismissError)) { Text("OK") } },
         )
     }
 }

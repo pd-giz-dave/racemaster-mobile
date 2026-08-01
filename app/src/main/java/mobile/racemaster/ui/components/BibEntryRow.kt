@@ -40,6 +40,7 @@ fun BibEntryRow(
     onClick: (() -> Unit)? = null,
     syncedToLabel: String? = null,
     editedFromLineNumber: Long? = null,
+    rangeWarning: String? = null,
 ) {
     val rowColor = when (syncState) {
         LineSyncState.SYNCED -> SyncedGreen
@@ -70,6 +71,9 @@ fun BibEntryRow(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
+        }
+        if (!rangeWarning.isNullOrBlank()) {
+            Text(rangeWarning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
         if (editedFromLineNumber != null) {
             Text("Edited from ${formatLineRef(editedFromLineNumber)}", style = MaterialTheme.typography.bodySmall, color = rowColor)

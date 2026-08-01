@@ -14,8 +14,9 @@ import mobile.racemaster.ui.bibsmode.displayName
 
 /** One live-screen entry, shared between Bibs Mode and CP Mode's near-identical current-segment
  *  list — both modes' entries have the exact same shape (a split number, an optional bib
- *  number, an action type, an optional note, duplicate flags, and sync state), so this is
- *  reused as-is rather than each mode declaring its own structurally-identical twin. */
+ *  number, an action type, an optional note, duplicate flags, a range warning, and sync
+ *  state), so this is reused as-is rather than each mode declaring its own
+ *  structurally-identical twin. */
 data class EntryLogUi(
     val id: Long,
     val bibNumber: Int?,
@@ -24,6 +25,9 @@ data class EntryLogUi(
     val note: String?,
     val dupSplitRefs: List<Int?>,
     val syncState: LineSyncState,
+    // See mobile.racemaster.data.repository.rangeWarningMessage — null unless this bib was
+    // recorded outside the race's configured range, flagged rather than rejected.
+    val rangeWarning: String? = null,
 )
 
 /** The live current-segment entry list shared by Bibs Mode and CP Mode — auto-scrolls to the
@@ -58,6 +62,7 @@ fun EntryLogList(
                 note = entry.note,
                 dupSplitRefs = entry.dupSplitRefs,
                 syncState = entry.syncState,
+                rangeWarning = entry.rangeWarning,
                 onClick = if (isMarkerRow || clickGuard?.isSuppressed == true) null else { { onEntryClick(entry) } },
             )
         }
