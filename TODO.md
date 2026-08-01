@@ -1,30 +1,41 @@
 # Racemaster Mobile — Implementation TODO
 
-## Phase 1 — Data layer, Time mode, Bibs mode
+## General
 
-done
+- [ ] remove the course field from race details, a race id becomes just its name and date
+- [ ] when entering a bib that is out of range instead of saying "Cannot log that" and disallowing it
+      allow it but tag it as an error in a similar way to entering a duplicate,
+      show the error as "not in legal range 1 to N" where N is the current limit
+- [ ] all modes need to be able to pull/push directly from/to the server when a mobile signal is available
 
-## Phase 2 — Bibs Mode rework: legal bib range, duplicate flagging, unified Event/Log, editable rows
+## Re-jig time mode
 
-done
+- [ ] when time mode is stopped the split button becomes a disabled "Stopped",
+      change that so it becomes "New Start",
+      and when that is selected it starts a new race with a new sequence (starting at Clock s0) but it is appended to the history,
+      so there can be multiple start,splits,stop sessions in the history for the race
 
-## Phase 3 — Mule Mode Phase 1: BLE pickup from Time/Bibs phones + internet sync
+Time mode just logs time events, the significance of those events is not known by time mode,
+the time events only become meaningful when they are matched up to the corresponding bibs mode entries.
 
-done
+## Re-jig bibs mode
 
-## Random ToDo's
+- [ ] when bibs mode is stopped the finish button becomes disabled, change that so it becomes "New Start" (make sure it fits the button, shrink font if necessary)
+      and when that is selected it starts a new race with a new sequence (starting at Clock s0) but it is appended to the history,
+      so there can be multiple clock,finish,stop sessions in the history for the race
+- [ ] bibs mode needs to know what course it is currently logging and what bibs are valid for that course,
+      this is so it can reliably report what bibs are outstanding,
+      when no mobile signal it must be given it via bluetooth from the web app,
+      if there is a mobile signal it can get it via the server
 
-- [ ] Update readme.md and structure.md and help text
+## Re-jig Cp mode
 
-## Bugs
+- [ ] show line number instead of split number as split number has no meaning in CP mode
+- [ ] add a time-of-day column between the action column and the note column
 
-## Later phases (not started)
-
-- [ ] Mule-to-mule "chain home" relay: multi-hop store-and-forward between mule devices
-  (stable dedup, loop prevention) so mules can pass data to each other, not just pull from
-  Time/Bibs phones and push to the internet
-- [ ] BLE SYNC receiver: either a Web-Bluetooth page in the racemaster web app (Chrome/Edge
-  only — browsers can't act as a BLE peripheral, so the phone would have to be the
-  peripheral and the browser the central, with an unavoidable manual "Connect" click) or a
-  separate small receiver app writing a file for later import (racemaster's own `ToDo.MD`
-  already lists CSV import as planned separately, so this could piggyback on that)
+CP Mode is unaffected by the multiple session tweaks in other modes.
+CP mode is just a safety thing to record where on a course a runner is.
+It also provides a rough time for recording split times.
+CP Mode records time-of-day when a runner passed a CP.
+Time mode also records time-of-day for all its actions, 
+this means an appropriate elapsed time can be calculated.

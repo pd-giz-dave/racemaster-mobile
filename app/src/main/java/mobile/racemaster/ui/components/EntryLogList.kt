@@ -31,7 +31,8 @@ data class EntryLogUi(
  *  Stop/Reset marker rows are never clickable/editable — retyping either one's own type/note
  *  would break every query keyed off it (the repository also refuses this as a backstop, but
  *  the UI shouldn't offer it at all). A Clock row (Bibs Mode only — CP never has one) stays
- *  clickable via its own dedicated time-only edit panel (see [EditEntryPanel]). */
+ *  clickable via its own dedicated time-only edit form (see
+ *  [mobile.racemaster.ui.editentry.EditEntryScreen]). */
 @Composable
 fun EntryLogList(
     entries: List<EntryLogUi>,

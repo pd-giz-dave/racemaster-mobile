@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.util.withClickSound
 
 /** Lets the operator see and rename this phone's memorable identity — the name every split
@@ -59,6 +60,7 @@ fun NameDeviceScreen(
             TopAppBar(
                 title = { Text("Name Device") },
                 navigationIcon = { TextButton(onClick = withClickSound(onDone)) { Text("Cancel") } },
+                actions = { HideKeyboardButton() },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },

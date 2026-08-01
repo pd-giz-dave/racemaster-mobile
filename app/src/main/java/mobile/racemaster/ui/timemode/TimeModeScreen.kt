@@ -21,19 +21,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -49,7 +43,6 @@ import mobile.racemaster.ui.components.StopOrResetButton
 import mobile.racemaster.ui.components.SyncStatusLine
 import mobile.racemaster.ui.components.UndoLastButton
 import mobile.racemaster.ui.components.rememberListClickGuard
-import mobile.racemaster.util.formatElapsedSplitTime
 import mobile.racemaster.util.formatTimeSplitsText
 import mobile.racemaster.util.withClickSound
 
@@ -59,6 +52,7 @@ fun TimeModeScreen(
     onChangeMode: () -> Unit,
     onNewRace: () -> Unit,
     onEditRace: (raceId: Long) -> Unit,
+    onEditSplit: (splitId: Long) -> Unit,
     viewModel: TimeModeViewModel = viewModel(factory = TimeModeViewModel.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -105,7 +99,7 @@ fun TimeModeScreen(
             onStop = viewModel::stopStopwatch,
             onReset = viewModel::resetStopwatch,
             onUndo = viewModel::undoLast,
-            onUpdateNote = viewModel::updateNote,
+            onEditSplit = onEditSplit,
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
@@ -124,7 +118,7 @@ private fun TimeModeContent(
     onStop: () -> Unit,
     onReset: () -> Unit,
     onUndo: () -> Unit,
-    onUpdateNote: (Long, String) -> Unit,
+    onEditSplit: (splitId: Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // BoxWithConstraints (not a fixed dp budget) is what makes the header/list split adapt
@@ -137,23 +131,17 @@ private fun TimeModeContent(
         val minListHeight = 140.dp
         val headerMaxHeight = (maxHeight - minListHeight).coerceAtLeast(0.dp)
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            // Tracks which single split (if any) is showing its label editor. The editor is
-            // pinned above the list — not inline in the row being edited — for two reasons:
-            // it stays put (and visible) even as new splits get added above where that row
-            // used to sit, and it keeps the row's original line on screen so the operator can
-            // see what they're tweaking while they type.
-            var editingSplitId by remember { mutableStateOf<Long?>(null) }
-            val editingSplit = uiState.splits.firstOrNull { it.id == editingSplitId }
             val listClickGuard = rememberListClickGuard()
 
-            // This header (ticker/main button/Stop-Reset/Undo/editor) is itself scrollable so
-            // that on a short screen with the keyboard up, it can scroll to keep the note
-            // editor fully visible above the keyboard instead of being clipped — while the main
-            // button stays reachable by scrolling back up.
+            // This header (ticker/main button/Stop-Reset/Undo) is itself scrollable so that on
+            // a short screen the main button stays reachable by scrolling back up. Editing a
+            // split's note is a separate, dedicated screen (see EditSplitScreen) rather than
+            // composed inline here — this used to be its own editor pinned above the list, but
+            // that put it inside this very header's own height-capped, ime-inset-driven scroll
+            // region, which confirmed in the field on a Cubot that imePadding()/
+            // WindowInsets.ime don't reliably report the keyboard's real height, leaving
+            // Save/Cancel genuinely unreachable there.
             val headerScrollState = rememberScrollState()
-            LaunchedEffect(editingSplitId) {
-                if (editingSplitId != null) headerScrollState.animateScrollTo(headerScrollState.maxValue)
-            }
 
             Column(
                 // Capped (see BoxWithConstraints above) only once the splits list actually
@@ -235,18 +223,6 @@ private fun TimeModeContent(
                             modifier = Modifier.weight(1f),
                         )
                     }
-
-                    if (editingSplit != null) {
-                        HorizontalDivider()
-                        EditSplitNotePanel(
-                            split = editingSplit,
-                            onSave = { note ->
-                                onUpdateNote(editingSplit.id, note)
-                                editingSplitId = null
-                            },
-                            onCancel = { editingSplitId = null },
-                        )
-                    }
                 }
             }
 
@@ -273,7 +249,7 @@ private fun TimeModeContent(
                             actionLabel = split.action.displayName(),
                             note = split.note,
                             syncState = split.syncState,
-                            onClick = if (isMarkerRow || listClickGuard.isSuppressed) null else { { editingSplitId = split.id } },
+                            onClick = if (isMarkerRow || listClickGuard.isSuppressed) null else { { onEditSplit(split.id) } },
                         )
                     }
                 }
@@ -281,38 +257,3 @@ private fun TimeModeContent(
         }
     }
 }
-
-@Composable
-private fun EditSplitNotePanel(
-    split: FinishSplitUi,
-    onSave: (String) -> Unit,
-    onCancel: () -> Unit,
-) {
-    var text by remember(split.id) { mutableStateOf(split.note.orEmpty()) }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(
-            "Editing ${formatSplitRef(split.splitNumber)}  ${formatElapsedSplitTime(split.elapsedMillis)}",
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                singleLine = true,
-                label = { Text("Note") },
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = withClickSound { onSave(text) }) { Text("Save") }
-            TextButton(onClick = withClickSound(onCancel)) { Text("Cancel") }
-        }
-    }
-}
-

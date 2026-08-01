@@ -76,6 +76,8 @@ class BibsModeRepository(
 
     suspend fun updateEntry(id: Long, bibNumber: Int?, action: HistoryAction, note: String?) = engine.updateEntry(id, bibNumber, action, note)
 
+    suspend fun getEntry(id: Long): HistoryLineEntity? = engine.getEntry(id)
+
     suspend fun undoMostRecent(raceId: Long) = engine.undoMostRecent(raceId)
 
     suspend fun stopBibsMode(raceId: Long, stoppedAtMillis: Long = System.currentTimeMillis()) = engine.stop(raceId, stoppedAtMillis)

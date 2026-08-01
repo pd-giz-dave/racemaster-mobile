@@ -32,6 +32,12 @@ class TimeModeRepository(
 
     fun observeUnsyncedCount(raceId: Long): Flow<Int> = historyLineDao.observeUnsyncedCountForRace(raceId, HistoryMode.TIME)
 
+    // For EditSplitScreen's own one-shot load-by-id on open — a dedicated screen (reached by
+    // navigating, not composed inline over the live list) has no already-loaded row of its own
+    // to read from, unlike the old inline editor which just filtered the live screen's own
+    // uiState.splits.
+    suspend fun getSplit(id: Long): HistoryLineEntity? = historyLineDao.getById(id)
+
     fun observeLastSyncedAtMillis(raceId: Long): Flow<Long?> = historyLineDao.observeLastSyncedAtMillis(raceId, HistoryMode.TIME)
 
     // Resolves a batch of acked recordUuids back to their permanent lineNumbers — used to

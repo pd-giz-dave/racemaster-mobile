@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -26,23 +25,16 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.MainActivity
 import mobile.racemaster.data.db.entity.HistoryAction
-import mobile.racemaster.ui.bibsmode.CP_ACTION_OPTIONS
 import mobile.racemaster.ui.components.DigitKeypad
-import mobile.racemaster.ui.components.EditEntryPanel
 import mobile.racemaster.ui.components.EntryLogList
 import mobile.racemaster.ui.components.EntryModeHeaderInfo
 import mobile.racemaster.ui.components.ModeScreenTopBar
@@ -59,16 +51,19 @@ private const val BUTTON_HEIGHT_DP = 48
 private val BUTTON_ROW_CONTENT_PADDING = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
 
 /** CP Mode's screen — structurally the same as Bibs Mode's (same header, keypad, entry list,
- *  edit panel, all reused via the shared `ui/components` composables), differing only in its
- *  fixed Pass/Retire button pair in place of Bibs' dynamic Submit-plus-Event-picker: CP has
- *  exactly two possible actions, so each gets its own always-visible button that submits
- *  directly rather than staging a "pending type" first. */
+ *  all reused via the shared `ui/components` composables), differing only in its fixed
+ *  Pass/Retire button pair in place of Bibs' dynamic Submit-plus-Event-picker: CP has exactly
+ *  two possible actions, so each gets its own always-visible button that submits directly
+ *  rather than staging a "pending type" first. Editing an already-recorded entry navigates to
+ *  the shared [mobile.racemaster.ui.editentry.EditEntryScreen] rather than composing an editor
+ *  inline (see that screen's own doc for why). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CpModeScreen(
     onChangeMode: () -> Unit,
     onNewRace: () -> Unit,
     onEditRace: (raceId: Long) -> Unit,
+    onEditEntry: (entryId: Long) -> Unit,
     viewModel: CpModeViewModel = viewModel(factory = CpModeViewModel.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -113,7 +108,7 @@ fun CpModeScreen(
             onStop = viewModel::stopCpMode,
             onReset = viewModel::resetCpMode,
             onUndo = viewModel::undoLast,
-            onUpdateEntry = viewModel::updateEntry,
+            onEditEntry = onEditEntry,
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
@@ -145,7 +140,7 @@ private fun CpModeContent(
     onStop: () -> Unit,
     onReset: () -> Unit,
     onUndo: () -> Unit,
-    onUpdateEntry: (id: Long, bibNumber: Int?, type: HistoryAction, note: String?) -> Unit,
+    onEditEntry: (entryId: Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // See BibsModeScreen's own doc for why this is a measured (not fixed-fraction) header/list
@@ -154,17 +149,12 @@ private fun CpModeContent(
         val minListHeight = 140.dp
         val headerMaxHeight = (maxHeight - minListHeight).coerceAtLeast(0.dp)
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            var editingEntryId by remember { mutableStateOf<Long?>(null) }
-            val editingEntry = uiState.entries.firstOrNull { it.id == editingEntryId }
             val listClickGuard = rememberListClickGuard()
 
-            // See BibsModeScreen's own doc for why the header is itself scrollable and why it's
-            // re-keyed on the live ime inset rather than just editingEntryId.
+            // See BibsModeScreen's own doc for why the header is itself scrollable, and for
+            // why editing navigates to a dedicated screen rather than composing an editor
+            // inline here.
             val headerScrollState = rememberScrollState()
-            val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
-            LaunchedEffect(editingEntryId, imeBottomPx) {
-                if (editingEntryId != null) headerScrollState.animateScrollTo(headerScrollState.maxValue)
-            }
 
             Column(
                 modifier = Modifier.heightIn(max = headerMaxHeight).verticalScroll(headerScrollState),
@@ -243,23 +233,6 @@ private fun CpModeContent(
                             modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
                         )
                     }
-
-                    if (editingEntry != null) {
-                        HorizontalDivider()
-                        EditEntryPanel(
-                            entry = editingEntry,
-                            availableTypes = CP_ACTION_OPTIONS,
-                            onSaveEntry = { bib, type, note ->
-                                onUpdateEntry(editingEntry.id, bib, type, note)
-                                editingEntryId = null
-                            },
-                            // CP entries never have a Clock row to edit via this path — see
-                            // EditEntryPanel's own doc for why that branch is simply
-                            // unreachable here rather than needing a real handler.
-                            onSaveClockTime = {},
-                            onCancel = { editingEntryId = null },
-                        )
-                    }
                 }
             }
 
@@ -267,7 +240,7 @@ private fun CpModeContent(
                 HorizontalDivider()
                 EntryLogList(
                     entries = uiState.entries,
-                    onEntryClick = { editingEntryId = it.id },
+                    onEntryClick = { onEditEntry(it.id) },
                     modifier = Modifier.weight(1f),
                     clickGuard = listClickGuard,
                 )

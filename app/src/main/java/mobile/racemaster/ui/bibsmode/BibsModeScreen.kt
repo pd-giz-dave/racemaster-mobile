@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -27,14 +26,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -44,13 +41,12 @@ import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.ui.components.ActionPickerDialog
 import mobile.racemaster.ui.components.DigitKeypad
-import mobile.racemaster.ui.components.EditEntryPanel
 import mobile.racemaster.ui.components.EntryLogList
 import mobile.racemaster.ui.components.EntryModeHeaderInfo
 import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.StopOrResetButton
-import mobile.racemaster.ui.components.rememberListClickGuard
 import mobile.racemaster.ui.components.UndoLastButton
+import mobile.racemaster.ui.components.rememberListClickGuard
 import mobile.racemaster.util.withClickSound
 
 private const val BUTTON_HEIGHT_DP = 48
@@ -66,6 +62,7 @@ fun BibsModeScreen(
     onChangeMode: () -> Unit,
     onNewRace: () -> Unit,
     onEditRace: (raceId: Long) -> Unit,
+    onEditEntry: (entryId: Long) -> Unit,
     viewModel: BibsModeViewModel = viewModel(factory = BibsModeViewModel.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -111,8 +108,7 @@ fun BibsModeScreen(
             onStop = viewModel::stopBibsMode,
             onReset = viewModel::resetBibsMode,
             onUndo = viewModel::undoLast,
-            onUpdateEntry = viewModel::updateEntry,
-            onUpdateClockTime = viewModel::updateClockTime,
+            onEditEntry = onEditEntry,
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
@@ -144,8 +140,7 @@ private fun BibsModeContent(
     onStop: () -> Unit,
     onReset: () -> Unit,
     onUndo: () -> Unit,
-    onUpdateEntry: (id: Long, bibNumber: Int?, type: HistoryAction, note: String?) -> Unit,
-    onUpdateClockTime: (id: Long, raw: String) -> Unit,
+    onEditEntry: (entryId: Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // BoxWithConstraints (not a fixed dp budget) is what makes the header/list split adapt
@@ -161,31 +156,19 @@ private fun BibsModeContent(
         val minListHeight = 140.dp
         val headerMaxHeight = (maxHeight - minListHeight).coerceAtLeast(0.dp)
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            var editingEntryId by remember { mutableStateOf<Long?>(null) }
-            val editingEntry = uiState.entries.firstOrNull { it.id == editingEntryId }
             var showEventPicker by remember { mutableStateOf(false) }
             val listClickGuard = rememberListClickGuard()
 
-            // The header (title/keypad/buttons/edit panel) is itself scrollable so that when the
-            // keyboard comes up to edit a split, it can scroll to keep the edit panel's Save/Cancel
-            // fully visible above the keyboard. It's fine for the quick-entry keypad above it to
-            // scroll out of view in the process — there's no time pressure entering bibs, runners
-            // can wait in the finish funnel while a bib is being recorded.
-            //
-            // Keying on editingEntryId alone isn't enough: the keyboard's appearance is itself
-            // animated (imePadding() shrinks this Column over several frames), so a single
-            // scroll-to-max right when editing starts can undershoot — it snapshots maxValue
-            // before the keyboard has finished pushing content up, so Save/Cancel can still end
-            // up hidden behind it (worse for the Bib field than the Note field, since Bib sits on
-            // an earlier row and Android's own "scroll focused field into view" never has reason
-            // to also reveal the row below it). Re-keying on the live ime bottom inset re-runs
-            // this on every frame of that animation, converging on the correct position once the
-            // keyboard settles, regardless of which field triggered it.
+            // The header (title/keypad/buttons) is itself scrollable so the quick-entry keypad
+            // can scroll out of view on a short screen — there's no time pressure entering
+            // bibs, runners can wait in the finish funnel while a bib is being recorded.
+            // Editing an already-recorded entry is a separate, dedicated screen (see
+            // EditEntryScreen) rather than composed inline here — that inline editor used to
+            // live inside this very header's own height-capped, ime-inset-driven scroll
+            // region, which confirmed in the field on a Cubot that imePadding()/
+            // WindowInsets.ime don't reliably report the keyboard's real height, leaving
+            // Save/Cancel genuinely unreachable there.
             val headerScrollState = rememberScrollState()
-            val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
-            LaunchedEffect(editingEntryId, imeBottomPx) {
-                if (editingEntryId != null) headerScrollState.animateScrollTo(headerScrollState.maxValue)
-            }
 
             Column(
                 // Capped so the list below always keeps its floor (see BoxWithConstraints
@@ -287,23 +270,6 @@ private fun BibsModeContent(
                             onDismiss = { showEventPicker = false },
                         )
                     }
-
-                    if (editingEntry != null) {
-                        HorizontalDivider()
-                        EditEntryPanel(
-                            entry = editingEntry,
-                            availableTypes = EVENT_PICKER_OPTIONS,
-                            onSaveEntry = { bib, type, note ->
-                                onUpdateEntry(editingEntry.id, bib, type, note)
-                                editingEntryId = null
-                            },
-                            onSaveClockTime = { raw ->
-                                onUpdateClockTime(editingEntry.id, raw)
-                                editingEntryId = null
-                            },
-                            onCancel = { editingEntryId = null },
-                        )
-                    }
                 }
             }
 
@@ -311,7 +277,7 @@ private fun BibsModeContent(
                 HorizontalDivider()
                 EntryLogList(
                     entries = uiState.entries,
-                    onEntryClick = { editingEntryId = it.id },
+                    onEntryClick = { onEditEntry(it.id) },
                     modifier = Modifier.weight(1f),
                     clickGuard = listClickGuard,
                 )

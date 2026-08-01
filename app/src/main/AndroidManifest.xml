@@ -52,7 +52,22 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.RacemasterMobile">
+            android:theme="@style/Theme.RacemasterMobile"
+            android:windowSoftInputMode="adjustResize">
+            <!-- Without this, the OS decides how to react to the keyboard on its own —
+                 usually fine on a modern device (API 30+), where WindowInsets.ime is
+                 dispatched reliably enough that Compose's own imePadding()/verticalScroll
+                 handles it. Confirmed in the field on a Cubot running Android 8.1 (API 27,
+                 well before WindowInsets.ime matured) that without this, the system instead
+                 pans the *entire window* to keep a focused field above the keyboard — dragging
+                 the TopAppBar (Cancel/title/HideKeyboardButton) off the top of the screen along
+                 with everything else, since edge-to-edge (enableEdgeToEdge() in MainActivity)
+                 means there's no OS-level concept of "this part is fixed" once the window itself
+                 is what's moving. adjustResize is the low-level, OS-managed fallback that's
+                 honored even when Compose's own WindowInsets-based keyboard handling isn't
+                 reliable — it resizes the window's content area instead of panning the whole
+                 thing, leaving anything genuinely fixed (the TopAppBar) exactly where it was. -->
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 

@@ -22,6 +22,7 @@ import androidx.navigation.navArgument
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.bibsmode.BibsModeScreen
 import mobile.racemaster.ui.cpmode.CpModeScreen
+import mobile.racemaster.ui.editentry.EditEntryScreen
 import mobile.racemaster.ui.help.HelpScreen
 import mobile.racemaster.ui.modepicker.ModePickerScreen
 import mobile.racemaster.ui.modepicker.NameDeviceScreen
@@ -31,6 +32,7 @@ import mobile.racemaster.ui.racedetails.RaceDetailsScreen
 import mobile.racemaster.ui.racehistory.MuleSourceDetailScreen
 import mobile.racemaster.ui.racehistory.RaceHistoryDetailScreen
 import mobile.racemaster.ui.racehistory.RaceHistoryScreen
+import mobile.racemaster.ui.timemode.EditSplitScreen
 import mobile.racemaster.ui.timemode.TimeModeScreen
 import java.net.URLDecoder
 
@@ -101,6 +103,7 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                         onChangeMode = { navController.navigateToModePicker() },
                         onNewRace = { navController.navigate(Routes.raceDetails(AppMode.TIME, raceId = null)) },
                         onEditRace = { raceId -> navController.navigate(Routes.raceDetails(AppMode.TIME, raceId)) },
+                        onEditSplit = { splitId -> navController.navigate(Routes.editSplit(splitId)) },
                     )
                 }
                 composable(Routes.BIBS_MODE) {
@@ -108,6 +111,7 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                         onChangeMode = { navController.navigateToModePicker() },
                         onNewRace = { navController.navigate(Routes.raceDetails(AppMode.BIBS, raceId = null)) },
                         onEditRace = { raceId -> navController.navigate(Routes.raceDetails(AppMode.BIBS, raceId)) },
+                        onEditEntry = { entryId -> navController.navigate(Routes.editEntry(AppMode.BIBS, entryId)) },
                     )
                 }
                 composable(Routes.CP_MODE) {
@@ -115,6 +119,34 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                         onChangeMode = { navController.navigateToModePicker() },
                         onNewRace = { navController.navigate(Routes.raceDetails(AppMode.CP, raceId = null)) },
                         onEditRace = { raceId -> navController.navigate(Routes.raceDetails(AppMode.CP, raceId)) },
+                        onEditEntry = { entryId -> navController.navigate(Routes.editEntry(AppMode.CP, entryId)) },
+                    )
+                }
+                composable(
+                    route = Routes.EDIT_SPLIT,
+                    arguments = listOf(navArgument("splitId") { type = NavType.LongType }),
+                ) { backStackEntry ->
+                    val splitId = backStackEntry.arguments?.getLong("splitId") ?: return@composable
+                    EditSplitScreen(
+                        splitId = splitId,
+                        onSaved = { navController.popBackStack() },
+                        onCancel = { navController.popBackStack() },
+                    )
+                }
+                composable(
+                    route = Routes.EDIT_ENTRY,
+                    arguments = listOf(
+                        navArgument("mode") { type = NavType.StringType },
+                        navArgument("entryId") { type = NavType.LongType },
+                    ),
+                ) { backStackEntry ->
+                    val mode = AppMode.valueOf(backStackEntry.arguments?.getString("mode") ?: return@composable)
+                    val entryId = backStackEntry.arguments?.getLong("entryId") ?: return@composable
+                    EditEntryScreen(
+                        mode = mode,
+                        entryId = entryId,
+                        onSaved = { navController.popBackStack() },
+                        onCancel = { navController.popBackStack() },
                     )
                 }
                 composable(Routes.MULE_MODE) {

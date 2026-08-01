@@ -14,6 +14,14 @@ fun isBibInLegalRange(bib: Int, rangeStart: Int?, rangeCount: Int?): Boolean {
     return bib in rangeStart until (rangeStart + rangeCount)
 }
 
+/** Shared by every place a bib gets validated against [isBibInLegalRange] and needs to explain
+ *  a rejection (Bibs/CP Mode's own live submit/edit flows, and EditEntryScreen's dedicated
+ *  edit screen) — kept as one function so the wording never drifts between them. */
+fun rangeErrorMessage(bib: Int, rangeStart: Int?, rangeCount: Int?): String {
+    val rangeText = if (rangeStart != null && rangeCount != null) "${rangeStart}–${rangeStart + rangeCount - 1}" else "unset"
+    return "Bib $bib is outside the legal range $rangeText."
+}
+
 // A bib is no longer expected to cross the line once it's FINISH (they crossed), PASS (they
 // passed this checkpoint — CP Mode's own equivalent of FINISH), or RETIRE (they've been
 // accounted for elsewhere and won't cross) — either way, nothing left to wait for from that

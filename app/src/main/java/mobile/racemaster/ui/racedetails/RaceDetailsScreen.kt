@@ -45,6 +45,7 @@ import mobile.racemaster.data.repository.MAX_BIB_NUMBER
 import mobile.racemaster.data.repository.MIN_BIB_NUMBER
 import mobile.racemaster.data.repository.isModeStarted
 import mobile.racemaster.data.settings.AppMode
+import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.ui.components.HistoryTextField
 import mobile.racemaster.util.withClickSound
 
@@ -151,6 +152,7 @@ fun RaceDetailsScreen(
             TopAppBar(
                 title = { Text(if (existingRaceId == null) "New Race" else "Race Details") },
                 navigationIcon = { TextButton(onClick = withClickSound(onCancel)) { Text("Cancel") } },
+                actions = { HideKeyboardButton() },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },

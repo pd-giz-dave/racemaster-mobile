@@ -46,6 +46,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import mobile.racemaster.BuildConfig
 import mobile.racemaster.data.settings.ServerSetupDraft
+import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.ui.components.HistoryTextField
 import mobile.racemaster.ui.theme.ServerOfflineRed
 import mobile.racemaster.ui.theme.SyncedGreen
@@ -153,6 +154,7 @@ fun MuleServerSetupScreen(
                         },
                     ) { Text("Cancel") }
                 },
+                actions = { HideKeyboardButton() },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },

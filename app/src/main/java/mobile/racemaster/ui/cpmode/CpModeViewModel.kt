@@ -20,6 +20,7 @@ import mobile.racemaster.data.repository.isRaceInProgress
 import mobile.racemaster.data.repository.lineSyncState
 import mobile.racemaster.data.repository.linesWithAnySync
 import mobile.racemaster.data.repository.outstandingBibs
+import mobile.racemaster.data.repository.rangeErrorMessage
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.di.applicationContext
@@ -87,7 +88,7 @@ class CpModeViewModel(
     val deviceName: StateFlow<String?> = settingsRepository.deviceName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    // Eagerly held so submit()/updateEntry() can read the current bib range synchronously.
+    // Eagerly held so submit() can read the current bib range synchronously.
     private val raceFlow: StateFlow<RaceEntity?> = raceIdFlow
         .flatMapLatest { raceId -> if (raceId == null) flowOf(null) else raceRepository.observeRace(raceId) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -186,7 +187,7 @@ class CpModeViewModel(
         val bib = digitsFlow.value.toIntOrNull() ?: return
         val race = raceFlow.value ?: return
         if (!isBibInLegalRange(bib, race.bibsRangeStart, race.bibsRangeCount)) {
-            errorFlow.value = rangeErrorMessage(bib, race)
+            errorFlow.value = rangeErrorMessage(bib, race.bibsRangeStart, race.bibsRangeCount)
             return
         }
         viewModelScope.launch {
@@ -194,19 +195,6 @@ class CpModeViewModel(
             digitsFlow.value = ""
             beeper.beep()
         }
-    }
-
-    fun updateEntry(id: Long, bibNumber: Int?, type: HistoryAction, note: String?) {
-        val bib = bibNumber ?: run {
-            errorFlow.value = "Enter a bib number."
-            return
-        }
-        val race = raceFlow.value ?: return
-        if (!isBibInLegalRange(bib, race.bibsRangeStart, race.bibsRangeCount)) {
-            errorFlow.value = rangeErrorMessage(bib, race)
-            return
-        }
-        viewModelScope.launch { cpModeRepository.updateEntry(id, bibNumber, type, note) }
     }
 
     fun dismissError() {
@@ -230,13 +218,6 @@ class CpModeViewModel(
 
     override fun onCleared() {
         beeper.release()
-    }
-
-    private fun rangeErrorMessage(bib: Int, race: RaceEntity): String {
-        val start = race.bibsRangeStart
-        val count = race.bibsRangeCount
-        val rangeText = if (start != null && count != null) "${start}–${start + count - 1}" else "unset"
-        return "Bib $bib is outside the legal range $rangeText."
     }
 
     companion object {

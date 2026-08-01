@@ -15,8 +15,19 @@ object Routes {
     const val HELP = "help"
     const val NAME_DEVICE = "name_device"
     const val MULE_SERVER_SETUP = "mule_server_setup"
+    const val EDIT_SPLIT = "edit_split/{splitId}"
+    const val EDIT_ENTRY = "edit_entry/{mode}/{entryId}"
 
     fun raceHistoryDetail(raceId: Long) = "race_history_detail/$raceId"
+
+    // A dedicated screen for editing a single Time Mode split's note — see EditSplitScreen's
+    // own doc for why this replaced composing the editor inline over the live splits list.
+    fun editSplit(splitId: Long) = "edit_split/$splitId"
+
+    // Shared by Bibs and CP Mode — mode picks which repository the screen reads/writes through
+    // and which action-type options it offers, same as RACE_DETAILS already does for its own
+    // per-mode field set.
+    fun editEntry(mode: AppMode, entryId: Long) = "edit_entry/${mode.name}/$entryId"
 
     // raceLabel is free-form user text (race names can contain spaces/punctuation), so it
     // must be URL-encoded to travel safely as a nav argument. sourceDeviceId disambiguates

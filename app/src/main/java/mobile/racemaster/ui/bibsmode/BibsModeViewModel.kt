@@ -21,12 +21,12 @@ import mobile.racemaster.data.repository.isRaceInProgress
 import mobile.racemaster.data.repository.lineSyncState
 import mobile.racemaster.data.repository.linesWithAnySync
 import mobile.racemaster.data.repository.outstandingBibs
+import mobile.racemaster.data.repository.rangeErrorMessage
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.di.applicationContext
 import mobile.racemaster.ui.components.EntryLogUi
 import mobile.racemaster.util.Beeper
-import mobile.racemaster.util.parseMinutesSeconds
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -94,7 +94,7 @@ class BibsModeViewModel(
     val deviceName: StateFlow<String?> = settingsRepository.deviceName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    // Eagerly held so submit()/updateEntry() can read the current bib range synchronously.
+    // Eagerly held so submit() can read the current bib range synchronously.
     private val raceFlow: StateFlow<RaceEntity?> = raceIdFlow
         .flatMapLatest { raceId -> if (raceId == null) flowOf(null) else raceRepository.observeRace(raceId) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -202,7 +202,7 @@ class BibsModeViewModel(
         if (needsBib) {
             val race = raceFlow.value ?: return
             if (!isBibInLegalRange(bib!!, race.bibsRangeStart, race.bibsRangeCount)) {
-                errorFlow.value = rangeErrorMessage(bib, race)
+                errorFlow.value = rangeErrorMessage(bib, race.bibsRangeStart, race.bibsRangeCount)
                 return
             }
         }
@@ -212,31 +212,6 @@ class BibsModeViewModel(
             pendingTypeFlow.value = HistoryAction.FINISH
             beeper.beep()
         }
-    }
-
-    fun updateEntry(id: Long, bibNumber: Int?, type: HistoryAction, note: String?) {
-        val needsBib = type in BIB_REQUIRED_ACTIONS
-        if (needsBib) {
-            val bib = bibNumber ?: run {
-                errorFlow.value = "Enter a bib number."
-                return
-            }
-            val race = raceFlow.value ?: return
-            if (!isBibInLegalRange(bib, race.bibsRangeStart, race.bibsRangeCount)) {
-                errorFlow.value = rangeErrorMessage(bib, race)
-                return
-            }
-        }
-        viewModelScope.launch { bibsModeRepository.updateEntry(id, bibNumber, type, note) }
-    }
-
-    fun updateClockTime(id: Long, rawInput: String) {
-        val canonical = parseMinutesSeconds(rawInput)
-        if (canonical == null) {
-            errorFlow.value = "Enter a time as minutes and seconds, e.g. 5:30."
-            return
-        }
-        viewModelScope.launch { bibsModeRepository.updateEntry(id, bibNumber = null, action = HistoryAction.CLOCK, note = canonical) }
     }
 
     fun dismissError() {
@@ -260,13 +235,6 @@ class BibsModeViewModel(
 
     override fun onCleared() {
         beeper.release()
-    }
-
-    private fun rangeErrorMessage(bib: Int, race: RaceEntity): String {
-        val start = race.bibsRangeStart
-        val count = race.bibsRangeCount
-        val rangeText = if (start != null && count != null) "${start}–${start + count - 1}" else "unset"
-        return "Bib $bib is outside the legal range $rangeText."
     }
 
     companion object {
