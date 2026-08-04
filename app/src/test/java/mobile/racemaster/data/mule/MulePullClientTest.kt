@@ -79,4 +79,43 @@ class MulePullClientTest {
             assertEquals(false, batch.isSink)
         }
     }
+
+    // computeRequestKey — deterministic, not random, so a repeated ask (same puller, same
+    // origin, same since) collapses to the same key a responder can recognize and dedup
+    // against. See its own doc for why a random-per-call key would defeat the whole point.
+
+    @Test
+    fun sameInputsAlwaysProduceTheSameKey() {
+        val key1 = computeRequestKey("mule-a", "leaf-b", "spring-5k", 42L)
+        val key2 = computeRequestKey("mule-a", "leaf-b", "spring-5k", 42L)
+
+        assertEquals(key1, key2)
+    }
+
+    @Test
+    fun differentPullerOriginOrSinceProduceDifferentKeys() {
+        val base = computeRequestKey("mule-a", "leaf-b", "spring-5k", 42L)
+
+        assertTrue(base != computeRequestKey("mule-c", "leaf-b", "spring-5k", 42L))
+        assertTrue(base != computeRequestKey("mule-a", "leaf-z", "spring-5k", 42L))
+        assertTrue(base != computeRequestKey("mule-a", "leaf-b", "autumn-10k", 42L))
+        assertTrue(base != computeRequestKey("mule-a", "leaf-b", "spring-5k", 43L))
+    }
+
+    @Test
+    fun nullOriginIsDistinctFromAnyRealOriginDeviceId() {
+        val directPull = computeRequestKey("mule-a", null, null, 42L)
+        val relayPullNamedSelf = computeRequestKey("mule-a", "self", "spring-5k", 42L)
+
+        assertTrue(directPull != relayPullNamedSelf)
+    }
+
+    @Test
+    fun pullRequestEncodesRequestKeyOnTheWire() {
+        val request = PullRequest(sinceLineNumber = 5L, requestKey = computeRequestKey("mule-a", null, null, 5L))
+        val encoded = json.encodeToString(request)
+
+        val decoded = json.decodeFromString<PullRequest>(encoded)
+        assertEquals(request.requestKey, decoded.requestKey)
+    }
 }

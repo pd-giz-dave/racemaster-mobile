@@ -148,4 +148,90 @@ class MuleSyncEngineTest {
     fun anEmptyRosterStaysEmpty() {
         assertTrue(previouslySeenDevices(known = emptyList(), liveDeviceIds = setOf("phone-a")).isEmpty())
     }
+
+    // shouldConnect — the connect-gating decision that replaces "connect+DeviceInfo-read every
+    // visible device every tick" with "only when there's actually a reason to." Every case here
+    // must fail SAFE toward connecting (never silently miss real new data) — the only thing
+    // it's allowed to skip is a real, expensive GATT round trip to a device it already has
+    // strong reason to believe is unchanged.
+
+    private fun device(
+        deviceId: String? = "phone-a",
+        confirmedLineNumber: Long? = 10L,
+        lastRealReadAtMillis: Long = 0L,
+    ) = DiscoveredDevice(
+        deviceKey = deviceId ?: "raw-address",
+        advertisement = null,
+        deviceId = deviceId,
+        confirmedLineNumber = confirmedLineNumber,
+        lastRealReadAtMillis = lastRealReadAtMillis,
+    )
+
+    private fun identity(lastLineNumber: Long, name: String = "phone-a") =
+        MuleGattProfile.AdvertisedIdentity(lastLineNumber, name)
+
+    @Test
+    fun forceAlwaysConnectsRegardlessOfAnythingElse() {
+        val unchanged = device(confirmedLineNumber = 10L, lastRealReadAtMillis = 1_000L)
+
+        assertTrue(shouldConnect(unchanged, identity(10L), nowMillis = 1_000L, verifyIntervalMillis = 60_000L, force = true))
+    }
+
+    @Test
+    fun aNeverResolvedDeviceAlwaysConnects() {
+        val neverResolved = device(deviceId = null, confirmedLineNumber = null)
+
+        assertTrue(shouldConnect(neverResolved, identity(0L), nowMillis = 0L, verifyIntervalMillis = 60_000L, force = false))
+    }
+
+    @Test
+    fun aResolvedDeviceWithNoConfirmedLineNumberYetAlwaysConnects() {
+        // Shouldn't normally happen (mergeDeviceInfo always stamps both together), but nothing
+        // here should assume that pairing holds.
+        val partiallyResolved = device(deviceId = "phone-a", confirmedLineNumber = null)
+
+        assertTrue(shouldConnect(partiallyResolved, identity(0L), nowMillis = 0L, verifyIntervalMillis = 60_000L, force = false))
+    }
+
+    @Test
+    fun anUndecodableAdvertisementAlwaysConnects() {
+        // Missed scan window, or a peer running an older build that predates this payload
+        // entirely — must fail safe by connecting, exactly like this device's pre-redesign
+        // behavior.
+        val resolved = device(confirmedLineNumber = 10L, lastRealReadAtMillis = 1_000L)
+
+        assertTrue(shouldConnect(resolved, decoded = null, nowMillis = 1_000L, verifyIntervalMillis = 60_000L, force = false))
+    }
+
+    @Test
+    fun anAdvancedAdvertisedCounterConnects() {
+        val resolved = device(confirmedLineNumber = 10L, lastRealReadAtMillis = 1_000L)
+
+        assertTrue(shouldConnect(resolved, identity(11L), nowMillis = 1_000L, verifyIntervalMillis = 60_000L, force = false))
+    }
+
+    @Test
+    fun anUnchangedCounterWithinTheVerifyIntervalSkipsConnecting() {
+        val resolved = device(confirmedLineNumber = 10L, lastRealReadAtMillis = 1_000L)
+
+        assertTrue(!shouldConnect(resolved, identity(10L), nowMillis = 30_000L, verifyIntervalMillis = 60_000L, force = false))
+    }
+
+    @Test
+    fun theVerifyIntervalElapsingConnectsEvenWithAnUnchangedCounter() {
+        // The periodic backstop — also what eventually notices a relay-manifest change, which
+        // the advertised counter alone never reflects.
+        val resolved = device(confirmedLineNumber = 10L, lastRealReadAtMillis = 1_000L)
+
+        assertTrue(shouldConnect(resolved, identity(10L), nowMillis = 61_001L, verifyIntervalMillis = 60_000L, force = false))
+    }
+
+    @Test
+    fun aLowerAdvertisedCounterThanConfirmedStillSkipsWithinTheInterval() {
+        // Shouldn't normally happen (lastLineNumber only grows), but a stale/rolled-back
+        // advertisement must not force an unnecessary connect on its own.
+        val resolved = device(confirmedLineNumber = 10L, lastRealReadAtMillis = 1_000L)
+
+        assertTrue(!shouldConnect(resolved, identity(5L), nowMillis = 1_500L, verifyIntervalMillis = 60_000L, force = false))
+    }
 }

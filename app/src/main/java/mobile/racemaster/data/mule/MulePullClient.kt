@@ -44,7 +44,7 @@ class MulePullClient {
     // unfiltered advertisement (see scanForDevices below) moves that check into this process,
     // which is exactly as correct and avoids trusting the controller's own filter hardware/
     // firmware to do it right.
-    // SCAN_MODE_LOW_LATENCY (near-continuous listening), not Android's un-set default of
+    // SCAN_MODE_BALANCED (was SCAN_MODE_LOW_LATENCY), not Android's un-set default of
     // SCAN_MODE_LOW_POWER (a short scan window over a long interval) — every phone running
     // Mule Mode is simultaneously scanning *and* advertising/serving a GATT server on the same
     // radio, and budget/older BLE chipsets time-share those roles poorly. Confirmed in the
@@ -53,9 +53,16 @@ class MulePullClient {
     // burst while also fending off this device's own advertiser for airtime. This can't fix a
     // controller that genuinely can't run both roles at once, but it meaningfully improves the
     // odds on the (more common) chipsets that can, just inconsistently at low duty cycle.
+    //
+    // Deliberately stepped down only to BALANCED, not all the way to LOW_POWER, even though
+    // PeripheralSyncService's advertise side did move to its own low-power mode as part of this
+    // same change — going straight to LOW_POWER scan *combined with* a low-power advertise
+    // interval on every peer risked compounding (multiplicatively, not additively) the exact
+    // scan-window/advertise-interval mismatch failure this comment already documents above.
+    // Revisit empirically against real multi-device field testing before ever going lower.
     @OptIn(ObsoleteKableApi::class)
     private val scanner = Scanner {
-        scanSettings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
+        scanSettings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_BALANCED).build()
     }
 
     // One Peripheral per device address, reused across calls — a fresh Peripheral(advertisement)
@@ -73,6 +80,17 @@ class MulePullClient {
 
     fun scanForDevices(): Flow<Advertisement> = scanner.advertisements
         .filter { advertisement -> MuleGattProfile.SERVICE_UUID.toKotlinUuid() in advertisement.uuids }
+
+    /** Cheap, non-authoritative identity hint read straight off [advertisement]'s scan-response
+     *  manufacturer data — no BLE connect involved (pure byte parsing of data already delivered
+     *  by [scanForDevices]'s own scan callback). See [MuleSyncEngine]'s connect-gating logic for
+     *  why this exists: deciding whether a real, expensive [readDeviceInfo] connect is even
+     *  worth attempting. Null whenever nothing usable was advertised (missed scan window, a
+     *  peer running an older build that predates this payload, or this scan simply not carrying
+     *  a scan response at all) — every caller treats that exactly like "unknown," never as a
+     *  signal on its own. */
+    fun decodeAdvertisedIdentity(advertisement: Advertisement): MuleGattProfile.AdvertisedIdentity? =
+        MuleGattProfile.decodeAdvertisedIdentity(advertisement.manufacturerData(MuleGattProfile.ADVERTISING_MANUFACTURER_ID))
 
     // Bounded so one unresponsive/stuck-mid-handshake device can never hang this call
     // indefinitely — confirmed in the field: a GATT connect() with no timeout of its own can
@@ -152,7 +170,8 @@ class MulePullClient {
             val serviceUuid = MuleGattProfile.SERVICE_UUID.toKotlinUuid()
             val ackCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.ACK_CHARACTERISTIC_UUID.toKotlinUuid())
 
-            val pullRequest = json.encodeToString(PullRequest(sinceLineNumber, originDeviceId, originRaceLabel))
+            val requestKey = computeRequestKey(pullerDeviceId, originDeviceId, originRaceLabel, sinceLineNumber)
+            val pullRequest = json.encodeToString(PullRequest(sinceLineNumber, originDeviceId, originRaceLabel, requestKey = requestKey))
             val payload = collectChunkedResponse(peripheral, pullRequest)
             val records = if (payload.isBlank()) emptyList() else json.decodeFromString<List<SyncRecord>>(payload)
 
@@ -245,6 +264,22 @@ class MulePullClient {
         private val PULL_TIMEOUT = 15_000.milliseconds
     }
 }
+
+/**
+ * Deterministically identifies one "give me your data since X" ask so a responder that's
+ * already answered it once — e.g. this same puller retrying after a dropped connection, or
+ * this same auto-sync tick asking again before its own cursor has advanced — can recognize and
+ * replay its cached answer (see PeripheralSyncService's request-response cache) instead of
+ * redoing the work. Deliberately NOT a fresh random value per call: a random key could never
+ * collide with itself, so could never actually get deduped. Scoped to [pullerDeviceId] so two
+ * genuinely different requesters asking the same target for the same data always get their own
+ * independent key — each still needs its own real stream + ack cycle regardless of how often
+ * the underlying data happens to repeat; this is responder-side work-avoidance for repeats of
+ * the *same* ask, not cross-requester data dedup (that's already fully handled elsewhere by
+ * `recordUuid` + the per-origin `MuleRepository.lastPulledLineNumber` delta cursor).
+ */
+internal fun computeRequestKey(pullerDeviceId: String, originDeviceId: String?, originRaceLabel: String?, sinceLineNumber: Long): String =
+    "$pullerDeviceId:${originDeviceId ?: "self"}:${originRaceLabel.orEmpty()}:$sinceLineNumber"
 
 /**
  * Splits [recordUuids] and [sinkConfirmedRecordUuids] across as many separate [AckPayload]s as

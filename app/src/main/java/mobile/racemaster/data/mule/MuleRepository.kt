@@ -97,6 +97,12 @@ class MuleRepository(
 
     fun scanForDevices(): Flow<Advertisement> = pullClient.scanForDevices()
 
+    // See MulePullClient.decodeAdvertisedIdentity's own doc — a cheap, no-connect-required
+    // hint used by MuleSyncEngine to decide whether readDeviceInfo below is even worth
+    // attempting on a given tick.
+    fun decodeAdvertisedIdentity(advertisement: Advertisement): MuleGattProfile.AdvertisedIdentity? =
+        pullClient.decodeAdvertisedIdentity(advertisement)
+
     suspend fun readDeviceInfo(advertisement: Advertisement): DeviceInfo = pullClient.readDeviceInfo(advertisement)
 
     // See MulePullClient.pullRelayManifest's own doc — a separate, chunked fetch of a peer's

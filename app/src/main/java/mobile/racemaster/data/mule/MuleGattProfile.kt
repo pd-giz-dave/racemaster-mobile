@@ -64,6 +64,74 @@ object MuleGattProfile {
     // already has extensive field notes about struggling with connection setup — see those
     // constants' own doc.
     const val RECOMMENDED_POLL_INTERVAL_MS = 5_000L
+
+    // Manufacturer-data company ID used to carry AdvertisedIdentity in the scan-response packet
+    // (see PeripheralSyncService.startAdvertising / MulePullClient.decodeAdvertisedIdentity).
+    // 0xFFFF is the Bluetooth SIG's own reserved "for testing" ID — this app has no registered
+    // Company ID of its own (a real one costs real money and months of lead time for what's
+    // purely an optimization hint, never a value anything depends on for correctness).
+    // ADVERTISING_MAGIC is a defense-in-depth disambiguator in case some other nearby BLE
+    // peripheral also happens to reuse 0xFFFF for its own unrelated purpose.
+    const val ADVERTISING_MANUFACTURER_ID = 0xFFFF
+    val ADVERTISING_MAGIC = byteArrayOf(0x52, 0x4d) // "RM"
+    const val ADVERTISING_FORMAT_VERSION: Byte = 1
+
+    // Legacy BLE scan-response payload is capped at 31 bytes; addManufacturerData costs 4 of
+    // those (2-byte AD length+type header + 2-byte company ID) before our own bytes even start.
+    // Our own header (2-byte magic + 1-byte version + 4-byte counter + 1-byte nameLen) is 8
+    // bytes, leaving 31 - 4 - 8 = 19 for the name — see encodeAdvertisedIdentity.
+    const val ADVERTISED_NAME_MAX_BYTES = 19
+
+    /** Decoded contents of the scan-response payload advertised alongside this device's GATT
+     *  service — a cheap, non-authoritative hint a scanner can read without ever connecting, so
+     *  [MuleSyncEngine] can skip a real GATT connect+[DeviceInfo] read for a device it already
+     *  knows is unchanged. [lastLineNumber] mirrors [DeviceInfo.lastLineNumber] for this
+     *  device's own race only — never a relayed origin's — since relay-manifest freshness still
+     *  rides on a periodic real connect (see MuleSyncEngine's VERIFY_INTERVAL). Every value here
+     *  must be re-confirmed by a real [DeviceInfo] read before being relied on for anything
+     *  correctness-sensitive; this is only ever used to decide *whether* to bother connecting. */
+    data class AdvertisedIdentity(val lastLineNumber: Long, val deviceName: String)
+
+    /** Builds the scan-response manufacturer-data payload for [deviceName]/[lastLineNumber] —
+     *  see [ADVERTISED_NAME_MAX_BYTES] for the byte budget this stays within. Truncates on a
+     *  UTF-8 codepoint boundary (never mid-character) if [deviceName] doesn't fit. */
+    fun encodeAdvertisedIdentity(lastLineNumber: Long, deviceName: String): ByteArray {
+        var truncated = deviceName
+        while (truncated.encodeToByteArray().size > ADVERTISED_NAME_MAX_BYTES) {
+            truncated = truncated.substring(0, truncated.length - 1)
+        }
+        val nameBytes = truncated.encodeToByteArray()
+        val buffer = java.nio.ByteBuffer.allocate(ADVERTISING_MAGIC.size + 1 + 4 + 1 + nameBytes.size)
+        buffer.put(ADVERTISING_MAGIC)
+        buffer.put(ADVERTISING_FORMAT_VERSION)
+        buffer.putInt(lastLineNumber.coerceIn(0, Int.MAX_VALUE.toLong()).toInt())
+        buffer.put(nameBytes.size.toByte())
+        buffer.put(nameBytes)
+        return buffer.array()
+    }
+
+    /** Inverse of [encodeAdvertisedIdentity] — always returns null rather than throwing for
+     *  anything malformed: missing scan response (`bytes` null — common on a scan window that
+     *  missed it, or an older peer build that predates this payload entirely), wrong magic, an
+     *  unrecognized [ADVERTISING_FORMAT_VERSION] (a future build's wire format), or a
+     *  too-short/truncated array. Every caller treats null as "unknown" and falls back to
+     *  behaving exactly as if this payload didn't exist at all. */
+    fun decodeAdvertisedIdentity(bytes: ByteArray?): AdvertisedIdentity? {
+        if (bytes == null || bytes.size < ADVERTISING_MAGIC.size + 1 + 4 + 1) return null
+        if (!bytes.copyOfRange(0, ADVERTISING_MAGIC.size).contentEquals(ADVERTISING_MAGIC)) return null
+        val buffer = java.nio.ByteBuffer.wrap(bytes)
+        buffer.position(ADVERTISING_MAGIC.size)
+        val version = buffer.get()
+        if (version != ADVERTISING_FORMAT_VERSION) return null
+        val lastLineNumber = buffer.int.toLong()
+        val nameLen = buffer.get().toInt() and 0xff
+        if (buffer.remaining() < nameLen) return null
+        val nameBytes = ByteArray(nameLen)
+        buffer.get(nameBytes)
+        val deviceName = runCatching { nameBytes.decodeToString(throwOnInvalidSequence = true) }.getOrNull()
+            ?: return null
+        return AdvertisedIdentity(lastLineNumber, deviceName)
+    }
 }
 
 /** One other, genuinely different device this one is holding relayable data for — everything
@@ -129,13 +197,24 @@ data class DeviceInfo(
  *  [originDeviceId]/[originRaceLabel] are ignored for that request; see
  *  [MulePullClient.pullRelayManifest]/[PeripheralSyncService]'s own handling). Either way the
  *  response streams back over [MuleGattProfile.DATA_CHARACTERISTIC_UUID] the same
- *  chunked-notify way. */
+ *  chunked-notify way.
+ *
+ *  [requestKey] identifies this exact ask so a responder that's already answered it once (e.g.
+ *  the same requester retrying after a dropped connection, or the same auto-sync tick asking
+ *  again before its own cursor has advanced) can replay its cached response instead of
+ *  redoing the DB query/encode — see PeripheralSyncService's request-response cache. Deliberately
+ *  a *deterministic* function of who's asking for what (see MulePullClient/mule-ble.js's
+ *  `computeRequestKey`), not a fresh random value per call — a random key would never collide
+ *  with itself and so could never actually get deduped. Left null (rather than required) so an
+ *  old-build requester talking to a new-build responder still decodes fine and simply gets no
+ *  dedup benefit — same graceful-degradation precedent as [DeviceInfo.pollIntervalMs]. */
 @Serializable
 data class PullRequest(
     val sinceLineNumber: Long,
     val originDeviceId: String? = null,
     val originRaceLabel: String? = null,
     val requestRelayManifest: Boolean = false,
+    val requestKey: String? = null,
 )
 
 /** Written to [MuleGattProfile.ACK_CHARACTERISTIC_UUID] once a pulled stream is fully

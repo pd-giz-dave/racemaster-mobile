@@ -1,6 +1,7 @@
 package mobile.racemaster
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -104,6 +105,15 @@ class MainActivity : ComponentActivity() {
     // for it, once; if the operator declines, this just no-ops on every later launch rather
     // than nagging (checked fresh each time in case they grant it later via system Settings
     // instead).
+    //
+    // Play Store Content Policy justification (lint's BatteryLife check flags this API by
+    // default, since it's commonly abused): this app's core function is continuous
+    // phone-to-phone BLE mesh sync (see PeripheralSyncService/STRUCTURE.md's Mule BLE protocol
+    // doc) plus staying on as a race-timing clicker during an event — Doze suspending that
+    // background BLE radio/GATT server activity would silently break race data sync for
+    // however long the device sleeps, which is exactly the "app's core functionality is
+    // negatively impacted" carve-out the policy allows.
+    @SuppressLint("BatteryLife")
     private fun requestIgnoreBatteryOptimizationsIfNeeded() {
         val powerManager = getSystemService(PowerManager::class.java) ?: return
         if (powerManager.isIgnoringBatteryOptimizations(packageName)) return
@@ -112,10 +122,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestBluetoothPermissionsIfNeeded() {
-        val required = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE)
-        } else {
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        val required = buildList {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                addAll(listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE))
+            } else {
+                add(Manifest.permission.ACCESS_FINE_LOCATION)
+            }
+            // Needed for PeripheralSyncService.updateNotification's ongoing-notification
+            // updates, not the initial startForeground() post (exempt on every API level).
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
         }
         val missing = required.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED

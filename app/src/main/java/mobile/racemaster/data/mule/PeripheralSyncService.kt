@@ -53,13 +53,16 @@ import mobile.racemaster.data.db.dao.PulledSourceSummary
 /**
  * Runs on every device (Time, Bibs, CP and Mule) regardless of which screen is showing, so a
  * Mule can discover and pull from a Time/Bibs/CP phone without its operator doing anything.
- * Advertises [MuleGattProfile.SERVICE_UUID] and answers a pull request by streaming one of
- * three things: this device's own unsynced splits/entries (the default — see [streamRecords]);
- * for a request naming a specific [RelayManifestEntry], whatever it's separately holding on
- * that origin's behalf in its own pulled inbox (see [streamRelayedRecords]) — this second path
- * is what lets a Mule relay another Mule's already-pulled data on to a third device, not just
- * serve its own race; or, for [PullRequest.requestRelayManifest], its own current
- * `List<RelayManifestEntry>` (see [streamRelayManifest]) — a puller fetches this only after
+ * Advertises [MuleGattProfile.SERVICE_UUID] (plus a scan-response payload carrying a cheap,
+ * non-authoritative name + lastLineNumber hint — see [MuleGattProfile.encodeAdvertisedIdentity]
+ * — so a scanner can decide whether it's even worth connecting at all before it does) and
+ * answers a pull request by streaming one of three things: this device's own unsynced
+ * splits/entries (the default — see [computeRecordsPayload]); for a request naming a specific
+ * [RelayManifestEntry], whatever it's separately holding on that origin's behalf in its own
+ * pulled inbox (see [computeRelayedRecordsPayload]) — this second path is what lets a Mule
+ * relay another Mule's already-pulled data on to a third device, not just serve its own race;
+ * or, for [PullRequest.requestRelayManifest], its own current `List<RelayManifestEntry>` (see
+ * [computeRelayManifestPayload]) — a puller fetches this only after
  * seeing [DeviceInfo.relayCount] > 0, since the manifest itself travels over the chunked DATA
  * stream rather than the single-read DEVICE_INFO characteristic (see RelayManifestEntry's own
  * doc for why). Also starts [MuleSyncEngine] unconditionally — so every phone,
@@ -125,7 +128,7 @@ class PeripheralSyncService : Service() {
 
     // Kept live the same way deviceName is above — what this device is currently able to
     // relay on behalf of other, genuinely different origin devices (its own pulled_records
-    // inbox), reflected into DeviceInfo.relayCount on every read and streamRelayManifest's own
+    // inbox), reflected into DeviceInfo.relayCount on every read and computeRelayManifestPayload's own
     // full list on every fetch, so a neighbour scanning this device sees relay-worthy data
     // appear/advance without this service needing to restart.
     @Volatile
@@ -140,9 +143,25 @@ class PeripheralSyncService : Service() {
     // Chunked notification send queue, one per connected central (keyed by MAC address).
     private val outboundChunks = mutableMapOf<String, ArrayDeque<ByteArray>>()
 
+    // Lets an already-answered PullRequest.requestKey be replayed instead of recomputed —
+    // e.g. the same requester retrying after a dropped mid-stream connection, or asking again
+    // via a different simultaneous route. Keyed by PullRequest.requestKey (see its own doc for
+    // why that's deterministic, not a fresh random value per call — a random key could never
+    // collide with itself, so could never actually get deduped here). Invalidated wholesale
+    // (see observeServingState/observeRelayManifest below) whenever the underlying data this
+    // device could answer with actually changes — that invalidate-on-change hook is what makes
+    // correctness here not depend on tuning MAX_CACHED_RESPONSES/CACHED_RESPONSE_MAX_AGE_MS;
+    // those two are pure defensive backstops in case a collector is ever missed, not the real
+    // correctness mechanism.
+    // @Volatile for the same cross-thread visibility reason as deviceName/servingState above —
+    // every access happens inside a serviceScope coroutine (Dispatchers.IO's thread pool), not
+    // necessarily the same underlying thread each time.
+    @Volatile
+    private var recentResponses: Map<String, CachedResponse> = emptyMap()
+
     // Negotiated ATT MTU per connected central (keyed by MAC address) — see onMtuChanged.
     // Falls back to MuleGattProfile.FALLBACK_CHUNK_SIZE_BYTES for a device that never
-    // negotiates (or hasn't yet when streamRecords() runs).
+    // negotiates (or hasn't yet when computeRecordsPayload() runs).
     private val deviceMtus = mutableMapOf<String, Int>()
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -180,7 +199,10 @@ class PeripheralSyncService : Service() {
     // service happens to restart.
     private fun observeRelayManifest() {
         serviceScope.launch {
-            container.muleRepository.sourceSummaries.collect { summaries -> relayManifest = summaries }
+            container.muleRepository.sourceSummaries.collect { summaries ->
+                relayManifest = summaries
+                recentResponses = emptyMap()
+            }
         }
     }
 
@@ -297,7 +319,10 @@ class PeripheralSyncService : Service() {
                     }
                 }
                 .distinctUntilChanged()
-                .collect { servingState = it }
+                .collect {
+                    servingState = it
+                    recentResponses = emptyMap()
+                }
         }
     }
 
@@ -357,21 +382,59 @@ class PeripheralSyncService : Service() {
         startAdvertising(adapter)
     }
 
+    // Own packet from the primary advertisement (which stays bare — just the service UUID, as
+    // before) so a scanner can read this device's name + lastLineNumber without ever
+    // connecting (see MuleGattProfile.encodeAdvertisedIdentity / MuleSyncEngine's
+    // shouldConnect gate, which is the entire point of carrying this at all). LOW_POWER/MEDIUM
+    // (was LOW_LATENCY/HIGH) trades a little first-discovery latency (LOW_POWER's ~1s
+    // advertising interval vs. LOW_LATENCY's ~100ms) for meaningfully less radio airtime —
+    // this device is simultaneously scanning *and* advertising *and* serving a GATT server on
+    // one radio, and the aggressive settings this used to run at are implicated in the
+    // crash-restart-loop field evidence that motivated this whole redesign (see
+    // MulePullClient's own scan-mode doc for the matching field notes on this class of issue).
+    @Volatile
+    private var advertisingAttempt = 0
+
     @SuppressLint("MissingPermission")
     private fun startAdvertising(adapter: BluetoothAdapter) {
         if (!hasAdvertisePermission()) return
         val advertiserLocal = adapter.bluetoothLeAdvertiser ?: return
         advertiser = advertiserLocal
+        advertisingAttempt = 0
+        startAdvertisingAttempt(advertiserLocal)
+    }
+
+    // A single startAdvertising() call fails atomically for both packets it's given — so if
+    // the scan-response payload ever pushes the combined advertisement over what this
+    // chipset's controller can accept (ADVERTISE_FAILED_DATA_TOO_LARGE), advertiseCallback
+    // below retries here with a smaller payload rather than this device going dark entirely.
+    // Byte-budget math (see MuleGattProfile.ADVERTISED_NAME_MAX_BYTES) says this should never
+    // legitimately trigger — this is defense-in-depth, not an expected path.
+    @SuppressLint("MissingPermission")
+    private fun startAdvertisingAttempt(advertiserLocal: BluetoothLeAdvertiser) {
         val settings = AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_POWER)
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
             .setConnectable(true)
             .build()
         val data = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
             .addServiceUuid(ParcelUuid(MuleGattProfile.SERVICE_UUID))
             .build()
-        advertiserLocal.startAdvertising(settings, data, advertiseCallback)
+        advertiserLocal.startAdvertising(settings, data, buildScanResponseData(), advertiseCallback)
+    }
+
+    // attempt 0: name + lastLineNumber. attempt 1 (only reached after a DATA_TOO_LARGE retry):
+    // lastLineNumber only, name dropped. attempt >= 2: no scan response at all — identical to
+    // this app's advertisement before this change, guaranteeing the worst case is never worse
+    // than what already shipped.
+    private fun buildScanResponseData(): AdvertiseData? {
+        if (advertisingAttempt >= MAX_SCAN_RESPONSE_ATTEMPTS) return null
+        val name = if (advertisingAttempt == 0) deviceName else ""
+        val payload = MuleGattProfile.encodeAdvertisedIdentity(servingState.lastLineNumber, name)
+        return AdvertiseData.Builder()
+            .addManufacturerData(MuleGattProfile.ADVERTISING_MANUFACTURER_ID, payload)
+            .build()
     }
 
     // The GATT-server-retry path (startGattServerAndAdvertising) and this advertising-only
@@ -394,6 +457,11 @@ class PeripheralSyncService : Service() {
         }
 
         override fun onStartFailure(errorCode: Int) {
+            if (errorCode == ADVERTISE_FAILED_DATA_TOO_LARGE && advertisingAttempt < MAX_SCAN_RESPONSE_ATTEMPTS) {
+                advertisingAttempt++
+                advertiser?.let { startAdvertisingAttempt(it) }
+                return
+            }
             isAdvertising = false
             Log.w(TAG, "BLE advertising failed to start: $errorCode")
             container.bluetoothStateRepository.recordAdvertisingFailure()
@@ -459,14 +527,16 @@ class PeripheralSyncService : Service() {
             when (characteristic.uuid) {
                 MuleGattProfile.CONTROL_CHARACTERISTIC_UUID -> {
                     val request = runCatching { json.decodeFromString<PullRequest>(String(value, Charsets.UTF_8)) }.getOrNull()
-                    val originDeviceId = request?.originDeviceId
-                    if (request != null && request.requestRelayManifest) {
-                        serviceScope.launch { streamRelayManifest(device) }
-                    } else if (request != null && originDeviceId == null) {
-                        serviceScope.launch { streamRecords(device, request.sinceLineNumber) }
-                    } else if (request != null && originDeviceId != null) {
+                    if (request != null) {
+                        val originDeviceId = request.originDeviceId
                         serviceScope.launch {
-                            streamRelayedRecords(device, originDeviceId, request.originRaceLabel.orEmpty(), request.sinceLineNumber)
+                            respondWithCache(device, request.requestKey) {
+                                when {
+                                    request.requestRelayManifest -> computeRelayManifestPayload()
+                                    originDeviceId == null -> computeRecordsPayload(request.sinceLineNumber)
+                                    else -> computeRelayedRecordsPayload(originDeviceId, request.originRaceLabel.orEmpty(), request.sinceLineNumber)
+                                }
+                            }
                         }
                     }
                     if (responseNeeded) {
@@ -541,37 +611,62 @@ class PeripheralSyncService : Service() {
 
     // --- Streaming delta records out to a connected Mule ---------------------------------
 
-    private suspend fun streamRecords(device: BluetoothDevice, sinceLineNumber: Long) {
-        val raceId = servingState.raceId ?: return
-        // Unconditional — not scoped to servingState.mode: a mixed-mode race (nothing in the
-        // app prevents switching AppMode without starting a new race) must still sync
-        // everything this device holds over BLE, regardless of which mode's screen the
-        // operator currently has open. Fixes a latent bug: this used to only ever stream
-        // whichever category matched the currently displayed screen.
+    // Computes the reply for a CONTROL write and sends it chunked, replaying an
+    // already-cached payload for a repeated [requestKey] instead of recomputing/resending it —
+    // see recentResponses' own doc. [compute] returning null means "nothing to send" (e.g. no
+    // active race — see computeRecordsPayload) and is honored even on a fresh, uncached
+    // request: no stream is sent at all, matching this protocol's existing behavior of simply
+    // not answering rather than sending an empty one.
+    private suspend fun respondWithCache(device: BluetoothDevice, requestKey: String?, compute: suspend () -> String?) {
+        val cached = requestKey?.let { recentResponses[it] }
+        val payloadJson = cached?.payloadJson ?: compute() ?: return
+        if (requestKey != null && cached == null) {
+            recentResponses = cacheAfterAnswering(
+                recentResponses,
+                requestKey,
+                payloadJson,
+                nowMillis = System.currentTimeMillis(),
+                maxEntries = MAX_CACHED_RESPONSES,
+                maxAgeMillis = CACHED_RESPONSE_MAX_AGE_MS,
+            )
+        }
+        sendChunked(device, payloadJson)
+    }
+
+    // Null means "no active race" — respondWithCache honors that as "send nothing at all",
+    // matching this protocol's existing behavior for that case.
+    //
+    // Unconditional — not scoped to servingState.mode: a mixed-mode race (nothing in the
+    // app prevents switching AppMode without starting a new race) must still sync
+    // everything this device holds over BLE, regardless of which mode's screen the
+    // operator currently has open. Fixes a latent bug: this used to only ever stream
+    // whichever category matched the currently displayed screen.
+    private suspend fun computeRecordsPayload(sinceLineNumber: Long): String? {
+        val raceId = servingState.raceId ?: return null
         val race = container.raceRepository.getRace(raceId)
         val records = container.raceRepository.getHistorySinceLineNumber(raceId, sinceLineNumber)
             .map { it.toSyncRecord(race?.timeModeStartedAtMillis, location = race?.location ?: "Finish") }
-        sendChunked(device, json.encodeToString(records))
+        return json.encodeToString(records)
     }
 
-    // Answers a mule-to-mule relay pull request — the pulled-inbox equivalent of streamRecords
-    // above, for a RelayManifestEntry this device is holding on another, genuinely different
-    // device's behalf rather than its own race. Deliberately does not filter by whether these
-    // rows have already been synced to the internet server: only the line-number delta matters
-    // here, exactly like streamRecords' own behavior — a record already on the server must
-    // still be offered to a neighbor mule that hasn't caught up to it yet.
-    private suspend fun streamRelayedRecords(device: BluetoothDevice, originDeviceId: String, originRaceLabel: String, sinceLineNumber: Long) {
-        sendChunked(device, json.encodeToString(container.muleRepository.relayedRecordsSince(originDeviceId, originRaceLabel, sinceLineNumber)))
-    }
+    // Answers a mule-to-mule relay pull request — the pulled-inbox equivalent of
+    // computeRecordsPayload above, for a RelayManifestEntry this device is holding on another,
+    // genuinely different device's behalf rather than its own race. Deliberately does not
+    // filter by whether these rows have already been synced to the internet server: only the
+    // line-number delta matters here, exactly like computeRecordsPayload's own behavior — a
+    // record already on the server must still be offered to a neighbor mule that hasn't caught
+    // up to it yet.
+    private suspend fun computeRelayedRecordsPayload(originDeviceId: String, originRaceLabel: String, sinceLineNumber: Long): String =
+        json.encodeToString(container.muleRepository.relayedRecordsSince(originDeviceId, originRaceLabel, sinceLineNumber))
 
     // Answers a PullRequest.requestRelayManifest request — this device's own current relay
     // manifest (see RelayManifestEntry's own doc for why it travels as its own chunked pull
     // rather than riding along in DeviceInfo, which only ever reports relayCount). Read fresh
     // from relayManifest, same live field DEVICE_INFO's own read uses, so a manifest fetched
     // right after seeing relayCount > 0 always reflects what that count was counting.
-    private fun streamRelayManifest(device: BluetoothDevice) {
+    private fun computeRelayManifestPayload(): String {
         val entries = relayManifest.map { RelayManifestEntry(it.sourceDeviceId, it.deviceName, it.sourceRaceLabel, it.lastLineNumber) }
-        sendChunked(device, json.encodeToString(entries))
+        return json.encodeToString(entries)
     }
 
     // ATT header is 3 bytes, so the usable notification payload is (MTU - 3). Sizing to
@@ -583,10 +678,10 @@ class PeripheralSyncService : Service() {
     // chunk over the platform's hard 512-byte GATT attribute limit, which crashed the
     // whole app (notifyCharacteristicChanged throws, uncaught, on this coroutine) rather
     // than just failing the one transfer — so this is always capped to a safe max too.
-    // Shared by streamRecords/streamRelayedRecords/streamRelayManifest so this already
-    // field-tested sizing logic never has to be reimplemented (or drift) a second time —
-    // encoding stays at each call site (kotlinx.serialization's encodeToString needs the
-    // payload's own static type), only the resulting bytes are generic here.
+    // Shared by every respondWithCache call site so this already field-tested sizing logic
+    // never has to be reimplemented (or drift) a second time — encoding stays at each
+    // computeXPayload function (kotlinx.serialization's encodeToString needs the payload's
+    // own static type), only the resulting bytes are generic here.
     private fun sendChunked(device: BluetoothDevice, payloadJson: String) {
         val negotiatedMtu = deviceMtus[device.address]
         val chunkSize = (negotiatedMtu?.let { (it - 3).coerceAtLeast(1) } ?: MuleGattProfile.FALLBACK_CHUNK_SIZE_BYTES)
@@ -608,7 +703,7 @@ class PeripheralSyncService : Service() {
         val chunk = queue.removeFirstOrNull() ?: return
         val characteristic = dataCharacteristic ?: return
         val server = gattServer ?: return
-        // Belt-and-suspenders alongside the chunk-size cap in streamRecords(): a BLE API call
+        // Belt-and-suspenders alongside the chunk-size cap in computeRecordsPayload(): a BLE API call
         // must never be allowed to crash this always-on service, no matter what edge case
         // produces a value the platform rejects — that took down the whole app in the field
         // (see MAX_SAFE_CHUNK_SIZE_BYTES). Worst case here is this one transfer stalls (the
@@ -653,7 +748,7 @@ class PeripheralSyncService : Service() {
     // Source Detail deliberately stays plain red/green — see MuleRepository.markRelayedRecordsSynced's
     // own doc), so only [sinkConfirmedUuids] ever needs writing there.
     //
-    // Unconditional — not scoped to servingState.mode, for the same reason as streamRecords: a
+    // Unconditional — not scoped to servingState.mode, for the same reason as computeRecordsPayload: a
     // mixed-mode race's ack can cover rows from either family.
     private suspend fun markSynced(ack: AckPayload) {
         val raceId = servingState.raceId
@@ -691,6 +786,7 @@ class PeripheralSyncService : Service() {
     // the normal way to update it afterward without re-entering the foreground-service start
     // path (and its Android 12+ restrictions — see startIfPermitted's own doc).
     private fun updateNotification(warning: String?) {
+        if (!hasNotificationPermission()) return
         val manager = getSystemService(NotificationManager::class.java) ?: return
         manager.notify(NOTIFICATION_ID, buildNotification(warning))
     }
@@ -727,11 +823,23 @@ class PeripheralSyncService : Service() {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
             ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
 
+    // Only startForeground()'s own initial post is exempt from this runtime permission — every
+    // later NotificationManager.notify() update against the same ID (updateNotification) still
+    // needs it on Android 13+, so this guards that one. No-ops rather than throwing if it's
+    // missing/never granted: the ongoing foreground notification just stops refreshing its text,
+    // which is strictly less bad than crashing the sync service over it.
+    private fun hasNotificationPermission(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
     companion object {
         private const val TAG = "PeripheralSyncService"
         private const val CHANNEL_ID = "mule_sync"
         private const val NOTIFICATION_ID = 1
         private val BLUETOOTH_RECHECK_INTERVAL = 3_000.milliseconds
+        private const val MAX_SCAN_RESPONSE_ATTEMPTS = 2
+        private const val MAX_CACHED_RESPONSES = 64
+        private const val CACHED_RESPONSE_MAX_AGE_MS = 60_000L
         val CLIENT_CHARACTERISTIC_CONFIG_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         /** No-ops quietly if Bluetooth runtime permissions haven't been granted yet — the
@@ -778,3 +886,35 @@ class PeripheralSyncService : Service() {
  */
 internal fun sinkConfirmedUuids(ack: AckPayload): Set<String> =
     (if (ack.isSink) ack.recordUuids.toSet() else emptySet()) + ack.sinkConfirmedRecordUuids
+
+/** A CONTROL request's already-computed answer — see [PeripheralSyncService]'s `recentResponses`
+ *  field doc for why this exists (replaying an answer to a repeated [PullRequest.requestKey]
+ *  instead of recomputing/resending it) and [cacheAfterAnswering] for how it's maintained. */
+internal data class CachedResponse(val payloadJson: String, val computedAtMillis: Long)
+
+/**
+ * Folds a freshly-computed [payloadJson] for [requestKey] into [cache], then applies the two
+ * purely defensive backstops described on `PeripheralSyncService.recentResponses`' own doc — an
+ * absolute age ceiling ([maxAgeMillis]) and a hard size cap ([maxEntries], evicting the oldest
+ * entries first) — in case the real correctness mechanism (invalidating the whole cache the
+ * moment the underlying data changes; see `PeripheralSyncService.observeServingState`/
+ * `observeRelayManifest`) is ever missed for some reason. Pulled out as a pure top-level
+ * function (matching [sinkConfirmedUuids]'s own precedent) so this policy is directly testable
+ * without PeripheralSyncService's live BLE/Service dependencies.
+ */
+internal fun cacheAfterAnswering(
+    cache: Map<String, CachedResponse>,
+    requestKey: String,
+    payloadJson: String,
+    nowMillis: Long,
+    maxEntries: Int,
+    maxAgeMillis: Long,
+): Map<String, CachedResponse> {
+    val withNew = cache + (requestKey to CachedResponse(payloadJson, nowMillis))
+    val notStale = withNew.filterValues { nowMillis - it.computedAtMillis < maxAgeMillis }
+    if (notStale.size <= maxEntries) return notStale
+    return notStale.entries
+        .sortedByDescending { it.value.computedAtMillis }
+        .take(maxEntries)
+        .associate { it.key to it.value }
+}

@@ -22,6 +22,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 import mobile.racemaster.data.db.entity.KnownDeviceEntity
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.CpModeRepository
@@ -99,7 +100,25 @@ data class DiscoveredDevice(
     val consecutiveFailures: Int = 0,
     val unreachable: Boolean = false,
     val relayedViaDeviceName: String? = null,
+    // Internal bookkeeping only (not rendered — relayedViaDeviceName is what the UI shows) —
+    // the relaying peer's own discoveredFlow key, so pullAllVisibleDevices can tell "this relay
+    // row came from a peer skipped this tick under shouldConnect's gate, carry it forward
+    // unchanged" apart from "this peer was actually re-checked this tick, replace its rows with
+    // whatever it reports now" without needing a display-name match (two peers could share a
+    // name). See pullAllVisibleDevices' own doc.
+    val relayedViaDeviceKey: String? = null,
     val isStale: Boolean = false,
+    // The [DeviceInfo.lastLineNumber] this device last actually confirmed via a real GATT
+    // connect — as opposed to whatever the scan-response payload currently advertises, which
+    // is only ever a cheap, non-authoritative hint (see MuleGattProfile.AdvertisedIdentity's
+    // own doc). Null until the very first successful read; see [shouldConnect].
+    val confirmedLineNumber: Long? = null,
+    // When [confirmedLineNumber] was last actually confirmed — 0 (never) until the first
+    // successful read. Deliberately left untouched by a failed read (see markUnreachable) so a
+    // flaky/unreachable device keeps looking "due for a real check" every tick, exactly as
+    // before this whole gating mechanism existed — the optimization below only ever applies to
+    // a healthy, unchanged device.
+    val lastRealReadAtMillis: Long = 0L,
 )
 
 // discoveredFlow (see below) only ever holds devices that came from a live BLE scan result
@@ -147,10 +166,13 @@ class MuleSyncEngine(
     // from discoveredFlow (rather than folded straight in) so discoveredFlow's own documented
     // guarantee that every entry carries a real Advertisement (see requiredAdvertisement above)
     // stays true; MuleModeViewModel merges this in alongside discoveredFlow/selfDevice for
-    // display, the same way it already folds selfDevice in. Rebuilt from scratch every
-    // pullAllVisibleDevices() tick from whichever peers were actually reachable that tick, so a
-    // relay row for an origin no longer offered by any currently-visible peer simply drops
-    // rather than lingering as a stale ghost entry.
+    // display, the same way it already folds selfDevice in. Refreshed every
+    // pullAllVisibleDevices() tick: a relaying peer actually reconnected to that tick has its
+    // rows replaced with whatever it reports right now (so an origin it no longer offers, or
+    // that's dropped off discoveredFlow entirely, promptly disappears), while a peer skipped
+    // this tick under shouldConnect's gate keeps its previously reported rows unchanged rather
+    // than them flickering out just because that peer wasn't worth reconnecting to yet — see
+    // [DiscoveredDevice.relayedViaDeviceKey] and pullAllVisibleDevices' own doc.
     private val relayFlow = MutableStateFlow<Map<String, DiscoveredDevice>>(emptyMap())
     private val statusMessageFlow = MutableStateFlow<String?>(null)
     // Distinct from statusMessageFlow (user-triggered action results): set when the
@@ -289,11 +311,25 @@ class MuleSyncEngine(
             try {
                 muleRepository.scanForDevices().collect { advertisement ->
                     val address = advertisement.identifier
-                    // Skip if this BLE identity is already tracked under any key (including a
-                    // deviceId key it's since been merged into) — otherwise a device rescanned
-                    // under the same address would be re-added and lose its accumulated state.
-                    val alreadyTracked = discoveredFlow.value.values.any { it.requiredAdvertisement.identifier == address }
-                    if (alreadyTracked) return@collect
+                    // Matched by identity (including a deviceId key it's since been merged
+                    // into), not by map key directly — a device rescanned under the same
+                    // address must keep its accumulated state (unsyncedCount, confirmedLineNumber,
+                    // reachability history, ...), never get re-added from scratch.
+                    val existingKey = discoveredFlow.value.entries
+                        .firstOrNull { it.value.requiredAdvertisement.identifier == address }?.key
+                    if (existingKey != null) {
+                        // Already tracked — still refresh the stored advertisement itself
+                        // (a fresh scan callback can carry an updated scan-response payload,
+                        // e.g. this peer's lastLineNumber has since advanced) so shouldConnect
+                        // below is always deciding off the latest advertised hint, not
+                        // whatever this device's very first sighting happened to carry. Only
+                        // the *first-ever* sighting (the else branch) triggers a real connect —
+                        // deviceId/relayCount/pollIntervalMs only ever come from an actual
+                        // DeviceInfo read, never the scan-response payload.
+                        discoveredFlow.value = discoveredFlow.value +
+                            (existingKey to discoveredFlow.value.getValue(existingKey).copy(advertisement = advertisement))
+                        return@collect
+                    }
                     discoveredFlow.value = discoveredFlow.value + (address to DiscoveredDevice(deviceKey = address, advertisement = advertisement))
                     launch { refreshDeviceInfo(address) }
                 }
@@ -385,6 +421,7 @@ class MuleSyncEngine(
         val current = discoveredFlow.value
         val base = current[newKey] ?: device
         val outstanding = (info.lastLineNumber - lastPulledLineNumber).coerceAtLeast(0).toInt()
+        val now = System.currentTimeMillis()
         val merged = base.copy(
             deviceKey = newKey,
             advertisement = device.advertisement,
@@ -392,9 +429,11 @@ class MuleSyncEngine(
             deviceName = info.deviceName,
             raceLabel = info.raceLabel,
             unsyncedCount = outstanding,
-            lastReachableAtMillis = System.currentTimeMillis(),
+            lastReachableAtMillis = now,
             consecutiveFailures = 0,
             unreachable = false,
+            confirmedLineNumber = info.lastLineNumber,
+            lastRealReadAtMillis = now,
         )
         discoveredFlow.value = (current - oldKey - newKey) + (newKey to merged)
         muleRepository.recordDeviceSeen(newKey, info.deviceName)
@@ -507,12 +546,32 @@ class MuleSyncEngine(
      *
      *  Returns a failure message from the last device whose *pull itself* failed (having
      *  already proven reachable via a successful DeviceInfo read) this tick, or null if every
-     *  attempt succeeded (including "nothing to pull"). */
-    private suspend fun pullAllVisibleDevices(): String? {
+     *  attempt succeeded (including "nothing to pull").
+     *
+     *  Deliberately does NOT do a real GATT connect+[DeviceInfo] read for every visible device
+     *  on every single tick anymore — that unconditional "connect to everyone every
+     *  [AUTO_SYNC_INTERVAL]" load is what this whole redesign exists to eliminate (see
+     *  [shouldConnect]'s own doc). [force] (from [forceSyncNow]) bypasses that gate entirely,
+     *  unconditionally re-checking every visible device right now — exactly matching this
+     *  function's pre-existing behavior and [forceSyncNow]'s own "do it right now" contract. */
+    private suspend fun pullAllVisibleDevices(force: Boolean = false): String? {
         var tickFailure: String? = null
         val myDeviceId = muleRepository.myDeviceId()
-        val relayRows = mutableMapOf<String, DiscoveredDevice>()
+        // Seeded from last tick's relay rows (see the loop below and its final assembly) —
+        // under the new connect-gating, most peers are skipped on most ticks, so relayFlow can
+        // no longer be rebuilt purely from whatever this one tick happens to touch (that used
+        // to be safe when every peer was connected every tick). A skipped peer's previously
+        // reported relay rows are carried forward unchanged; only a peer actually reconnected
+        // this tick has its rows replaced with what it reports right now.
+        val relayRows = relayFlow.value.filterValues { it.relayedViaDeviceKey in discoveredFlow.value.keys }.toMutableMap()
+        val now = System.currentTimeMillis()
         for ((key, device) in discoveredFlow.value.toList()) {
+            val decoded = muleRepository.decodeAdvertisedIdentity(device.requiredAdvertisement)
+            if (!shouldConnect(device, decoded, now, VERIFY_INTERVAL.inWholeMilliseconds, force)) continue
+            // This peer is being freshly checked this tick — drop whatever relay rows it
+            // contributed last time so they don't linger alongside (or diverge from) what it's
+            // about to report now; replaced below if it still has any to offer.
+            relayRows.entries.removeAll { it.value.relayedViaDeviceKey == key }
             val freshInfo = runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }.getOrNull()
             if (freshInfo == null) {
                 markUnreachable(key, device)
@@ -566,6 +625,7 @@ class MuleSyncEngine(
                     raceLabel = entry.originRaceLabel,
                     unsyncedCount = outstanding,
                     relayedViaDeviceName = freshInfo.deviceName,
+                    relayedViaDeviceKey = key,
                 )
                 val relayHasPendingConfirmation = muleRepository.hasSinkConfirmationToRelay(entry.originDeviceId, entry.originRaceLabel)
                 if (entry.lastLineNumber - relaySince <= 0 && !relayHasPendingConfirmation) continue
@@ -611,7 +671,7 @@ class MuleSyncEngine(
             // permanently disabled (isBusy never clears) rather than just this one tick failing.
             busyFlow.value = true
             try {
-                pullAllVisibleDevices()
+                pullAllVisibleDevices(force = true)
             } finally {
                 busyFlow.value = false
             }
@@ -661,6 +721,19 @@ class MuleSyncEngine(
         // auto-sync loop included) shares one cadence rather than each hardcoding its own copy —
         // see MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS's own doc.
         private val AUTO_SYNC_INTERVAL = MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS.milliseconds
+
+        // The periodic backstop behind shouldConnect's version-gate: even a device whose
+        // advertised counter never seems to move still gets a real GATT connect+DeviceInfo
+        // read this often, so (a) a relay manifest change — never reflected in the advertised
+        // counter at all, see shouldConnect's own doc — is still eventually noticed, and (b) a
+        // scan-response payload this device somehow never manages to read (a flaky chipset, an
+        // older peer build predating this payload) doesn't leave that peer stuck relying solely
+        // on `decoded == null`'s own fail-safe forever. Worst-case end-to-end propagation for a
+        // relayed origin is therefore roughly 2x this value (one interval for the relaying
+        // mule's own manifest to be re-checked, one more for whatever's pulling from *that*
+        // mule to notice) — an accepted latency tradeoff against the BLE stack load this whole
+        // gate exists to remove.
+        private val VERIFY_INTERVAL = 60.seconds
         private val BLUETOOTH_CHECK_INTERVAL = 3_000.milliseconds
         private val UNREACHABLE_DROP_THRESHOLD = 60.minutes
         private val UNRESOLVED_DROP_THRESHOLD = 2.minutes
@@ -693,6 +766,46 @@ internal fun pushResultMessage(auto: Boolean, result: Result<Int>): String? = re
     },
     onFailure = { e -> "Push failed: ${e.message}" },
 )
+
+/**
+ * Decides whether [device] is worth a real, expensive GATT connect+[DeviceInfo] read this
+ * tick, rather than doing that unconditionally for every visible device every
+ * [MuleSyncEngine.Companion.AUTO_SYNC_INTERVAL] the way this engine used to — that
+ * unconditional load (a full connect+read for every peer, every tick, whether or not anything
+ * had actually changed) is what the field evidence motivating this whole redesign pointed at
+ * (both this app's own PeripheralSyncService and the OS Bluetooth daemon crash-restarting under
+ * it). [decoded] is [device]'s scan-response identity hint (see
+ * [MuleGattProfile.AdvertisedIdentity]) for *this* tick — cheap to obtain (no BLE op, pure byte
+ * parsing of an already-received advertisement), and connecting is only skipped when it's both
+ * present and unchanged.
+ *
+ * Always true (never skips) for: [force] (an explicit "do it right now" bypass, e.g.
+ * [MuleSyncEngine.forceSyncNow]); a device never yet resolved ([DiscoveredDevice.deviceId] or
+ * [DiscoveredDevice.confirmedLineNumber] null — nothing to compare against yet); an undecodable
+ * hint (missed scan window, or a peer running an older build that predates this payload
+ * entirely — fail safe by connecting, exactly this device's pre-redesign behavior); the
+ * advertised counter having advanced past what was last confirmed; or [verifyIntervalMillis]
+ * having elapsed since the last real read — the periodic backstop that also covers what the
+ * advertised counter alone can't (relay-manifest changes; see
+ * [MuleSyncEngine.Companion.VERIFY_INTERVAL]'s own doc).
+ *
+ * Pulled out as a pure top-level function (matching [relevantRelayEntries]/[dedupRelayRows]'s
+ * own precedent) so this decision is directly testable without any BLE plumbing.
+ */
+internal fun shouldConnect(
+    device: DiscoveredDevice,
+    decoded: MuleGattProfile.AdvertisedIdentity?,
+    nowMillis: Long,
+    verifyIntervalMillis: Long,
+    force: Boolean,
+): Boolean {
+    if (force) return true
+    val confirmedLineNumber = device.confirmedLineNumber
+    if (device.deviceId == null || confirmedLineNumber == null) return true
+    if (decoded == null) return true
+    if (decoded.lastLineNumber > confirmedLineNumber) return true
+    return nowMillis - device.lastRealReadAtMillis >= verifyIntervalMillis
+}
 
 /**
  * Filters a peer's relay manifest down to entries actually worth acting on from my own point

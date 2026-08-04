@@ -51,4 +51,47 @@ class PeripheralSyncServiceTest {
 
         assertEquals(emptySet<String>(), sinkConfirmedUuids(ack))
     }
+
+    // cacheAfterAnswering — the two purely defensive backstops (an absolute age ceiling and a
+    // hard size cap) behind recentResponses' real correctness mechanism, which is
+    // invalidate-on-change (observeServingState/observeRelayManifest clearing the whole cache
+    // the moment the underlying data changes, not exercised here since it needs no dedicated
+    // test of its own beyond "the cache is empty afterward").
+
+    @Test
+    fun aFreshKeyIsAddedToAnEmptyCache() {
+        val result = cacheAfterAnswering(emptyMap(), "key-1", "payload", nowMillis = 1_000L, maxEntries = 64, maxAgeMillis = 60_000L)
+
+        assertEquals(mapOf("key-1" to CachedResponse("payload", 1_000L)), result)
+    }
+
+    @Test
+    fun entriesOlderThanTheAgeCeilingAreDroppedOnTheNextWrite() {
+        val cache = mapOf("stale" to CachedResponse("old-payload", computedAtMillis = 0L))
+
+        val result = cacheAfterAnswering(cache, "key-2", "payload", nowMillis = 60_001L, maxEntries = 64, maxAgeMillis = 60_000L)
+
+        assertEquals(setOf("key-2"), result.keys)
+    }
+
+    @Test
+    fun entriesWithinTheAgeCeilingSurvive() {
+        val cache = mapOf("recent" to CachedResponse("payload", computedAtMillis = 1_000L))
+
+        val result = cacheAfterAnswering(cache, "key-2", "payload-2", nowMillis = 1_500L, maxEntries = 64, maxAgeMillis = 60_000L)
+
+        assertEquals(setOf("recent", "key-2"), result.keys)
+    }
+
+    @Test
+    fun exceedingTheSizeCapEvictsTheOldestEntriesFirst() {
+        val cache = mapOf(
+            "oldest" to CachedResponse("p1", computedAtMillis = 1_000L),
+            "middle" to CachedResponse("p2", computedAtMillis = 2_000L),
+        )
+
+        val result = cacheAfterAnswering(cache, "newest", "p3", nowMillis = 3_000L, maxEntries = 2, maxAgeMillis = 60_000L)
+
+        assertEquals(setOf("middle", "newest"), result.keys)
+    }
 }

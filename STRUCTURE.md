@@ -231,8 +231,9 @@ the way — and it's also what the RaceMaster web app's own `js/mule-ble.js` (in
 as a "sink" with no internet involved. **A wire-shape change here needs a matching change there**
 — see that file's own doc comment, which mirrors this one.
 
-Four characteristics, all on that one service (`MuleGattProfile.kt` defines every UUID/constant
-named below):
+Four characteristics, all on that one service, plus a scan-response payload advertised alongside
+it (see "Advertised identity" below) — `MuleGattProfile.kt` defines every UUID/constant named
+below:
 
 | Characteristic | Direction | Carries |
 |---|---|---|
@@ -247,6 +248,33 @@ serve a larger value past. This is why it only ever reports `relayCount` (a plai
 the actual list of what's being relayed — seed a phone with data pulled from more than a
 handful of other devices and an embedded list would blow straight through that cap with no way
 to recover. The real list only ever travels over `DATA`, on demand.
+
+**Advertised identity — a scan-response payload, read without ever connecting.** Alongside the
+bare service UUID (all the primary advertisement carries), `PeripheralSyncService.startAdvertising`
+also sends a second, legacy scan-response packet built by
+`MuleGattProfile.encodeAdvertisedIdentity`: this device's `deviceName` and `lastLineNumber`,
+packed into Bluetooth manufacturer-specific data (`ADVERTISING_MANUFACTURER_ID`) under a small
+magic-number/format-version header so a decoder can always fail safe (return `null`, never throw)
+against a truncated read, an old peer's advertisement predating this payload, or a future format
+version. `MulePullClient.decodeAdvertisedIdentity` reads this straight off an already-scanned
+`Advertisement` — no GATT connect involved. **This is a cheap, non-authoritative hint, never a
+substitute for a real `DEVICE_INFO` read** — `MuleSyncEngine`'s `shouldConnect` gate uses it purely
+to decide *whether* a real connect is worth attempting this tick (skipped only when the advertised
+counter is unchanged from what was last actually confirmed, and even then only until a periodic
+`VERIFY_INTERVAL` backstop forces a real check regardless — see that gate's own doc for why: a
+relay manifest change is never reflected in this payload at all). Every other field
+(`deviceId`/`relayCount`/`pollIntervalMs`, and `lastLineNumber` itself once actually used) still
+only ever comes from a genuine `DEVICE_INFO` read.
+
+Replacing the old "connect and read `DEVICE_INFO` from every visible device, every
+`RECOMMENDED_POLL_INTERVAL_MS`, unconditionally" loop with this gate is what this whole payload
+exists for — that unconditional load (every peer, every ~5s, on top of already
+simultaneously scanning and advertising and running a GATT server on one radio) is what the field
+evidence behind this redesign pointed at, both this app's own `PeripheralSyncService` and the OS
+Bluetooth daemon crash-restarting under it. The advertise/scan settings were relaxed to match
+(`ADVERTISE_MODE_LOW_POWER`/`ADVERTISE_TX_POWER_MEDIUM` in `PeripheralSyncService`,
+`SCAN_MODE_BALANCED` in `MulePullClient` — both were previously the aggressive LOW_LATENCY/HIGH
+end of their respective scales).
 
 **`DATA` is where anything of unbounded size travels**, chunked to fit whatever ATT MTU actually
 got negotiated (`PeripheralSyncService.sendChunked`/`onMtuChanged`), each chunk sent as its own
@@ -266,6 +294,22 @@ just concatenates notifications until it sees that marker, then JSON-decodes the
   `MulePullClient.pullRelayManifest`; `js/mule-ble.js`'s `pullRelayManifestEntries`) — a leaf
   Time/Bibs/CP phone (always `relayCount == 0`) never pays this extra round trip.
 
+`PullRequest.requestKey` (optional — an old-build requester simply gets no benefit) lets the
+peripheral recognize a *repeat* of the exact same ask — same puller, same origin, same
+`sinceLineNumber` — and replay its already-computed answer instead of redoing the work
+(`PeripheralSyncService`'s `recentResponses` cache, seen via `respondWithCache`/
+`cacheAfterAnswering`). It's deliberately a deterministic function of who's asking for what
+(`MulePullClient.computeRequestKey` / `js/mule-ble.js`'s identical `computeRequestKey`), never a
+fresh random value — a random key could never collide with itself, so could never actually get
+deduped. The cache is invalidated wholesale the instant the underlying data it could answer with
+changes (a new `ServingState`, a new relay manifest) — that invalidate-on-change hook is the real
+correctness mechanism; a size cap and an absolute age ceiling on top are pure defensive backstops.
+This is responder-side work-avoidance for a *repeated* ask (e.g. a requester retrying after a
+dropped connection), not a substitute for `recordUuid`-based data dedup — a genuinely different
+requester, or the same data reaching a puller via a different peer/route, was already fully
+idempotent before this existed (see `MuleRepository.lastPulledLineNumber`'s per-origin delta
+cursor) and stays that way regardless of `requestKey`.
+
 **Acking** happens after a `DATA` pull completes: the puller writes one or more `AckPayload`s to
 `ACK`, split across as many separate writes as needed to stay under the same 512-byte cap
 (`MulePullClient.ackBatches` — the write-side analogue of `DATA`'s own notify-side chunking,
@@ -280,7 +324,11 @@ What one Mule's `MulePullClient.pull`/`pullRelayManifest` call actually does aga
 peripheral's `PeripheralSyncService`, in order — the relay-manifest leg only happens at all when
 the `DEVICE_INFO` read just before it reported `relayCount > 0`, and the "pull a race" leg
 repeats once for this device's own race and again for each relevant `RelayManifestEntry` the
-manifest leg returned:
+manifest leg returned. **This whole exchange may now not happen at all for a given tick** — see
+"Advertised identity" above: `MuleSyncEngine.shouldConnect` decides, from the peripheral's
+scan-response payload alone, whether even the first `connect()` step below is worth attempting
+this tick, rather than every visible peer being connected to unconditionally every tick the way
+this diagram's predecessor always was:
 
 ```
 Central (Mule)                              Peripheral (this device)
@@ -311,12 +359,16 @@ write ACK{recordUuids, isSink} ───────────▶
 disconnect()                     ─────────▶
 ```
 
-Two things worth knowing before reading a trace against this: `js/mule-ble.js`'s own
+Three things worth knowing before reading a trace against this: `js/mule-ble.js`'s own
 `connectAndVerify`/`pullFromConnectedPhone` walk this exact same sequence as a client (this is
-what "matching change there" in this section's own intro means in practice); and a Mule that's
-relaying nothing (`relayCount == 0`, true for every ordinary Time/Bibs/CP phone) simply skips the
-whole manifest leg — the common case is two round trips (`DEVICE_INFO` read, one race pull), not
-four.
+what "matching change there" in this section's own intro means in practice) — the web app has no
+`shouldConnect` gate of its own to skip this with, since a Web Bluetooth connection is already
+operator-initiated (a click on "Connect to Phone…"), never an automatic background loop the way
+the phone-to-phone mesh's `MuleSyncEngine` is; a Mule that's relaying nothing (`relayCount == 0`,
+true for every ordinary Time/Bibs/CP phone) simply skips the whole manifest leg — the common case
+is two round trips (`DEVICE_INFO` read, one race pull), not four; and on the phone-to-phone mesh
+side specifically, most ticks now skip this entire diagram for a given peer — see "Advertised
+identity" above.
 
 ## Test layout
 

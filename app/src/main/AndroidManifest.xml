@@ -31,13 +31,29 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
+    <!-- Android 13+ (API 33+) runtime permission to post/update the ongoing sync notification
+         (PeripheralSyncService.updateNotification) — requested alongside the Bluetooth trio in
+         MainActivity. Harmlessly ignored below API 33. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- FLAG_KEEP_SCREEN_ON (set on MainActivity's window) stops the *display timeout* from
          firing, but several OEM skins (seen on budget devices in particular) run their own
          battery-optimization/Doze-style policy that can still dim or lock the screen on an
          app they've decided is "inactive," ignoring that flag. Excluding this app from
          battery optimization (requested once at startup, see MainActivity) is the standard
-         fix for that gap — required to even show that system prompt. -->
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+         fix for that gap — required to even show that system prompt.
+
+         Play Store Content Policy justification (lint's BatteryLife check flags this
+         permission by default, since it's commonly abused): this app's core function is
+         continuous phone-to-phone BLE mesh sync (PeripheralSyncService) plus staying on/awake
+         as a race-timing clicker during an event — Doze suspending that background BLE
+         radio/GATT server activity would silently break race data sync for however long the
+         device is asleep, which is exactly the "app's core functionality is negatively
+         impacted" carve-out the policy allows. tools:ignore suppresses the lint nag for this
+         already-justified, deliberate use. -->
+    <uses-permission
+        android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+        tools:ignore="BatteryLife" />
 
     <application
         android:name=".RacemasterApplication"
@@ -75,6 +91,14 @@
             </intent-filter>
         </activity>
 
+        <!-- Android 14+ (API 34+) requires every foreground service to declare a type and, for
+             restricted types like connectedDevice, a justification for Play Console review.
+             Justification: this service runs a BLE GATT server/central pair that continuously
+             advertises to and connects with other nearby race-timing phones to relay timing
+             data (see STRUCTURE.md's Mule BLE protocol doc) — connectedDevice is the type Android
+             defines for exactly this "interacting with a connected/companion Bluetooth device"
+             case, and the corresponding FOREGROUND_SERVICE_CONNECTED_DEVICE permission above is
+             the type-specific permission Android 14+ requires alongside it. -->
         <service
             android:name=".data.mule.PeripheralSyncService"
             android:exported="false"
