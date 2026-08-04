@@ -74,7 +74,15 @@ object MuleGattProfile {
  *  [MuleRepository.lastPulledLineNumber] delta comparison, same resume cursor, just requested via
  *  [PullRequest.originDeviceId] instead of implicitly. [originDeviceId]/[originDeviceName] are the
  *  data's true creator, never the device being connected to right now — that's what keeps origin
- *  identity intact across arbitrary hop depth (see [PeripheralSyncService]'s relay manifest doc). */
+ *  identity intact across arbitrary hop depth (see [PeripheralSyncService]'s relay manifest doc).
+ *
+ *  Fetched as its own separate, chunked pull (see [PullRequest.requestRelayManifest] and
+ *  [MulePullClient.pullRelayManifest]) rather than embedded in [DeviceInfo] — a Mule relaying
+ *  data for more than a handful of devices could otherwise grow that single-read characteristic
+ *  straight past the ATT protocol's own 512-byte attribute value cap, with no way to serve a
+ *  larger value at all (unlike this list's own dedicated pull, which streams over the same
+ *  chunked-notify DATA characteristic a records pull already uses, so it isn't bounded by that
+ *  cap regardless of how many devices are being relayed). */
 @Serializable
 data class RelayManifestEntry(
     val originDeviceId: String,
@@ -95,11 +103,13 @@ data class DeviceInfo(
     // unsyncedCount-based "pull everything currently unsynced" model.
     val lastLineNumber: Long,
     val deviceName: String = "",
-    // Everything else this device is holding on behalf of other, genuinely different origin
-    // devices (a mule's pulled-from-others inbox) — empty for a device that's never pulled
-    // from anyone (an ordinary Time/Bibs phone, or a mule that hasn't relayed anything yet).
-    // See RelayManifestEntry's own doc.
-    val relayEntries: List<RelayManifestEntry> = emptyList(),
+    // How many other, genuinely different origin devices this device is currently holding
+    // relayable data for (its pulled-from-others inbox) — 0 for a device that's never pulled
+    // from anyone (an ordinary Time/Bibs/CP phone, or a mule that hasn't relayed anything yet).
+    // Just a count, not the manifest itself: see RelayManifestEntry's own doc for why the actual
+    // list is fetched via its own separate pull instead of riding along in this single-read
+    // characteristic. A puller only bothers with that extra round trip when this is > 0.
+    val relayCount: Int = 0,
     // How often (in ms) a puller should re-poll this device — see
     // MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS's own doc for why this is reported rather
     // than left for every puller to hardcode independently. Defaulted (rather than required) so
@@ -108,18 +118,24 @@ data class DeviceInfo(
     val pollIntervalMs: Long = MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS,
 )
 
-/** Written to [MuleGattProfile.CONTROL_CHARACTERISTIC_UUID] to request a delta stream of
+/** Written to [MuleGattProfile.CONTROL_CHARACTERISTIC_UUID] to request either a delta stream of
  *  every line after [sinceLineNumber] (0 to request the device's entire history) — of the
  *  responding device's own race by default ([originDeviceId] null), or of a specific
  *  [RelayManifestEntry] it's relaying on behalf of another device ([originDeviceId] +
  *  [originRaceLabel] set, paired the same way [PulledRecordEntity]'s own sourceDeviceId +
  *  sourceRaceLabel always are — a deviceId alone isn't guaranteed unique to one race label
- *  over a device's lifetime). */
+ *  over a device's lifetime) — or, when [requestRelayManifest] is true, the responding device's
+ *  own current `List<RelayManifestEntry>` instead of any records at all ([sinceLineNumber]/
+ *  [originDeviceId]/[originRaceLabel] are ignored for that request; see
+ *  [MulePullClient.pullRelayManifest]/[PeripheralSyncService]'s own handling). Either way the
+ *  response streams back over [MuleGattProfile.DATA_CHARACTERISTIC_UUID] the same
+ *  chunked-notify way. */
 @Serializable
 data class PullRequest(
     val sinceLineNumber: Long,
     val originDeviceId: String? = null,
     val originRaceLabel: String? = null,
+    val requestRelayManifest: Boolean = false,
 )
 
 /** Written to [MuleGattProfile.ACK_CHARACTERISTIC_UUID] once a pulled stream is fully

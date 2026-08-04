@@ -53,12 +53,16 @@ import mobile.racemaster.data.db.dao.PulledSourceSummary
 /**
  * Runs on every device (Time, Bibs, CP and Mule) regardless of which screen is showing, so a
  * Mule can discover and pull from a Time/Bibs/CP phone without its operator doing anything.
- * Advertises [MuleGattProfile.SERVICE_UUID] and answers a pull request by streaming either
- * this device's own unsynced splits/entries (the default — see [streamRecords]) or, for a
- * request naming a specific [RelayManifestEntry], whatever it's separately holding on that
- * origin's behalf in its own pulled inbox (see [streamRelayedRecords]) — this second path is
- * what lets a Mule relay another Mule's already-pulled data on to a third device, not just
- * serve its own race. Also starts [MuleSyncEngine] unconditionally — so every phone,
+ * Advertises [MuleGattProfile.SERVICE_UUID] and answers a pull request by streaming one of
+ * three things: this device's own unsynced splits/entries (the default — see [streamRecords]);
+ * for a request naming a specific [RelayManifestEntry], whatever it's separately holding on
+ * that origin's behalf in its own pulled inbox (see [streamRelayedRecords]) — this second path
+ * is what lets a Mule relay another Mule's already-pulled data on to a third device, not just
+ * serve its own race; or, for [PullRequest.requestRelayManifest], its own current
+ * `List<RelayManifestEntry>` (see [streamRelayManifest]) — a puller fetches this only after
+ * seeing [DeviceInfo.relayCount] > 0, since the manifest itself travels over the chunked DATA
+ * stream rather than the single-read DEVICE_INFO characteristic (see RelayManifestEntry's own
+ * doc for why). Also starts [MuleSyncEngine] unconditionally — so every phone,
  * regardless of its own current mode, is simultaneously scanning for and pulling from every
  * *other* nearby device (leaf phone or fellow Mule alike) and pushing to the server, not just
  * serving/self-pushing its own data. This is what lets a single phone record Time or Bibs
@@ -121,8 +125,9 @@ class PeripheralSyncService : Service() {
 
     // Kept live the same way deviceName is above — what this device is currently able to
     // relay on behalf of other, genuinely different origin devices (its own pulled_records
-    // inbox), reflected into DeviceInfo.relayEntries on every read so a neighbour scanning this
-    // device sees relay-worthy data appear/advance without this service needing to restart.
+    // inbox), reflected into DeviceInfo.relayCount on every read and streamRelayManifest's own
+    // full list on every fetch, so a neighbour scanning this device sees relay-worthy data
+    // appear/advance without this service needing to restart.
     @Volatile
     private var relayManifest: List<PulledSourceSummary> = emptyList()
 
@@ -434,9 +439,7 @@ class PeripheralSyncService : Service() {
                 raceLabel = servingState.raceLabel,
                 lastLineNumber = servingState.lastLineNumber,
                 deviceName = deviceName,
-                relayEntries = relayManifest.map {
-                    RelayManifestEntry(it.sourceDeviceId, it.deviceName, it.sourceRaceLabel, it.lastLineNumber)
-                },
+                relayCount = relayManifest.size,
             )
             val bytes = json.encodeToString(info).toByteArray(Charsets.UTF_8)
             val value = bytes.drop(offset).toByteArray()
@@ -457,7 +460,9 @@ class PeripheralSyncService : Service() {
                 MuleGattProfile.CONTROL_CHARACTERISTIC_UUID -> {
                     val request = runCatching { json.decodeFromString<PullRequest>(String(value, Charsets.UTF_8)) }.getOrNull()
                     val originDeviceId = request?.originDeviceId
-                    if (request != null && originDeviceId == null) {
+                    if (request != null && request.requestRelayManifest) {
+                        serviceScope.launch { streamRelayManifest(device) }
+                    } else if (request != null && originDeviceId == null) {
                         serviceScope.launch { streamRecords(device, request.sinceLineNumber) }
                     } else if (request != null && originDeviceId != null) {
                         serviceScope.launch {
@@ -546,7 +551,7 @@ class PeripheralSyncService : Service() {
         val race = container.raceRepository.getRace(raceId)
         val records = container.raceRepository.getHistorySinceLineNumber(raceId, sinceLineNumber)
             .map { it.toSyncRecord(race?.timeModeStartedAtMillis, location = race?.location ?: "Finish") }
-        sendRecordsChunked(device, records)
+        sendChunked(device, json.encodeToString(records))
     }
 
     // Answers a mule-to-mule relay pull request — the pulled-inbox equivalent of streamRecords
@@ -556,7 +561,17 @@ class PeripheralSyncService : Service() {
     // here, exactly like streamRecords' own behavior — a record already on the server must
     // still be offered to a neighbor mule that hasn't caught up to it yet.
     private suspend fun streamRelayedRecords(device: BluetoothDevice, originDeviceId: String, originRaceLabel: String, sinceLineNumber: Long) {
-        sendRecordsChunked(device, container.muleRepository.relayedRecordsSince(originDeviceId, originRaceLabel, sinceLineNumber))
+        sendChunked(device, json.encodeToString(container.muleRepository.relayedRecordsSince(originDeviceId, originRaceLabel, sinceLineNumber)))
+    }
+
+    // Answers a PullRequest.requestRelayManifest request — this device's own current relay
+    // manifest (see RelayManifestEntry's own doc for why it travels as its own chunked pull
+    // rather than riding along in DeviceInfo, which only ever reports relayCount). Read fresh
+    // from relayManifest, same live field DEVICE_INFO's own read uses, so a manifest fetched
+    // right after seeing relayCount > 0 always reflects what that count was counting.
+    private fun streamRelayManifest(device: BluetoothDevice) {
+        val entries = relayManifest.map { RelayManifestEntry(it.sourceDeviceId, it.deviceName, it.sourceRaceLabel, it.lastLineNumber) }
+        sendChunked(device, json.encodeToString(entries))
     }
 
     // ATT header is 3 bytes, so the usable notification payload is (MTU - 3). Sizing to
@@ -568,14 +583,16 @@ class PeripheralSyncService : Service() {
     // chunk over the platform's hard 512-byte GATT attribute limit, which crashed the
     // whole app (notifyCharacteristicChanged throws, uncaught, on this coroutine) rather
     // than just failing the one transfer — so this is always capped to a safe max too.
-    // Shared by both streamRecords and streamRelayedRecords so this already field-tested
-    // sizing logic never has to be reimplemented (or drift) a second time.
-    private fun sendRecordsChunked(device: BluetoothDevice, records: List<SyncRecord>) {
+    // Shared by streamRecords/streamRelayedRecords/streamRelayManifest so this already
+    // field-tested sizing logic never has to be reimplemented (or drift) a second time —
+    // encoding stays at each call site (kotlinx.serialization's encodeToString needs the
+    // payload's own static type), only the resulting bytes are generic here.
+    private fun sendChunked(device: BluetoothDevice, payloadJson: String) {
         val negotiatedMtu = deviceMtus[device.address]
         val chunkSize = (negotiatedMtu?.let { (it - 3).coerceAtLeast(1) } ?: MuleGattProfile.FALLBACK_CHUNK_SIZE_BYTES)
             .coerceAtMost(MuleGattProfile.MAX_SAFE_CHUNK_SIZE_BYTES)
 
-        val bytes = json.encodeToString(records).toByteArray(Charsets.UTF_8)
+        val bytes = payloadJson.toByteArray(Charsets.UTF_8)
         val chunks = ArrayDeque(
             bytes.toList().chunked(chunkSize).map { it.toByteArray() } +
                 listOf(byteArrayOf(MuleGattProfile.END_OF_STREAM_MARKER)),

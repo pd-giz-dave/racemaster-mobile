@@ -39,6 +39,9 @@ the time events only become meaningful when they are matched up to the correspon
 
 - [ ] on the initial "Start" screen, split the "START" button into 2 - one "Start Juniors" the other "Start Seniors",
       selecting either starts the mode and adds a line tagged as either "Juniors" or "Seniors" as appropriate, ditto in the history
+- [ ] the location for CP mode must contains a single number somewhere in its name,
+      eg "polebank 1", "2 hadden", "cp3", etc, tell user of that constraint in the UI
+- [ ] retirees seen at a CP or the finish need to be propagated to all other devices so they can update their bib expectations
 
 CP mode is just a safety thing to record where on a course a runner is.
 It also provides a rough time for recording split times.

@@ -45,6 +45,7 @@ import mobile.racemaster.data.repository.MAX_BIB_NUMBER
 import mobile.racemaster.data.repository.MIN_BIB_NUMBER
 import mobile.racemaster.data.repository.isModeStarted
 import mobile.racemaster.data.repository.isValidCpLocation
+import mobile.racemaster.data.repository.isValidRaceName
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.ui.components.HistoryTextField
@@ -147,7 +148,9 @@ fun RaceDetailsScreen(
     val countFieldsValid = !showRunnerFields || !countFieldEnabled ||
         (start != null && start in MIN_BIB_NUMBER..MAX_BIB_NUMBER && count != null && count >= 1 && rangeEnd != null && rangeEnd <= MAX_BIB_NUMBER)
     val locationValid = mode != AppMode.CP || isValidCpLocation(location)
-    val canSave = prefilled && !isSaving && name.isNotBlank() && course.isNotBlank() && location.isNotBlank() && countFieldsValid && locationValid
+    val nameValid = isValidRaceName(name)
+    val canSave = prefilled && !isSaving && name.isNotBlank() && nameValid && course.isNotBlank() &&
+        location.isNotBlank() && countFieldsValid && locationValid
 
     Scaffold(
         topBar = {
@@ -190,7 +193,7 @@ fun RaceDetailsScreen(
             HistoryTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = "Race name",
+                label = "Race name (letters, numbers, - only)",
                 // Picking a previous name only ever fills this field — course/first bib/runner
                 // count are unrelated and stay exactly as already entered (see
                 // SettingsRepository.raceNameHistory's own doc).
@@ -201,6 +204,13 @@ fun RaceDetailsScreen(
                 keyboardActions = nextFieldAction,
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (name.isNotBlank() && !nameValid) {
+                Text(
+                    "Race name can only contain letters (a-z, A-Z), numbers (0-9), and hyphens (-).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             HistoryTextField(
                 value = course,
                 onValueChange = { course = it },

@@ -149,39 +149,11 @@ class MulePullClient {
         // separately bounds the actual data-collection phase once connected.
         withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }
         try {
-            // The un-negotiated default ATT MTU is only 23 bytes (20 usable per notification
-            // after the ATT header) — without this, the peripheral's larger chunks would be
-            // silently truncated in transit, corrupting the reassembled JSON. Best-effort: if
-            // negotiation fails/isn't supported, the peripheral's onMtuChanged never fires and
-            // it falls back to FALLBACK_CHUNK_SIZE_BYTES, which is safe at the default MTU.
-            runCatching { (peripheral as? AndroidPeripheral)?.requestMtu(MuleGattProfile.REQUESTED_MTU) }
-
             val serviceUuid = MuleGattProfile.SERVICE_UUID.toKotlinUuid()
-            val controlCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.CONTROL_CHARACTERISTIC_UUID.toKotlinUuid())
-            val dataCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.DATA_CHARACTERISTIC_UUID.toKotlinUuid())
             val ackCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.ACK_CHARACTERISTIC_UUID.toKotlinUuid())
 
-            val chunks = mutableListOf<ByteArray>()
-            val collectJob = launch {
-                peripheral.observe(dataCharacteristic).takeWhile { chunk ->
-                    val isEndMarker = chunk.size == 1 && chunk[0] == MuleGattProfile.END_OF_STREAM_MARKER
-                    if (!isEndMarker) chunks.add(chunk)
-                    !isEndMarker
-                }.collect()
-            }
-            // Gives the notification subscription (CCCD write) time to land on the peripheral
-            // before the pull request does — otherwise the first chunks could be sent before
-            // we're subscribed and silently dropped.
-            delay(300.milliseconds)
-            // WithResponse, matching PROPERTY_WRITE (not PROPERTY_WRITE_NO_RESPONSE) declared
-            // on this characteristic server-side — Kable's write() defaults to
-            // WriteType.WithoutResponse, which fails against a with-response-only
-            // characteristic ("writeWithoutResponse property not found").
             val pullRequest = json.encodeToString(PullRequest(sinceLineNumber, originDeviceId, originRaceLabel))
-            peripheral.write(controlCharacteristic, pullRequest.toByteArray(Charsets.UTF_8), WriteType.WithResponse)
-            withTimeout(PULL_TIMEOUT) { collectJob.join() }
-
-            val payload = chunks.fold(ByteArray(0)) { acc, chunk -> acc + chunk }.toString(Charsets.UTF_8)
+            val payload = collectChunkedResponse(peripheral, pullRequest)
             val records = if (payload.isBlank()) emptyList() else json.decodeFromString<List<SyncRecord>>(payload)
 
             if (records.isNotEmpty()) {
@@ -200,6 +172,67 @@ class MulePullClient {
         } finally {
             peripheral.disconnect()
         }
+    }
+
+    /** Fetches a peripheral's own current relay manifest — everything else it's holding
+     *  relayable data for on behalf of other, genuinely different origin devices (see
+     *  RelayManifestEntry's own doc for why this is its own separate, chunked pull rather than
+     *  something [readDeviceInfo] returns directly: the manifest can grow arbitrarily large
+     *  with however many devices are being relayed, and DEVICE_INFO is a single-read
+     *  characteristic bounded by the ATT protocol's own 512-byte attribute value cap). Callers
+     *  should only bother with this extra round trip when [DeviceInfo.relayCount] from a prior
+     *  [readDeviceInfo] read was greater than 0 — see [MuleSyncEngine.pullAllVisibleDevices]. */
+    suspend fun pullRelayManifest(advertisement: Advertisement): List<RelayManifestEntry> = coroutineScope {
+        val peripheral = peripheralFor(advertisement)
+        withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }
+        try {
+            val pullRequest = json.encodeToString(PullRequest(sinceLineNumber = 0, requestRelayManifest = true))
+            val payload = collectChunkedResponse(peripheral, pullRequest)
+            if (payload.isBlank()) emptyList() else json.decodeFromString(payload)
+        } finally {
+            peripheral.disconnect()
+        }
+    }
+
+    // Shared by pull()/pullRelayManifest(): negotiates MTU, subscribes to the DATA
+    // characteristic, writes [requestJson] to CONTROL, and reassembles the notified chunks
+    // into one payload string once the END_OF_STREAM_MARKER lands — everything both requests
+    // have in common regardless of what shape (SyncRecord[] vs RelayManifestEntry[]) the
+    // resulting JSON decodes as, which stays the caller's own concern. Deliberately does not
+    // connect/disconnect the peripheral itself — pull() still needs the connection open
+    // afterward to write its own ack, so that stays bracketing this call at each call site.
+    private suspend fun collectChunkedResponse(peripheral: Peripheral, requestJson: String): String = coroutineScope {
+        // The un-negotiated default ATT MTU is only 23 bytes (20 usable per notification
+        // after the ATT header) — without this, the peripheral's larger chunks would be
+        // silently truncated in transit, corrupting the reassembled JSON. Best-effort: if
+        // negotiation fails/isn't supported, the peripheral's onMtuChanged never fires and
+        // it falls back to FALLBACK_CHUNK_SIZE_BYTES, which is safe at the default MTU.
+        runCatching { (peripheral as? AndroidPeripheral)?.requestMtu(MuleGattProfile.REQUESTED_MTU) }
+
+        val serviceUuid = MuleGattProfile.SERVICE_UUID.toKotlinUuid()
+        val controlCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.CONTROL_CHARACTERISTIC_UUID.toKotlinUuid())
+        val dataCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.DATA_CHARACTERISTIC_UUID.toKotlinUuid())
+
+        val chunks = mutableListOf<ByteArray>()
+        val collectJob = launch {
+            peripheral.observe(dataCharacteristic).takeWhile { chunk ->
+                val isEndMarker = chunk.size == 1 && chunk[0] == MuleGattProfile.END_OF_STREAM_MARKER
+                if (!isEndMarker) chunks.add(chunk)
+                !isEndMarker
+            }.collect()
+        }
+        // Gives the notification subscription (CCCD write) time to land on the peripheral
+        // before the pull request does — otherwise the first chunks could be sent before
+        // we're subscribed and silently dropped.
+        delay(300.milliseconds)
+        // WithResponse, matching PROPERTY_WRITE (not PROPERTY_WRITE_NO_RESPONSE) declared
+        // on this characteristic server-side — Kable's write() defaults to
+        // WriteType.WithoutResponse, which fails against a with-response-only
+        // characteristic ("writeWithoutResponse property not found").
+        peripheral.write(controlCharacteristic, requestJson.toByteArray(Charsets.UTF_8), WriteType.WithResponse)
+        withTimeout(PULL_TIMEOUT) { collectJob.join() }
+
+        chunks.fold(ByteArray(0)) { acc, chunk -> acc + chunk }.toString(Charsets.UTF_8)
     }
 
     companion object {

@@ -99,6 +99,10 @@ class MuleRepository(
 
     suspend fun readDeviceInfo(advertisement: Advertisement): DeviceInfo = pullClient.readDeviceInfo(advertisement)
 
+    // See MulePullClient.pullRelayManifest's own doc — a separate, chunked fetch of a peer's
+    // full relay manifest, only worth calling once readDeviceInfo has shown relayCount > 0.
+    suspend fun pullRelayManifest(advertisement: Advertisement): List<RelayManifestEntry> = pullClient.pullRelayManifest(advertisement)
+
     // The durable "seen devices" roster — see KnownDeviceEntity's own doc for how this differs
     // from MuleSyncEngine's own in-memory discoveredFlow.
     val knownDevices: Flow<List<KnownDeviceEntity>> = knownDeviceDao.observeAll()

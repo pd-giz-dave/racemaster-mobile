@@ -484,8 +484,11 @@ class MuleSyncEngine(
      *  on that device's own row — a single shared banner naming only the last unreachable
      *  device of however many was misleading when more than one had actually dropped out).
      *
-     *  Beyond each visible peer's own race, this also walks its [DeviceInfo.relayEntries] —
-     *  whatever *that* peer is separately holding for other, genuinely different origin
+     *  Beyond each visible peer's own race, this also walks its relay manifest (fetched via
+     *  [MuleRepository.pullRelayManifest] whenever [DeviceInfo.relayCount] says there's one —
+     *  see [RelayManifestEntry]'s own doc for why that's a separate pull rather than a
+     *  [DeviceInfo] field) — whatever *that* peer is separately holding for other, genuinely
+     *  different origin
      *  devices — and pulls those the exact same way, just tagged with [PullRequest.originDeviceId]
      *  instead of implicit (see [MuleRepository.pullFrom]'s own doc). The resume cursor for a
      *  relay entry is looked up by its true origin id/race label
@@ -542,7 +545,16 @@ class MuleSyncEngine(
                 }
             }
 
-            for (entry in relevantRelayEntries(myDeviceId, freshInfo.relayEntries)) {
+            // A separate, chunked pull rather than something freshInfo already carries — see
+            // RelayManifestEntry's own doc for why DeviceInfo only ever reports a relayCount.
+            // Only bothered with when that count says there's something to fetch, so a leaf
+            // Time/Bibs/CP phone (always relayCount == 0) never pays this extra round trip.
+            val relayEntries = if (freshInfo.relayCount > 0) {
+                runCatching { muleRepository.pullRelayManifest(device.requiredAdvertisement) }.getOrElse { emptyList() }
+            } else {
+                emptyList()
+            }
+            for (entry in relevantRelayEntries(myDeviceId, relayEntries)) {
                 val relayKey = "relay:${entry.originDeviceId}:${entry.originRaceLabel}"
                 val relaySince = muleRepository.lastPulledLineNumber(entry.originDeviceId, entry.originRaceLabel)
                 val outstanding = (entry.lastLineNumber - relaySince).coerceAtLeast(0).toInt()

@@ -14,9 +14,21 @@ local SQLite database (via Room). For Time/Bibs/CP Mode, data flows in one direc
 bottom:
 
 ```
-Screen (Composable)  <-- observes --  ViewModel  <-- calls -->  Repository  <-- queries -->  DAO / Room DB
-     |                                    |
-     UI, no logic                   state + business logic
+   Screen (Composable)
+      (UI, no logic)
+            |
+            | observes
+            v
+        ViewModel
+  (state + business logic)
+            |
+            | calls
+            v
+        Repository
+            |
+            | queries
+            v
+       DAO / Room DB
 ```
 
 - **Screens** (`ui/<feature>/XScreen.kt`) draw pixels and forward user actions. They hold no
@@ -113,6 +125,9 @@ app/src/main/java/mobile/racemaster/
 │   │   │                             non-blocking treatment as a duplicate
 │   │   ├── LocationValidation.kt     `isValidCpLocation()` — CP Mode's own required location
 │   │   │                             format ("CP1", "CP2-Bridge", ...)
+│   │   ├── RaceNameValidation.kt     `isValidRaceName()` — letters/digits/hyphen only, since the
+│   │   │                             name becomes part of the server-side folder key (see
+│   │   │                             RaceLabels.kt below)
 │   │   ├── RaceProgress.kt           `isRaceActive()` — shared "can I start/clear a race?" rule
 │   │   └── RaceLabels.kt             `buildRaceLabel()` — turns operator input into the stored
 │   │                                 race label
@@ -125,10 +140,17 @@ app/src/main/java/mobile/racemaster/
 │   │   ├── MulePullClient.kt         BLE central: scans/connects/pulls unsynced records from a
 │   │   │                             nearby Time/Bibs/CP/Mule phone, and batches/acks sink
 │   │   │                             confirmations back (`ackBatches` — keeps each GATT ack
-│   │   │                             write under Android's hard 512-byte cap)
+│   │   │                             write under Android's hard 512-byte cap); also
+│   │   │                             `pullRelayManifest` — a peer's relay manifest, fetched as
+│   │   │                             its own chunked pull rather than off DeviceInfo directly
 │   │   ├── MuleGattProfile.kt        Shared GATT service/characteristic UUIDs + wire record
 │   │   │                             shape, incl. `AckPayload.isSink`/`sinkConfirmedRecordUuids`
-│   │   │                             (the sink-identity + N-hop confirmation back-channel)
+│   │   │                             (the sink-identity + N-hop confirmation back-channel) and
+│   │   │                             `DeviceInfo.relayCount`/`RelayManifestEntry` (see that
+│   │   │                             type's own doc for why the manifest itself isn't a
+│   │   │                             DeviceInfo field — same 512-byte-cap problem `ackBatches`
+│   │   │                             solves for ack writes, solved here by moving the manifest
+│   │   │                             onto the chunked DATA characteristic instead)
 │   │   ├── PeripheralSyncService.kt  Foreground service every device runs regardless of mode,
 │   │   │                             advertising itself, answering pull requests, and deciding
 │   │   │                             (`markSynced`) which acked uuids actually count as reaching
@@ -198,6 +220,104 @@ gradle/libs.versions.toml        Dependency version catalog — add new librarie
                                   hardcoded in build.gradle.kts
 ```
 
+## The Mule BLE protocol
+
+Every device (Time, Bibs, CP, and Mule alike) runs `PeripheralSyncService`, which advertises one
+GATT service (`MuleGattProfile.SERVICE_UUID`) so any nearby Mule can discover and pull from it
+with zero pairing/operator involvement. This is what lets data recorded on an isolated phone out
+on the course get back to race control, potentially hopping through several Mule phones along
+the way — and it's also what the RaceMaster web app's own `js/mule-ble.js` (in the sibling
+`~/racemaster` repo) speaks as a client, connecting directly to a phone over Web Bluetooth to act
+as a "sink" with no internet involved. **A wire-shape change here needs a matching change there**
+— see that file's own doc comment, which mirrors this one.
+
+Four characteristics, all on that one service (`MuleGattProfile.kt` defines every UUID/constant
+named below):
+
+| Characteristic | Direction | Carries |
+|---|---|---|
+| `DEVICE_INFO` | central reads | One JSON `DeviceInfo` — this device's own `deviceId`/`raceLabel`/`lastLineNumber`/`deviceName`, plus `relayCount` (see below) and `pollIntervalMs` |
+| `CONTROL` | central writes | One JSON `PullRequest` — what to stream back over `DATA` next |
+| `DATA` | peripheral notifies | A chunked, notified JSON array (`SyncRecord[]` or `RelayManifestEntry[]`, depending on the `PullRequest` that triggered it) |
+| `ACK` | central writes | One JSON `AckPayload` per batch — which `recordUuid`s were received, and whether this puller is itself a genuine sink |
+
+**`DEVICE_INFO` is a single, unchunked GATT read** — bounded by the ATT protocol's own hard
+512-byte attribute value cap (`MuleGattProfile.MAX_SAFE_CHUNK_SIZE_BYTES`), which nothing can
+serve a larger value past. This is why it only ever reports `relayCount` (a plain `Int`), never
+the actual list of what's being relayed — seed a phone with data pulled from more than a
+handful of other devices and an embedded list would blow straight through that cap with no way
+to recover. The real list only ever travels over `DATA`, on demand.
+
+**`DATA` is where anything of unbounded size travels**, chunked to fit whatever ATT MTU actually
+got negotiated (`PeripheralSyncService.sendChunked`/`onMtuChanged`), each chunk sent as its own
+notification, terminated by a single `MuleGattProfile.END_OF_STREAM_MARKER` byte — the central
+just concatenates notifications until it sees that marker, then JSON-decodes the result
+(`MulePullClient.collectChunkedResponse`; `js/mule-ble.js`'s `collectDataStream`/
+`pullChunkedArray` mirror this exactly). A `PullRequest` decides what gets streamed:
+
+- `originDeviceId`/`originRaceLabel` both null (the default) → this device's own unsynced
+  history since `sinceLineNumber` (`PeripheralSyncService.streamRecords`).
+- Both set → a specific `RelayManifestEntry` this device is relaying on another, genuinely
+  different device's behalf (`streamRelayedRecords`) — this is what lets a Mule relay another
+  Mule's already-pulled data on to a third device, not just serve its own race.
+- `requestRelayManifest: true` → this device's own current `List<RelayManifestEntry>`
+  (`streamRelayManifest`) instead of any records at all. A puller only bothers with this once
+  it's seen `DeviceInfo.relayCount > 0` (`MuleSyncEngine.pullAllVisibleDevices`/
+  `MulePullClient.pullRelayManifest`; `js/mule-ble.js`'s `pullRelayManifestEntries`) — a leaf
+  Time/Bibs/CP phone (always `relayCount == 0`) never pays this extra round trip.
+
+**Acking** happens after a `DATA` pull completes: the puller writes one or more `AckPayload`s to
+`ACK`, split across as many separate writes as needed to stay under the same 512-byte cap
+(`MulePullClient.ackBatches` — the write-side analogue of `DATA`'s own notify-side chunking,
+since a GATT write has no chunking mechanism of its own to lean on). `AckPayload.isSink` is what
+turns a plain "relayed to a mule" (orange) into a genuine "reached a sink" (green) confirmation
+— see `LineSyncState`/`PeripheralSyncService.markSynced` for how that tri-state is decided and
+surfaced.
+
+### One connection, start to finish
+
+What one Mule's `MulePullClient.pull`/`pullRelayManifest` call actually does against one
+peripheral's `PeripheralSyncService`, in order — the relay-manifest leg only happens at all when
+the `DEVICE_INFO` read just before it reported `relayCount > 0`, and the "pull a race" leg
+repeats once for this device's own race and again for each relevant `RelayManifestEntry` the
+manifest leg returned:
+
+```
+Central (Mule)                              Peripheral (this device)
+──────────────                              ─────────────────────────
+connect()                        ─────────▶
+read DEVICE_INFO                 ─────────▶
+                                  ◀───────── DeviceInfo{relayCount, ...}
+
+  relayCount > 0 → fetch the manifest first:
+write CONTROL{requestRelayManifest} ──────▶
+                                  ◀───────── notify DATA (chunk)
+                                  ◀───────── notify DATA (chunk …)
+                                  ◀───────── notify DATA (END_OF_STREAM_MARKER)
+  concatenate chunks, decode → RelayManifestEntry[]
+
+  Pull a race — once for this device's own (sinceLineNumber only),
+  again per relevant RelayManifestEntry (+ originDeviceId/originRaceLabel):
+write CONTROL{PullRequest} ───────────────▶
+                                  ◀───────── notify DATA (chunk)
+                                  ◀───────── notify DATA (chunk …)
+                                  ◀───────── notify DATA (END_OF_STREAM_MARKER)
+  concatenate chunks, decode → SyncRecord[]
+
+write ACK{recordUuids, isSink} ───────────▶
+                                             markSynced() — tri-state sync colour updates
+  (repeat the previous three steps for the next race to pull, if any)
+
+disconnect()                     ─────────▶
+```
+
+Two things worth knowing before reading a trace against this: `js/mule-ble.js`'s own
+`connectAndVerify`/`pullFromConnectedPhone` walk this exact same sequence as a client (this is
+what "matching change there" in this section's own intro means in practice); and a Mule that's
+relaying nothing (`relayCount == 0`, true for every ordinary Time/Bibs/CP phone) simply skips the
+whole manifest leg — the common case is two round trips (`DEVICE_INFO` read, one race pull), not
+four.
+
 ## Test layout
 
 - `app/src/test/` — plain JVM unit tests (`./gradlew testDebugUnitTest`, no device needed).
@@ -232,7 +352,8 @@ gradle/libs.versions.toml        Dependency version catalog — add new librarie
 | Change what's remembered across app restarts (current mode, active race, server login) | `data/settings/SettingsRepository.kt` |
 | Change how/when a phone syncs with other phones or the server | `data/mule/MuleSyncEngine.kt` (the loop) / `MuleRepository.kt` (pull+push orchestration) |
 | Change what counts as a "sink" or the red/orange/green sync coloring | `data/repository/LineSyncState.kt` (the tri-state itself), `data/mule/PeripheralSyncService.kt`'s `markSynced` (which acked uuids count as sink-confirmed) |
-| Change the wire format sent to the RaceMaster server | `data/mule/SyncRecordMapping.kt`, `MuleSyncClient.kt` |
+| Change the wire format sent to the RaceMaster server (HTTP push) | `data/mule/SyncRecordMapping.kt`, `MuleSyncClient.kt` |
+| Change the phone-to-phone BLE protocol (GATT characteristics/wire shapes) | `data/mule/MuleGattProfile.kt` — see "The Mule BLE protocol" above; also mirror the change in `~/racemaster`'s `js/mule-ble.js` |
 | Change the app version | `versionCode`/`versionName` in `app/build.gradle.kts` |
 | Wire up a new repository so screens can use it | `di/AppContainer.kt` |
 | Update the in-app Help screen | `ui/help/HelpScreen.kt` |
