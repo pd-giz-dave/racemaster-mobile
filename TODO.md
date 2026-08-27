@@ -9,7 +9,8 @@
 - [ ] the race name field history should include races pulled from the server (as above), selecting one pulls the bib numbers from
       the server and number validity checking, per course, becomes enabled using those, users can enter a name as now
       if no server list available (with the current manual history unchanged, just mixed and in distinguishable via name format)
-- [ ] the above requires that the race details form has access to the setup server form      
+- [ ] the above requires that the race details form has access to the setup server form
+- [ ] if the first bib number is <100 warn user that they must be entered with leading 0's in bibs mode and CP mode to make them up to 3 digits
 
 ## Re-jig time mode
 
@@ -34,6 +35,14 @@ the time events only become meaningful when they are matched up to the correspon
       and "Start Seniors" (make sure they fit the button, shrink the font if necessary)
       and when either is selected it starts a new race with a new sequence (starting at s0) but it is appended to the history,
       so there can be multiple clock,finish,stop sessions in the history for the race
+- [ ] instead of type bib# then say what it is then save it (4 keystrokes for a finish, 
+      6 for something else) do this: type bib#, every 3 digits are assumed to be a bib number 
+      and auto saved as a finish record, if it is not a finish then change the event type afterwards,
+      the finish button disappears and the event button applies to the last entry, so for normal finishes
+      its 3 keystrokes, for other events its 5, this is relying on bib numbers being usually 101..999
+      which is the case for all Mercia races, the last entry stays in the enter bib field until the next bib entry starts,
+      undo last also brings the top entry back into the enter bib field, this gives the person instant feedback/confirmation
+      of the last number accepted without having to look at the small number in the list below
 
 ## Re-jig Cp mode
 
@@ -42,8 +51,26 @@ the time events only become meaningful when they are matched up to the correspon
 - [ ] the location for CP mode must contains a single number somewhere in its name,
       eg "polebank 1", "2 hadden", "cp3", etc, tell user of that constraint in the UI
 - [ ] retirees seen at a CP or the finish need to be propagated to all other devices so they can update their bib expectations
+- [ ] do the same auto save (as a pass) on 3 digits entry as bibs mode, pass button is redundant and removed
+      the retire button applies to the last entry, so a pass action is 3 keystrokes and retire is 4
+- [ ] CP mode needs a count of passes and retires so the marshal can report to the sweep team how many
+      people they have seen, the sweep team will know what they should have seen (==passes from previous CP)
 
 CP mode is just a safety thing to record where on a course a runner is.
 It also provides a rough time for recording split times.
 CP Mode records time-of-day when a runner passed a CP.
-Time mode also records time-of-day for all its actions, this means an appropriate elapsed time can be calculated.
+Time mode also records time-of-day for all its  actions, this means an appropriate elapsed time can be calculated.
+
+## Re-jig mule mode
+
+- [ ] do not propagate history that is more than 2 days old
+- [ ] on the mule mode screen give feedback that the server and a BT sink is visible and working,
+      in particular give persistent feedback that a BT sink is polling us,
+
+## All modes
+
+- [ ] provide feedback about online/offline status (in the app title?)
+- [ ] provide feedback that we are being polled via BT (so user can see if BT has failed - which seems to be common)
+      for bt there are 2 scenarios: bt was in use and has stopped, bt was never in use, the user knows if bt is expected to be working or not,
+      so maybe an option that says "i expect to be polled" so no polling is an error
+

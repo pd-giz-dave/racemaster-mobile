@@ -57,5 +57,5 @@ echo "versionName ${CURRENT_VERSION_NAME} -> ${NEW_VERSION_NAME}  (versionCode $
 cd "$REPO_ROOT"
 ./gradlew publishApkToWebApp
 
-echo "Published racemaster-mobile-debug.apk at v${NEW_VERSION_NAME}."
+echo "Published racemaster-mobile-debug.apk at v${NEW_VERSION_NAME} to ~racemaster/downloads."
 echo "Review and commit the version bump in app/build.gradle.kts when ready — not committed automatically."
