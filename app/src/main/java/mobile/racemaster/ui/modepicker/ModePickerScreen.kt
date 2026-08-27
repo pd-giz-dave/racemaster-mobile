@@ -37,7 +37,7 @@ fun ModePickerScreen(
     onNewRaceNeeded: (AppMode) -> Unit,
     onReviewPastRaces: () -> Unit,
     onHelp: () -> Unit,
-    onNameDevice: () -> Unit,
+    onSetupDevice: () -> Unit,
     viewModel: ModePickerViewModel = viewModel(factory = ModePickerViewModel.Factory),
 ) {
     val hasActiveRace by viewModel.hasActiveRace.collectAsStateWithLifecycle()
@@ -71,16 +71,23 @@ fun ModePickerScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.Top),
     ) {
-        Text("Set device name", style = MaterialTheme.typography.titleMedium)
+        // Routes into SetupDeviceScreen — the one hub every mode (Time/Bibs/CP/Mule alike)
+        // reaches name/server/connectivity setup through, which used to only be reachable from
+        // inside Mule Mode's own screen. That stopped making sense once Time/Bibs/CP phones
+        // became a distinct, separate role from Mule (see MuleSyncEngine's own doc): an
+        // operator on a Time-mode phone shouldn't have to detour through a role they never
+        // actually use just to reach setup. "Setup: <name>" rather than a bare echoed name (the
+        // previous wording) — a lone device name with no other label read as if the button just
+        // *displayed* the name rather than led anywhere.
         Button(
-            onClick = withClickSound(onNameDevice),
+            onClick = withClickSound(onSetupDevice),
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.secondary,
                 contentColor = MaterialTheme.colorScheme.onSecondary,
             ),
             modifier = Modifier.fillMaxWidth().height(48.dp),
         ) {
-            Text(deviceName ?: "Name Device", style = MaterialTheme.typography.titleMedium)
+            Text(deviceName?.let { "Setup: $it" } ?: "Setup Device", style = MaterialTheme.typography.titleMedium)
         }
         Text("Select device mode", style = MaterialTheme.typography.titleMedium)
         ModeButton("Time Mode") { handleModeTap(AppMode.TIME) }

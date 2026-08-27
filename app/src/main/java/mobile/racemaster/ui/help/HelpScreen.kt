@@ -173,17 +173,33 @@ fun HelpScreen(onBack: () -> Unit) {
                 title = "Mule Mode",
                 body = "Mule Mode continuously syncs with every other RaceMaster Mobile device it can " +
                     "see over Bluetooth — no pairing step needed, any nearby device running the app " +
-                    "is discovered and synced automatically. The first time you open Mule Mode without " +
-                    "a saved server login, you're asked whether to also sync to the RaceMaster server " +
-                    "(recommended when the phone has a working internet connection) or stay purely " +
-                    "device-to-device for now — this choice can be changed later via Setup Server in " +
-                    "the title bar. A phone can also be connected to directly over Bluetooth by the " +
-                    "RaceMaster web app, which counts as a second, independent destination — a race " +
-                    "can reach race control via the server, a Bluetooth-connected laptop, or both. " +
-                    "Nearby devices lists every device Mule can currently see, coloured red while it " +
-                    "still has unsynced data and green once it's fully pulled. Force sync now triggers " +
-                    "an immediate pull-and-push cycle instead of waiting for the automatic few-second " +
-                    "tick; Stop auto-sync/Resume auto-sync pauses or resumes that background cycle.",
+                    "is discovered and synced automatically. A phone can also be connected to directly " +
+                    "over Bluetooth by the RaceMaster web app, which counts as a second, independent " +
+                    "destination — a race can reach race control via the server, a Bluetooth-connected " +
+                    "laptop, or both. Nearby devices lists every device Mule can currently see, coloured " +
+                    "red while it still has unsynced data and green once it's fully pulled. Bluetooth, " +
+                    "server sync, force-syncing, and pausing auto-sync are all configured from Options " +
+                    "— see Setup Device below.",
+            )
+            HelpSection(
+                title = "Setup Device",
+                body = "Setup Device — reached from every mode via the \"Setup: <device name>\" " +
+                    "button on the Mode Picker — is where a phone's own identity and connectivity are " +
+                    "configured, independently of which mode (Time/Bibs/CP/Mule) it's currently " +
+                    "running. Setup Name renames this device, the label every other phone sees it by. " +
+                    "Setup Server configures the RaceMaster server URL and login — needed only if this " +
+                    "phone should push its own data to the server directly, or (for a Mule phone) also " +
+                    "pull and re-push data collected from other nearby phones; skip it entirely to " +
+                    "stay purely device-to-device over Bluetooth. Options covers everything else: " +
+                    "Bluetooth on/off (turning it off makes this phone invisible to every nearby device " +
+                    "— no scanning, no advertising, no GATT reads — until turned back on), server sync " +
+                    "on/off (independent of Bluetooth — turns pushing to/checking the server on or off " +
+                    "without affecting device-to-device sync), Force sync now (triggers an immediate " +
+                    "pull-and-push cycle instead of waiting for the automatic few-second tick), and " +
+                    "Stop auto-sync/Resume auto-sync (pauses or resumes that background cycle). All " +
+                    "four apply the same way regardless of mode: a Time/Bibs/CP phone still pushes its " +
+                    "own recorded data to the server on the same schedule, it just never pulls from " +
+                    "other phones the way a Mule phone does.",
             )
             HelpSection(
                 title = "Sync status colours",

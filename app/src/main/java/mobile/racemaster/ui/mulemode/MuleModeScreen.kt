@@ -35,7 +35,7 @@ import mobile.racemaster.util.withClickSound
 @Composable
 fun MuleModeScreen(
     onChangeMode: () -> Unit,
-    onSetupServer: () -> Unit,
+    onOptions: () -> Unit,
     viewModel: MuleModeViewModel = viewModel(factory = MuleModeViewModel.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -46,7 +46,6 @@ fun MuleModeScreen(
             TopAppBar(
                 title = { Text("Mule Mode") },
                 actions = {
-                    TextButton(onClick = withClickSound(onSetupServer)) { Text("Setup Server") }
                     TextButton(onClick = withClickSound(onChangeMode)) { Text("Mode") }
                 },
                 expandedHeight = CompactTopAppBarHeight,
@@ -72,8 +71,13 @@ fun MuleModeScreen(
                 Text(text = "Device name: $deviceName", style = MaterialTheme.typography.labelMedium)
             }
             SyncStatusLine(uiState.unsyncedCount, uiState.lastSyncedAtMillis)
-            BluetoothAndServerSyncToggles(uiState, viewModel)
-            AutoSyncStatus(uiState, viewModel)
+            ConnectivityStatusText(uiState)
+            // Bluetooth/server-sync toggles and the force-sync/auto-sync controls now live on
+            // the shared Options screen (reachable from every mode via Setup Device) — this
+            // used to duplicate that UI inline here, which was both redundant and a real
+            // inconsistency risk (two copies of the same toggle to keep in sync).
+            TextButton(onClick = withClickSound(onOptions)) { Text("Options") }
+            PullStatusLine(uiState)
 
             uiState.statusMessage?.let { message ->
                 Text(
@@ -95,8 +99,11 @@ fun MuleModeScreen(
 // without affecting BLE device-to-device sync. Both are also independent of the Auto-sync
 // stop/resume toggle below (which only pauses this device's own pull/push loop while it
 // keeps scanning/advertising/serving).
+// Plain feedback text, no controls — shared between this screen's own toggles below and
+// SetupDeviceScreen's read-only status summary (see that screen's own doc for why it needs
+// the same feedback without needing the actual toggle buttons alongside it).
 @Composable
-private fun BluetoothAndServerSyncToggles(uiState: MuleModeUiState, viewModel: MuleModeViewModel) {
+internal fun ConnectivityStatusText(uiState: MuleModeUiState) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         if (uiState.bluetoothOff) {
             Text(
@@ -105,8 +112,16 @@ private fun BluetoothAndServerSyncToggles(uiState: MuleModeUiState, viewModel: M
                 color = MaterialTheme.colorScheme.error,
             )
         } else {
+            // "Pulling" is only ever true for the active BT puller (see MuleSyncEngine's own
+            // doc on the source/sink role split) — a Time/Bibs/CP phone only advertises and
+            // serves reads, it never scans or pulls anything itself, so this text must not
+            // claim otherwise just because this composable is now shared across every mode.
             Text(
-                "Bluetooth: ON — pulling data from nearby devices",
+                if (uiState.isMuleMode) {
+                    "Bluetooth: ON — pulling data from nearby devices"
+                } else {
+                    "Bluetooth: ON — visible to nearby Mule devices"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
             )
@@ -128,7 +143,7 @@ private fun BluetoothAndServerSyncToggles(uiState: MuleModeUiState, viewModel: M
             )
         } else if (!uiState.isLoggedIn) {
             Text(
-                "Not logged in — tap Setup Server above to configure the server URL and log in.",
+                "Not logged in — tap Setup Server to configure the server URL and log in.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -139,6 +154,17 @@ private fun BluetoothAndServerSyncToggles(uiState: MuleModeUiState, viewModel: M
                 color = MaterialTheme.colorScheme.primary,
             )
         }
+    }
+}
+
+@Composable
+internal fun BluetoothAndServerSyncToggles(
+    uiState: MuleModeUiState,
+    viewModel: MuleModeViewModel,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        ConnectivityStatusText(uiState)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (uiState.bluetoothOff) {
                 Button(onClick = withClickSound(viewModel::turnBluetoothOn)) { Text("Bluetooth off") }
@@ -154,24 +180,13 @@ private fun BluetoothAndServerSyncToggles(uiState: MuleModeUiState, viewModel: M
     }
 }
 
+// The BLE-pull half of what used to be one combined AutoSyncStatus composable — kept here
+// (unlike the push/auto-sync half, now AutoSyncControls in SetupOptionsScreen.kt) because it's
+// genuinely meaningless off Mule mode: a source phone never pulls, so neither a nearby-device
+// count nor a "Last pull" time means anything on its own screen.
 @Composable
-private fun AutoSyncStatus(uiState: MuleModeUiState, viewModel: MuleModeViewModel) {
+internal fun PullStatusLine(uiState: MuleModeUiState) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        when {
-            uiState.autoSyncStopped -> Text(
-                "Auto-sync: STOPPED",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-            uiState.autoSyncArmed -> Text(
-                "Auto-sync: ON — pulling and pushing every few seconds",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-        uiState.autoWarning?.let { warning ->
-            Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-        }
         // Nearby device count is always worth showing alongside "Last pull" — it's the one
         // piece of context that explains a persistent "never" (nothing nearby to pull from,
         // not a malfunction) without the operator having to cross-reference the list below.
@@ -190,29 +205,6 @@ private fun AutoSyncStatus(uiState: MuleModeUiState, viewModel: MuleModeViewMode
             "Last pull: ${uiState.lastPulledAtMillis?.let { formatWallClock(it) } ?: "never"} (from $fromSuffix)",
             style = MaterialTheme.typography.bodySmall,
         )
-        // Unlike a pull, a push doesn't depend on any nearby device being visible at all — this
-        // device's own data pushes on its own the moment it's logged in, so a genuine "never"
-        // here only ever means one thing: not logged in. Once something has actually pushed,
-        // the qualifier drops — pairing a real timestamp with "(no server)" would read as a
-        // contradiction rather than an explanation.
-        Text(
-            if (uiState.lastSyncedAtMillis == null && !uiState.isLoggedIn) {
-                "Last push: never (no server)"
-            } else {
-                "Last push: ${uiState.lastSyncedAtMillis?.let { formatWallClock(it) } ?: "never"}"
-            },
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = withClickSound(viewModel::forceSyncNow), enabled = !uiState.isBusy) {
-                Text("Force sync now")
-            }
-            if (uiState.autoSyncStopped) {
-                TextButton(onClick = withClickSound(viewModel::resumeAutoSync)) { Text("Resume auto-sync") }
-            } else {
-                TextButton(onClick = withClickSound(viewModel::stopAutoSync)) { Text("Stop auto-sync") }
-            }
-        }
     }
 }
 

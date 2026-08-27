@@ -13,8 +13,10 @@ object Routes {
     const val MULE_SOURCE_DETAIL = "mule_source_detail/{raceLabel}/{sourceDeviceId}"
     const val RACE_DETAILS = "race_details/{mode}/{raceId}"
     const val HELP = "help"
+    const val SETUP_DEVICE = "setup_device"
     const val NAME_DEVICE = "name_device"
     const val MULE_SERVER_SETUP = "mule_server_setup"
+    const val SETUP_OPTIONS = "setup_options"
     const val EDIT_SPLIT = "edit_split/{splitId}"
     const val EDIT_ENTRY = "edit_entry/{mode}/{entryId}"
 
