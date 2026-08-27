@@ -17,6 +17,10 @@ RACEMASTER_DIR="${RACEMASTER_DIR:-/home/dave/racemaster}"
 PORT="${RACEMASTER_PORT:-3000}"
 DEV_USERNAME="mobiletest"
 DEV_PASSWORD="test1234"
+# A device with a wedged adb transport can accept `adb devices`/`get-state` fine but hang
+# forever on `adb reverse` — seen in the field with a stuck USB connection. Bound every adb
+# call so one bad device can't block the whole build (this ran as a Gradle Exec task).
+ADB_TIMEOUT="${ADB_TIMEOUT:-10}"
 
 # Physical devices only ship adb on the PC, but it's not always on PATH.
 if ! command -v adb >/dev/null 2>&1; then
@@ -68,13 +72,20 @@ if ! command -v adb >/dev/null 2>&1; then
     exit 0
 fi
 
-devices=$(adb devices | tail -n +2 | awk '$2 == "device" {print $1}')
+if ! devices=$(timeout "${ADB_TIMEOUT}" adb devices | tail -n +2 | awk '$2 == "device" {print $1}'); then
+    echo "adb devices timed out after ${ADB_TIMEOUT}s — skipping adb reverse (server is up, but phones won't reach it until you reverse tcp:${PORT} manually)." >&2
+    exit 0
+fi
+
 if [ -z "$devices" ]; then
     echo "No connected devices — skipping adb reverse."
 else
     while IFS= read -r serial; do
-        adb -s "$serial" reverse "tcp:${PORT}" "tcp:${PORT}"
-        echo "  adb reverse set up for $serial"
+        if timeout "${ADB_TIMEOUT}" adb -s "$serial" reverse "tcp:${PORT}" "tcp:${PORT}"; then
+            echo "  adb reverse set up for $serial"
+        else
+            echo "  adb reverse timed out/failed for $serial after ${ADB_TIMEOUT}s (its adb transport may be wedged — unplug/replug it or run 'adb kill-server'); skipping" >&2
+        fi
     done <<< "$devices"
 fi
 
