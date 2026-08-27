@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,6 +21,10 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeout
+import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -28,6 +33,7 @@ import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
+import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 
 /** A single physical phone Mule has seen — keyed by its stable [deviceId] once known (a
@@ -130,13 +136,28 @@ private val DiscoveredDevice.requiredAdvertisement: Advertisement
     get() = advertisement ?: error("Expected a BLE-scanned device, got the self entry")
 
 /**
- * Owns Mule Mode's entire background job: scanning for nearby Time/Bibs/Mule phones, pulling
- * whatever they're holding (plus this phone's own unsynced data) into the local inbox, and
- * pushing everything on to the server — all continuously, for the life of the process, via
- * [start] (called once from [PeripheralSyncService.onCreate]), independent of whether the
- * operator is actually looking at the Mule Mode screen. This is what lets a single phone
- * record Time or Bibs mode *and* act as a Mule for every other nearby device at the same
- * time, instead of Mule's sync only running while its own screen happens to be open.
+ * Owns this device's entire background sync job — started once, for the life of the process,
+ * via [start] (called from [PeripheralSyncService.onCreate]), independent of whether the
+ * operator is actually looking at the Mule Mode screen or even in Mule mode at all.
+ *
+ * Two roles live here, and only one of them is mode-gated (see [startBluetoothStateLoop]'s own
+ * doc): *scanning* for nearby peers and actively pulling from them only runs while this phone's
+ * own [SettingsRepository.appMode] is [AppMode.MULE] — a
+ * Time/Bibs/CP phone is a pure BT source (advertising and serving GATT reads only, via
+ * [PeripheralSyncService], unaffected by this class at all) rather than also actively pulling
+ * from every other visible peer for no benefit, which used to mean every phone in the field
+ * tripled total BLE connect volume for a typical one-Time/one-Bibs/one-Mule setup. This device's
+ * own unsynced data still gets pushed straight to the server every tick regardless of mode (see
+ * [pushIfNeeded]) — that path never depended on scanning or [discoveredFlow] at all.
+ *
+ * Earlier in this app's history, scanning/pulling ran unconditionally on every phone regardless
+ * of mode, specifically so a single phone could record Time or Bibs *and* act as a Mule for
+ * every other nearby device at the same time. That hybrid dual-duty capability is gone now —
+ * confirmed with the app's owner as never actually used in practice (field setups always use a
+ * separate dedicated phone per role), so it wasn't preserved. If that ever changes, the mode
+ * gate in [startBluetoothStateLoop] is the one place to revisit — everything else here (pulling,
+ * pushing, relay handling) is unaffected either way.
+ *
  * [mobile.racemaster.ui.mulemode.MuleModeViewModel] is a thin presentation-layer wrapper
  * around this — it renders these flows and forwards button taps to [forceSyncNow] etc., but
  * owns none of the actual scanning/pulling/pushing itself, so none of it stops when that
@@ -150,7 +171,7 @@ class MuleSyncEngine(
     private val timeModeRepository: TimeModeRepository,
     private val bibsModeRepository: BibsModeRepository,
     private val cpModeRepository: CpModeRepository,
-    settingsRepository: SettingsRepository,
+    private val settingsRepository: SettingsRepository,
 ) {
     // A background engine that talks to arbitrary other phones over BLE regardless of what
     // screen (if any) is currently showing must never let a stray uncaught exception take
@@ -188,6 +209,19 @@ class MuleSyncEngine(
     private val bluetoothWarningFlow = MutableStateFlow<String?>(null)
     private val busyFlow = MutableStateFlow(false)
     private var scanJob: Job? = null
+
+    // Caps how many GATT connects (first-sighting resolves and pullAllVisibleDevices' own
+    // periodic re-checks alike) this engine has in flight at once, app-wide. Before this
+    // existed, every newly-sighted peer got its own unthrottled connect the instant it was
+    // seen — fine for one or two peers, but several phones sitting near each other (the
+    // common case: a Bibs, a Time, and a Mule phone all at the finish line) all get sighted
+    // in the same scan burst, so their connects landed on the radio simultaneously. Android
+    // BLE centrals only support a handful of concurrent GATT links (chipset-dependent, often
+    // ~4-7) shared with this phone's own simultaneous scanning/advertising/GATT-server roles,
+    // so that stampede saturated it, connects piled up until MulePullClient's own connect
+    // timeout, and devices sat at "Discovering…" indefinitely — confirmed in testing as
+    // "sometimes works" with 3 phones, "never resolves" with 6.
+    private val connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
 
     @Volatile
     private var started = false
@@ -270,15 +304,35 @@ class MuleSyncEngine(
     // mechanism would be. Re-tries startScan() (a no-op if it's already running) on every
     // tick, which is what actually recovers scanning once the operator turns Bluetooth back
     // on — nothing else here would otherwise notice and restart it.
+    //
+    // Also the source/sink role gate: only a phone actually in Mule mode scans for and
+    // actively connects out to other devices at all — a Time/Bibs/CP phone stays purely a BT
+    // *source* (advertising and serving GATT reads, via PeripheralSyncService, completely
+    // unaffected by this — only the scanning/central role lives here) rather than also
+    // running the full active-puller role for no benefit. In a full n-to-n mesh every phone
+    // independently scanned, connected out to, and pulled from every other visible peer —
+    // tripling total system-wide BLE connect volume for a typical 3-phone field setup (one
+    // Time, one Bibs, one Mule) versus only the Mule phone actively pulling, which is most of
+    // what made the connect stampede / contention issues chased earlier this session as bad
+    // as they were. A phone only ever needs to actively pull if it's the one responsible for
+    // relaying data onward (to other mules, a Web-Bluetooth-connected browser, or the HTTP
+    // server) — a pure source has nothing to gain from also scanning. pushToServer()/
+    // pushIfNeeded() (this device's own data straight to the HTTP server whenever it
+    // personally has internet+login) is entirely unaffected either way — it never reads
+    // discoveredFlow, so a source phone keeps pushing its own data directly exactly as before.
     private fun startBluetoothStateLoop() {
         engineScope.launch {
             while (isActive) {
-                if (muleRepository.bluetoothOff.first()) {
-                    // Explicit operator choice, not a warning — tearing down the scan here
-                    // (rather than leaving it running and just discarding results) is what
-                    // stops this phone showing up as "still discovering" to itself and lets
-                    // startScan() rebuild discoveredFlow from scratch once back online, same
-                    // as re-entering Mule Mode already does.
+                val isMule = settingsRepository.appMode.first() == AppMode.MULE
+                if (muleRepository.bluetoothOff.first() || !isMule) {
+                    // Either an explicit operator choice, or this phone simply isn't the
+                    // active BT puller right now — tearing down the scan here (rather than
+                    // leaving it running and just discarding results) is what stops this phone
+                    // showing up as "still discovering" to itself and lets startScan() rebuild
+                    // discoveredFlow from scratch the next time it becomes relevant again,
+                    // same as re-entering Mule Mode already does. No warning either way — ease
+                    // out of scanning is the intended, ordinary state for a source phone, not
+                    // a problem to flag.
                     stopScan()
                     discoveredFlow.value = emptyMap()
                     bluetoothWarningFlow.value = null
@@ -371,8 +425,18 @@ class MuleSyncEngine(
     // whether it ends up pulling anything, so a second full pass here would just double the
     // BLE traffic (and doubled contention) for no benefit.
     private suspend fun refreshDeviceInfo(key: String) {
+        // Several peers can all be first-sighted within the same scan burst (the common
+        // "several phones already sitting near each other" case) — each spawns its own
+        // independent launch{} in startScan(), so without this jitter they'd all queue on
+        // connectSemaphore in the same instant and release in lockstep every time a permit
+        // frees, rather than spreading naturally across FIRST_SIGHTING_JITTER's window.
+        delay(Random.nextLong(FIRST_SIGHTING_JITTER.inWholeMilliseconds))
         val device = discoveredFlow.value[key] ?: return
-        val info = runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }.getOrNull()
+        // Shares connectSemaphore with pullAllVisibleDevices' own connects — see that
+        // function's own comment at its withPermit call for why one bound has to cover both.
+        val info = connectSemaphore.withPermit {
+            runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }.getOrNull()
+        }
         if (info == null) {
             markUnreachable(key, device)
             return
@@ -499,7 +563,19 @@ class MuleSyncEngine(
         // exactly the "stuck" symptom this whole timeout pass fixes.
         busyFlow.value = true
         val tickFailure = try {
-            pullAllVisibleDevices()
+            // A last-resort ceiling on top of MulePullClient's own per-operation timeouts —
+            // this engine's while(isActive) { delay(...); autoPullAndPushIfArmed() } loop
+            // (see startAutoSyncLoop) is one coroutine, so if this call ever failed to return
+            // (any unbounded suspend anywhere in its call chain, present or future), not just
+            // this tick's push but every future tick — pull and push alike — would wedge
+            // forever, with nothing left to recover it. Deliberately generous: with several
+            // peers queued behind connectSemaphore's small permit pool, a legitimate tick can
+            // take a while without that being a bug.
+            try {
+                withTimeout(OVERALL_TICK_TIMEOUT) { pullAllVisibleDevices() }
+            } catch (e: TimeoutCancellationException) {
+                "Auto-sync timed out this cycle — will retry"
+            }
         } finally {
             busyFlow.value = false
         }
@@ -567,84 +643,106 @@ class MuleSyncEngine(
         val now = System.currentTimeMillis()
         for ((key, device) in discoveredFlow.value.toList()) {
             val decoded = muleRepository.decodeAdvertisedIdentity(device.requiredAdvertisement)
-            if (!shouldConnect(device, decoded, now, VERIFY_INTERVAL.inWholeMilliseconds, force)) continue
-            // This peer is being freshly checked this tick — drop whatever relay rows it
-            // contributed last time so they don't linger alongside (or diverge from) what it's
-            // about to report now; replaced below if it still has any to offer.
-            relayRows.entries.removeAll { it.value.relayedViaDeviceKey == key }
-            val freshInfo = runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }.getOrNull()
-            if (freshInfo == null) {
-                markUnreachable(key, device)
+            // Cheap (a local DAO query, no BLE op) — checked ahead of shouldConnect so a
+            // pending confirmation can force a reconnect on its own, rather than only ever
+            // getting relayed back once some other condition (most likely the 60s
+            // VERIFY_INTERVAL backstop) happens to trigger one anyway. Without this, a device
+            // whose advertised counter has nothing left to advance (everything it has is
+            // already pulled) could sit fully synced-to-Mule but stuck at "orange" for up to a
+            // full VERIFY_INTERVAL before ever finding out its data reached a real sink.
+            val pendingConfirmation = device.deviceId != null &&
+                muleRepository.hasSinkConfirmationToRelay(device.deviceId, device.raceLabel)
+            if (!shouldConnect(
+                    device, decoded, now, VERIFY_INTERVAL.inWholeMilliseconds, force,
+                    pendingConfirmation, CONFIRMATION_RELAY_INTERVAL.inWholeMilliseconds,
+                )
+            ) {
                 continue
             }
-            val since = muleRepository.lastPulledLineNumber(freshInfo.deviceId, freshInfo.raceLabel)
-            mergeDeviceInfo(key, device, freshInfo, since)
-            // Also reconnects with zero new lines to pull when there's a sink confirmation to
-            // relay back — otherwise a source that's already fully pulled would never learn its
-            // data has since reached a sink, since nothing would ever re-trigger pullFrom for it.
-            val hasPendingConfirmation = muleRepository.hasSinkConfirmationToRelay(freshInfo.deviceId, freshInfo.raceLabel)
-            if (freshInfo.lastLineNumber - since > 0 || hasPendingConfirmation) {
-                val result = runCatching {
-                    muleRepository.pullFrom(
-                        device.requiredAdvertisement,
-                        freshInfo.raceLabel,
-                        freshInfo.deviceId,
-                        freshInfo.deviceName,
-                        since,
-                    )
+            // Bounds how many devices this phone is actively GATT-connected to at once —
+            // shared with refreshDeviceInfo's own first-sighting connects below, since an
+            // unbounded pile of simultaneous connects (this loop's own connects included) is
+            // what saturates the radio and stalls resolution entirely once more than a
+            // handful of peers are visible at once (see MAX_CONCURRENT_CONNECTS's own doc).
+            connectSemaphore.withPermit {
+                // This peer is being freshly checked this tick — drop whatever relay rows it
+                // contributed last time so they don't linger alongside (or diverge from) what it's
+                // about to report now; replaced below if it still has any to offer.
+                relayRows.entries.removeAll { it.value.relayedViaDeviceKey == key }
+                val freshInfo = runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }.getOrNull()
+                if (freshInfo == null) {
+                    markUnreachable(key, device)
+                    return@withPermit
                 }
-                result.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
-                result.onSuccess {
-                    // Reflects the drop in outstanding lines immediately rather than waiting for
-                    // the next periodic refresh, up to AUTO_SYNC_INTERVAL later.
-                    runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }.getOrNull()?.let {
-                        val newSince = muleRepository.lastPulledLineNumber(it.deviceId, it.raceLabel)
-                        mergeDeviceInfo(key, device, it, newSince)
+                val since = muleRepository.lastPulledLineNumber(freshInfo.deviceId, freshInfo.raceLabel)
+                mergeDeviceInfo(key, device, freshInfo, since)
+                // Also reconnects with zero new lines to pull when there's a sink confirmation to
+                // relay back — otherwise a source that's already fully pulled would never learn its
+                // data has since reached a sink, since nothing would ever re-trigger pullFrom for it.
+                val hasPendingConfirmation = muleRepository.hasSinkConfirmationToRelay(freshInfo.deviceId, freshInfo.raceLabel)
+                if (freshInfo.lastLineNumber - since > 0 || hasPendingConfirmation) {
+                    val result = runCatching {
+                        muleRepository.pullFrom(
+                            device.requiredAdvertisement,
+                            freshInfo.raceLabel,
+                            freshInfo.deviceId,
+                            freshInfo.deviceName,
+                            since,
+                        )
+                    }
+                    result.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
+                    result.onSuccess {
+                        // Reflects the drop in outstanding lines immediately rather than waiting for
+                        // the next periodic refresh, up to AUTO_SYNC_INTERVAL later.
+                        runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }.getOrNull()?.let {
+                            val newSince = muleRepository.lastPulledLineNumber(it.deviceId, it.raceLabel)
+                            mergeDeviceInfo(key, device, it, newSince)
+                        }
                     }
                 }
-            }
 
-            // A separate, chunked pull rather than something freshInfo already carries — see
-            // RelayManifestEntry's own doc for why DeviceInfo only ever reports a relayCount.
-            // Only bothered with when that count says there's something to fetch, so a leaf
-            // Time/Bibs/CP phone (always relayCount == 0) never pays this extra round trip.
-            val relayEntries = if (freshInfo.relayCount > 0) {
-                runCatching { muleRepository.pullRelayManifest(device.requiredAdvertisement) }.getOrElse { emptyList() }
-            } else {
-                emptyList()
-            }
-            for (entry in relevantRelayEntries(myDeviceId, relayEntries)) {
-                val relayKey = "relay:${entry.originDeviceId}:${entry.originRaceLabel}"
-                val relaySince = muleRepository.lastPulledLineNumber(entry.originDeviceId, entry.originRaceLabel)
-                val outstanding = (entry.lastLineNumber - relaySince).coerceAtLeast(0).toInt()
-                relayRows[relayKey] = DiscoveredDevice(
-                    deviceKey = relayKey,
-                    advertisement = null,
-                    deviceId = entry.originDeviceId,
-                    deviceName = entry.originDeviceName,
-                    raceLabel = entry.originRaceLabel,
-                    unsyncedCount = outstanding,
-                    relayedViaDeviceName = freshInfo.deviceName,
-                    relayedViaDeviceKey = key,
-                )
-                val relayHasPendingConfirmation = muleRepository.hasSinkConfirmationToRelay(entry.originDeviceId, entry.originRaceLabel)
-                if (entry.lastLineNumber - relaySince <= 0 && !relayHasPendingConfirmation) continue
-                val relayResult = runCatching {
-                    muleRepository.pullFrom(
-                        device.requiredAdvertisement,
-                        sourceRaceLabel = entry.originRaceLabel,
-                        sourceDeviceId = entry.originDeviceId,
-                        sourceDeviceName = entry.originDeviceName,
-                        sinceLineNumber = relaySince,
-                        requestOriginDeviceId = entry.originDeviceId,
-                        requestOriginRaceLabel = entry.originRaceLabel,
-                    )
+                // A separate, chunked pull rather than something freshInfo already carries — see
+                // RelayManifestEntry's own doc for why DeviceInfo only ever reports a relayCount.
+                // Only bothered with when that count says there's something to fetch, so a leaf
+                // Time/Bibs/CP phone (always relayCount == 0) never pays this extra round trip.
+                val relayEntries = if (freshInfo.relayCount > 0) {
+                    runCatching { muleRepository.pullRelayManifest(device.requiredAdvertisement) }.getOrElse { emptyList() }
+                } else {
+                    emptyList()
                 }
-                relayResult.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
-                relayResult.onSuccess {
-                    val newSince = muleRepository.lastPulledLineNumber(entry.originDeviceId, entry.originRaceLabel)
-                    val newOutstanding = (entry.lastLineNumber - newSince).coerceAtLeast(0).toInt()
-                    relayRows[relayKey] = relayRows.getValue(relayKey).copy(unsyncedCount = newOutstanding)
+                for (entry in relevantRelayEntries(myDeviceId, relayEntries)) {
+                    val relayKey = "relay:${entry.originDeviceId}:${entry.originRaceLabel}"
+                    val relaySince = muleRepository.lastPulledLineNumber(entry.originDeviceId, entry.originRaceLabel)
+                    val outstanding = (entry.lastLineNumber - relaySince).coerceAtLeast(0).toInt()
+                    relayRows[relayKey] = DiscoveredDevice(
+                        deviceKey = relayKey,
+                        advertisement = null,
+                        deviceId = entry.originDeviceId,
+                        deviceName = entry.originDeviceName,
+                        raceLabel = entry.originRaceLabel,
+                        unsyncedCount = outstanding,
+                        relayedViaDeviceName = freshInfo.deviceName,
+                        relayedViaDeviceKey = key,
+                    )
+                    val relayHasPendingConfirmation = muleRepository.hasSinkConfirmationToRelay(entry.originDeviceId, entry.originRaceLabel)
+                    if (entry.lastLineNumber - relaySince <= 0 && !relayHasPendingConfirmation) continue
+                    val relayResult = runCatching {
+                        muleRepository.pullFrom(
+                            device.requiredAdvertisement,
+                            sourceRaceLabel = entry.originRaceLabel,
+                            sourceDeviceId = entry.originDeviceId,
+                            sourceDeviceName = entry.originDeviceName,
+                            sinceLineNumber = relaySince,
+                            requestOriginDeviceId = entry.originDeviceId,
+                            requestOriginRaceLabel = entry.originRaceLabel,
+                        )
+                    }
+                    relayResult.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
+                    relayResult.onSuccess {
+                        val newSince = muleRepository.lastPulledLineNumber(entry.originDeviceId, entry.originRaceLabel)
+                        val newOutstanding = (entry.lastLineNumber - newSince).coerceAtLeast(0).toInt()
+                        relayRows[relayKey] = relayRows.getValue(relayKey).copy(unsyncedCount = newOutstanding)
+                    }
                 }
             }
         }
@@ -734,7 +832,29 @@ class MuleSyncEngine(
         // mule to notice) — an accepted latency tradeoff against the BLE stack load this whole
         // gate exists to remove.
         private val VERIFY_INTERVAL = 60.seconds
+
+        // The interval shouldConnect uses instead of VERIFY_INTERVAL when a device is owed a
+        // sink-confirmation relay — shorter, so that doesn't sit for up to a full minute, but
+        // still a real interval (not "every tick") — see shouldConnect's own doc for why an
+        // unconditional every-tick force was a field-confirmed regression in a multi-phone mesh.
+        private val CONFIRMATION_RELAY_INTERVAL = 15.seconds
         private val BLUETOOTH_CHECK_INTERVAL = 3_000.milliseconds
+
+        // Deliberately small and conservative rather than tuned up toward the platform's real
+        // per-chipset ceiling (~4-7) — this engine isn't the only thing on the radio budget:
+        // this phone's own concurrent scanning, advertising, and GATT-server roles (serving
+        // other phones' pulls) all compete for the same controller, and the whole reason this
+        // gate exists is the OS Bluetooth daemon crash a prior, even-heavier connect load
+        // already caused in the field (see connectSemaphore's own doc). Only raise this after
+        // testing shows real headroom, not just because discovery still feels slow.
+        private const val MAX_CONCURRENT_CONNECTS = 2
+
+        // See refreshDeviceInfo's own doc for why first-sighting connects need to be spread
+        // out even with connectSemaphore already bounding how many run at once.
+        private val FIRST_SIGHTING_JITTER = 2.seconds
+
+        // See autoPullAndPushIfArmed's own doc for why this ceiling exists at all.
+        private val OVERALL_TICK_TIMEOUT = 90.seconds
         private val UNREACHABLE_DROP_THRESHOLD = 60.minutes
         private val UNRESOLVED_DROP_THRESHOLD = 2.minutes
 
@@ -783,11 +903,20 @@ internal fun pushResultMessage(auto: Boolean, result: Result<Int>): String? = re
  * [MuleSyncEngine.forceSyncNow]); a device never yet resolved ([DiscoveredDevice.deviceId] or
  * [DiscoveredDevice.confirmedLineNumber] null — nothing to compare against yet); an undecodable
  * hint (missed scan window, or a peer running an older build that predates this payload
- * entirely — fail safe by connecting, exactly this device's pre-redesign behavior); the
- * advertised counter having advanced past what was last confirmed; or [verifyIntervalMillis]
- * having elapsed since the last real read — the periodic backstop that also covers what the
- * advertised counter alone can't (relay-manifest changes; see
- * [MuleSyncEngine.Companion.VERIFY_INTERVAL]'s own doc).
+ * entirely — fail safe by connecting, exactly this device's pre-redesign behavior); or the
+ * advertised counter having advanced past what was last confirmed.
+ *
+ * Otherwise gated on time since the last real read, against one of two intervals:
+ * [verifyIntervalMillis] normally — the periodic backstop that also covers what the advertised
+ * counter alone can't (relay-manifest changes; see [MuleSyncEngine.Companion.VERIFY_INTERVAL]'s
+ * own doc) — or the shorter [confirmationRelayIntervalMillis] when [pendingConfirmation] is true
+ * (this device already fully pulled, but owed a sink-confirmation relay it hasn't received
+ * yet). Deliberately still an *interval*, not an unconditional "always true", even for a
+ * pending confirmation: in a mesh of several phones each independently pulling from (and so
+ * each independently owing a relay back to) the same source, forcing a reconnect on literally
+ * every tick for as long as any confirmation stayed unrelayed caused a burst of simultaneous
+ * reconnects converging on the same device right when the mesh was already busiest — confirmed
+ * in the field as a regression, not an improvement, over just waiting for [verifyIntervalMillis].
  *
  * Pulled out as a pure top-level function (matching [relevantRelayEntries]/[dedupRelayRows]'s
  * own precedent) so this decision is directly testable without any BLE plumbing.
@@ -798,13 +927,24 @@ internal fun shouldConnect(
     nowMillis: Long,
     verifyIntervalMillis: Long,
     force: Boolean,
+    pendingConfirmation: Boolean = false,
+    confirmationRelayIntervalMillis: Long = verifyIntervalMillis,
 ): Boolean {
     if (force) return true
     val confirmedLineNumber = device.confirmedLineNumber
     if (device.deviceId == null || confirmedLineNumber == null) return true
     if (decoded == null) return true
     if (decoded.lastLineNumber > confirmedLineNumber) return true
-    return nowMillis - device.lastRealReadAtMillis >= verifyIntervalMillis
+    // A shorter interval than verifyIntervalMillis, not an unconditional "always true" —
+    // see this parameter's own doc for why: in a mesh of several phones all independently
+    // holding (and independently owing a relay for) the same source's data, forcing a
+    // reconnect on literally every tick for as long as any confirmation stays unrelayed
+    // caused a burst of simultaneous reconnects converging on the same device right when the
+    // mesh was already busiest — confirmed in the field as things getting worse, not better.
+    // Still bounded well below the full backstop so a confirmation doesn't sit for up to a
+    // minute either.
+    val effectiveIntervalMillis = if (pendingConfirmation) confirmationRelayIntervalMillis else verifyIntervalMillis
+    return nowMillis - device.lastRealReadAtMillis >= effectiveIntervalMillis
 }
 
 /**

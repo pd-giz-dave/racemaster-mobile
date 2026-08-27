@@ -234,4 +234,34 @@ class MuleSyncEngineTest {
 
         assertTrue(!shouldConnect(resolved, identity(5L), nowMillis = 1_500L, verifyIntervalMillis = 60_000L, force = false))
     }
+
+    @Test
+    fun aPendingConfirmationWaitsOutTheShorterRelayIntervalRatherThanConnectingImmediately() {
+        // Regression test: an earlier version treated pendingConfirmation as an unconditional
+        // "always true", which in a multi-phone mesh (several phones each independently owing
+        // a relay for the same source) meant a forced reconnect on literally every tick for as
+        // long as any confirmation stayed unrelayed — confirmed in the field as things getting
+        // worse, not better. It must still be gated on an interval, just a shorter one than
+        // verifyIntervalMillis.
+        val resolved = device(confirmedLineNumber = 10L, lastRealReadAtMillis = 1_000L)
+
+        assertTrue(
+            !shouldConnect(
+                resolved, identity(10L), nowMillis = 5_000L, verifyIntervalMillis = 60_000L, force = false,
+                pendingConfirmation = true, confirmationRelayIntervalMillis = 15_000L,
+            ),
+        )
+    }
+
+    @Test
+    fun aPendingConfirmationConnectsOnceItsOwnShorterIntervalElapses() {
+        val resolved = device(confirmedLineNumber = 10L, lastRealReadAtMillis = 1_000L)
+
+        assertTrue(
+            shouldConnect(
+                resolved, identity(10L), nowMillis = 16_001L, verifyIntervalMillis = 60_000L, force = false,
+                pendingConfirmation = true, confirmationRelayIntervalMillis = 15_000L,
+            ),
+        )
+    }
 }

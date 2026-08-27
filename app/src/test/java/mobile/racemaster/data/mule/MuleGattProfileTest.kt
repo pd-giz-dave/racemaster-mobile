@@ -1,5 +1,6 @@
 package mobile.racemaster.data.mule
 
+import mobile.racemaster.data.settings.AppMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -85,9 +86,9 @@ class MuleGattProfileTest {
     @Test
     fun decodeReturnsNullWhenDeclaredNameLengthExceedsWhatsActuallyThere() {
         val encoded = MuleGattProfile.encodeAdvertisedIdentity(1L, "name")
-        // Corrupt the nameLen byte (right after magic+version+counter) to claim more bytes
+        // Corrupt the nameLen byte (right after magic+version+mode+counter) to claim more bytes
         // than actually follow.
-        val nameLenIndex = MuleGattProfile.ADVERTISING_MAGIC.size + 1 + 4
+        val nameLenIndex = MuleGattProfile.ADVERTISING_MAGIC.size + 1 + 1 + 4
         encoded[nameLenIndex] = 100
 
         assertNull(MuleGattProfile.decodeAdvertisedIdentity(encoded))
@@ -98,5 +99,40 @@ class MuleGattProfileTest {
         val encoded = MuleGattProfile.encodeAdvertisedIdentity(0L, "")
 
         assertEquals(MuleGattProfile.AdvertisedIdentity(0L, ""), MuleGattProfile.decodeAdvertisedIdentity(encoded))
+    }
+
+    // mode — the field the racemaster web app's requestDevice() picker filter relies on (see
+    // AdvertisedIdentity's own doc) to only surface phones currently in Mule Mode, without ever
+    // reading this payload itself: Chrome matches a manufacturer-data prefix browser-side before
+    // the chooser is shown, so this must sit at a fixed offset and round-trip exactly.
+
+    @Test
+    fun roundTripsEachModeAlongsideNameAndCounter() {
+        for (mode in AppMode.entries) {
+            val encoded = MuleGattProfile.encodeAdvertisedIdentity(7L, "Phone One", mode)
+            val decoded = MuleGattProfile.decodeAdvertisedIdentity(encoded)
+
+            assertEquals(MuleGattProfile.AdvertisedIdentity(7L, "Phone One", mode), decoded)
+        }
+    }
+
+    @Test
+    fun omittingModeEncodesAndDecodesAsNull() {
+        val encoded = MuleGattProfile.encodeAdvertisedIdentity(1L, "name")
+
+        assertEquals(MuleGattProfile.AdvertisedIdentity(1L, "name", null), MuleGattProfile.decodeAdvertisedIdentity(encoded))
+    }
+
+    @Test
+    fun decodeTreatsAnUnrecognizedModeByteAsNullRatherThanFailingTheWholePayload() {
+        val encoded = MuleGattProfile.encodeAdvertisedIdentity(1L, "name", AppMode.MULE)
+        // Corrupt the mode byte (right after magic+version) to a value no build has ever used —
+        // simulates a newer build's mode reaching an older decoder. Must still decode
+        // everything else fine, not reject the whole payload the way an unrecognized
+        // ADVERTISING_FORMAT_VERSION does.
+        val modeIndex = MuleGattProfile.ADVERTISING_MAGIC.size + 1
+        encoded[modeIndex] = 99
+
+        assertEquals(MuleGattProfile.AdvertisedIdentity(1L, "name", null), MuleGattProfile.decodeAdvertisedIdentity(encoded))
     }
 }

@@ -15,6 +15,8 @@ import mobile.racemaster.data.mule.DiscoveredDevice
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.MuleSyncEngine
 import mobile.racemaster.data.mule.previouslySeenDevices
+import mobile.racemaster.data.settings.AppMode
+import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 
 data class MuleModeUiState(
@@ -36,6 +38,11 @@ data class MuleModeUiState(
     val bluetoothOff: Boolean = false,
     val serverSyncOff: Boolean = false,
     val advertisingWarning: String? = null,
+    // Whether this phone is actually the active BT puller right now (see MuleSyncEngine's own
+    // doc on the source/sink role split) — a plain boolean, not the raw AppMode, since every
+    // render site here only ever needs this binary distinction; a not-yet-loaded appMode
+    // correctly falls out as false (not pulling), no third case to handle anywhere.
+    val isMuleMode: Boolean = false,
 )
 
 /**
@@ -49,6 +56,7 @@ data class MuleModeUiState(
 class MuleModeViewModel(
     private val muleRepository: MuleRepository,
     private val muleSyncEngine: MuleSyncEngine,
+    private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
     val deviceName: StateFlow<String?> = muleRepository.deviceName
@@ -72,6 +80,7 @@ class MuleModeViewModel(
         muleSyncEngine.relayDevices,
         muleRepository.knownDevices,
         muleSyncEngine.advertisingWarning,
+        settingsRepository.appMode,
     ) { values ->
         val isLoggedIn = values[4] as Boolean
         val autoSyncStopped = values[8] as Boolean
@@ -81,6 +90,7 @@ class MuleModeViewModel(
         val relayDevices = values[13] as Map<String, DiscoveredDevice>
         val knownDevices = values[14] as List<KnownDeviceEntity>
         val advertisingWarning = values[15] as String?
+        val appMode = values[16] as AppMode?
         val directDevices = values[0] as Map<String, DiscoveredDevice>
         val liveDeviceIds = (directDevices.values + relayDevices.values).mapNotNull { it.deviceId }.toSet()
         // Stale rows: a device this phone has resolved before but can't currently see, given
@@ -118,6 +128,7 @@ class MuleModeViewModel(
             bluetoothOff = bluetoothOff,
             serverSyncOff = serverSyncOff,
             advertisingWarning = advertisingWarning,
+            isMuleMode = appMode == AppMode.MULE,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MuleModeUiState())
 
@@ -167,6 +178,7 @@ class MuleModeViewModel(
                 MuleModeViewModel(
                     container.muleRepository,
                     container.muleSyncEngine,
+                    container.settingsRepository,
                 )
             }
         }

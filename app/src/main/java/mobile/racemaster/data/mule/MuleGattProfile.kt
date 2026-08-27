@@ -3,6 +3,7 @@ package mobile.racemaster.data.mule
 import java.util.UUID
 import kotlinx.serialization.Serializable
 import mobile.racemaster.data.db.entity.PulledRecordEntity
+import mobile.racemaster.data.settings.AppMode
 
 /**
  * GATT profile shared by both sides of a Mule pull: every device (Time, Bibs, and Mule
@@ -35,6 +36,68 @@ object MuleGattProfile {
     /** Write: the central writes a JSON-encoded [AckPayload] back here once the stream is
      *  fully reassembled, so the peripheral knows it's safe to mark those records synced. */
     val ACK_CHARACTERISTIC_UUID: UUID = UUID.fromString("6d6f6269-6c65-2e72-6163-000000000004")
+
+    /** Advertised (primary-packet) only — never registered as an actual GATT service, since an
+     *  advertised service UUID is purely an advertisement-layer claim to begin with (the web
+     *  app's own `connectAndVerify` in mule-ble.js already treats it that way, confirming via a
+     *  real post-connect DeviceInfo read rather than trusting the advertisement alone).
+     *  [PeripheralSyncService] includes this UUID in its
+     *  primary advertisement only while the device is currently in [AppMode.MULE], on top of the
+     *  always-present [SERVICE_UUID] — so the racemaster web app's `requestDevice()` picker can
+     *  filter to `services: [SERVICE_UUID, MULE_MODE_MARKER_SERVICE_UUID]` (both required) and
+     *  see only phones currently in Mule Mode, without a trial-and-error picker full of every
+     *  nearby Time/Bibs/CP phone too.
+     *
+     *  This supersedes an earlier attempt at the same goal that encoded mode as a byte in the
+     *  scan-response manufacturer data (still present — see [AdvertisedIdentity.mode] — kept as
+     *  informational wire data, just no longer what filtering relies on) and had the web app
+     *  filter on it via `requestDevice()`'s `manufacturerData`/`dataPrefix` option. Confirmed in
+     *  the field (2026-08-27, against a Chromium-based browser on a remote Windows laptop) that
+     *  the manufacturer-data filter matched nothing even though chrome://bluetooth-internals' raw
+     *  advertisement view proved the phone's bytes were exactly correct; removing just that one
+     *  filter field made the exact same phone appear immediately, isolating the browser's own
+     *  filter-matching for that option (not this wire format) as the broken part on that specific
+     *  deployment. The exact underlying reason wasn't chased further (`manufacturerData`
+     *  filtering is generally a less mature/less exercised part of most Web Bluetooth
+     *  implementations than plain service-UUID filtering, across platforms — nothing here should
+     *  be read as a claim about *why* it failed on that machine specifically, only that it did).
+     *  Service-UUID filtering is the one path confirmed reliable there, hence this approach
+     *  instead.
+     *
+     *  A short-form (16-bit) UUID under the Bluetooth Base UUID, not a full custom 128-bit one
+     *  like [SERVICE_UUID] — purely a byte-budget necessity, explained here for anyone who
+     *  hasn't worked with BLE UUIDs before, since the string below *looks* just as 128-bit as
+     *  every other UUID in this file:
+     *
+     *  The Bluetooth SIG (Special Interest Group) defined one official 128-bit UUID, the "Bluetooth Base UUID":
+     *  `00000000-0000-1000-8000-00805F9B34FB`. A "16-bit UUID" is, by definition, this exact
+     *  value with only its first 4 hex digits swapped out — so 16-bit UUID `0xFFF0` and the
+     *  128-bit UUID `0000FFF0-0000-1000-8000-00805F9B34FB` are, byte for byte, the identical
+     *  value; there is no separate "16-bit UUID" type in Kotlin's [UUID] class (or in the Web
+     *  Bluetooth API on the other end) — you always write/read the full 128-bit string, and its
+     *  "16-bit-ness" is a fact about *which value it happens to be*, not about how it's spelled
+     *  in code. [SERVICE_UUID], by contrast, does NOT end in that fixed
+     *  `-0000-1000-8000-00805F9B34FB` suffix — it's a genuinely random, one-off custom value —
+     *  so it can never be treated as a short form.
+     *
+     *  That distinction matters here because BLE's own over-the-air advertisement format has two
+     *  different ways to encode a service UUID: the full 16 raw bytes (+ 2 bytes of framing = 18
+     *  bytes total), or — only for a value matching that Base UUID pattern — just its 2 changed
+     *  bytes (+ 2 bytes of framing = 4 bytes total), since a receiver can always reconstruct the
+     *  full 128 bits by re-inserting the same fixed suffix. The legacy primary advertisement
+     *  packet this rides in is capped at 31 bytes total, and [SERVICE_UUID] alone already costs
+     *  the full 18 of those (it can't be shortened, per above) — a second *custom* 128-bit UUID
+     *  would cost another 18 bytes and blow the budget outright, whereas this short-form value
+     *  costs only 4. Android's `BluetoothLeAdvertiser` recognizes the Base UUID pattern and
+     *  performs this compaction on the wire automatically — this code only ever passes the full
+     *  128-bit [UUID] object below; nothing here has to know or care that it'll be sent as 2
+     *  bytes instead of 16. `0xFFF0` is picked from the tail of the 16-bit Bluetooth SIG UUID
+     *  space, the same "reserved for local/test use, least likely to ever collide with a real
+     *  adopted profile" reasoning [ADVERTISING_MANUFACTURER_ID]'s own doc
+     *  already applies to its own arbitrary value — there is no SIG-guaranteed private range the
+     *  way there is for 16-bit company identifiers, so this remains a small, accepted residual
+     *  risk rather than a guarantee. */
+    val MULE_MODE_MARKER_SERVICE_UUID: UUID = UUID.fromString("0000fff0-0000-1000-8000-00805f9b34fb")
 
     const val REQUESTED_MTU = 247
     const val FALLBACK_CHUNK_SIZE_BYTES = 20
@@ -74,36 +137,77 @@ object MuleGattProfile {
     // peripheral also happens to reuse 0xFFFF for its own unrelated purpose.
     const val ADVERTISING_MANUFACTURER_ID = 0xFFFF
     val ADVERTISING_MAGIC = byteArrayOf(0x52, 0x4d) // "RM"
-    const val ADVERTISING_FORMAT_VERSION: Byte = 1
+    // Bumped 1 -> 2 for the addition of the mode byte just below — an intentional, deliberate
+    // break: decodeAdvertisedIdentity already treats any version it doesn't recognize as "no
+    // usable payload" (see its own doc), which is exactly the graceful degradation a mixed-build
+    // rollout needs here. A v1 peer's scan response and a v2 decoder (or vice versa) simply never
+    // match, rather than one misreading the other's bytes under a shifted layout.
+    const val ADVERTISING_FORMAT_VERSION: Byte = 2
+
+    // Explicit wire values for AppMode — deliberately NOT AppMode.ordinal, which would silently
+    // change meaning (or collide) if the enum's declaration order or membership ever changes for
+    // reasons that have nothing to do with this wire format, the same reasoning
+    // ADVERTISING_FORMAT_VERSION's own doc already applies to the payload as a whole. 0 is
+    // reserved for "no mode chosen yet" (a freshly installed phone before its first
+    // ModePickerScreen pick) — decodeMode treats that, and anything else it doesn't recognize
+    // (e.g. a future mode from a newer build), identically: null, never a thrown/misread value.
+    private const val MODE_WIRE_TIME: Byte = 1
+    private const val MODE_WIRE_BIBS: Byte = 2
+    private const val MODE_WIRE_MULE: Byte = 3
+    private const val MODE_WIRE_CP: Byte = 4
+
+    private fun encodeMode(mode: AppMode?): Byte = when (mode) {
+        AppMode.TIME -> MODE_WIRE_TIME
+        AppMode.BIBS -> MODE_WIRE_BIBS
+        AppMode.MULE -> MODE_WIRE_MULE
+        AppMode.CP -> MODE_WIRE_CP
+        null -> 0
+    }
+
+    private fun decodeMode(wire: Byte): AppMode? = when (wire) {
+        MODE_WIRE_TIME -> AppMode.TIME
+        MODE_WIRE_BIBS -> AppMode.BIBS
+        MODE_WIRE_MULE -> AppMode.MULE
+        MODE_WIRE_CP -> AppMode.CP
+        else -> null
+    }
 
     // Legacy BLE scan-response payload is capped at 31 bytes; addManufacturerData costs 4 of
     // those (2-byte AD length+type header + 2-byte company ID) before our own bytes even start.
-    // Our own header (2-byte magic + 1-byte version + 4-byte counter + 1-byte nameLen) is 8
-    // bytes, leaving 31 - 4 - 8 = 19 for the name — see encodeAdvertisedIdentity.
-    const val ADVERTISED_NAME_MAX_BYTES = 19
+    // Our own header (2-byte magic + 1-byte version + 1-byte mode + 4-byte counter + 1-byte
+    // nameLen) is 9 bytes, leaving 31 - 4 - 9 = 18 for the name — see encodeAdvertisedIdentity.
+    const val ADVERTISED_NAME_MAX_BYTES = 18
 
     /** Decoded contents of the scan-response payload advertised alongside this device's GATT
      *  service — a cheap, non-authoritative hint a scanner can read without ever connecting, so
      *  [MuleSyncEngine] can skip a real GATT connect+[DeviceInfo] read for a device it already
      *  knows is unchanged. [lastLineNumber] mirrors [DeviceInfo.lastLineNumber] for this
      *  device's own race only — never a relayed origin's — since relay-manifest freshness still
-     *  rides on a periodic real connect (see MuleSyncEngine's VERIFY_INTERVAL). Every value here
-     *  must be re-confirmed by a real [DeviceInfo] read before being relied on for anything
-     *  correctness-sensitive; this is only ever used to decide *whether* to bother connecting. */
-    data class AdvertisedIdentity(val lastLineNumber: Long, val deviceName: String)
+     *  rides on a periodic real connect (see MuleSyncEngine's VERIFY_INTERVAL). [mode] is what
+     *  lets the racemaster web app's own `requestDevice()` picker filter (see mule-ble.js's
+     *  `connectToPhone`) show only phones currently in Mule Mode without ever reading this
+     *  payload itself — Chrome applies a manufacturer-data prefix match browser-side before the
+     *  chooser is even shown, so [mode] has to sit at a fixed byte offset early in the payload
+     *  (right after magic+version) for that prefix to reliably match regardless of what
+     *  lastLineNumber/deviceName happen to be for a given phone at a given moment. Every value
+     *  here must be re-confirmed by a real [DeviceInfo] read before being relied on for anything
+     *  correctness-sensitive; this is only ever used to decide *whether* to bother connecting (or,
+     *  on the web side, whether to even offer a phone in the picker at all). */
+    data class AdvertisedIdentity(val lastLineNumber: Long, val deviceName: String, val mode: AppMode? = null)
 
-    /** Builds the scan-response manufacturer-data payload for [deviceName]/[lastLineNumber] —
-     *  see [ADVERTISED_NAME_MAX_BYTES] for the byte budget this stays within. Truncates on a
+    /** Builds the scan-response manufacturer-data payload for [deviceName]/[lastLineNumber]/[mode]
+     *  — see [ADVERTISED_NAME_MAX_BYTES] for the byte budget this stays within. Truncates on a
      *  UTF-8 codepoint boundary (never mid-character) if [deviceName] doesn't fit. */
-    fun encodeAdvertisedIdentity(lastLineNumber: Long, deviceName: String): ByteArray {
+    fun encodeAdvertisedIdentity(lastLineNumber: Long, deviceName: String, mode: AppMode? = null): ByteArray {
         var truncated = deviceName
         while (truncated.encodeToByteArray().size > ADVERTISED_NAME_MAX_BYTES) {
             truncated = truncated.substring(0, truncated.length - 1)
         }
         val nameBytes = truncated.encodeToByteArray()
-        val buffer = java.nio.ByteBuffer.allocate(ADVERTISING_MAGIC.size + 1 + 4 + 1 + nameBytes.size)
+        val buffer = java.nio.ByteBuffer.allocate(ADVERTISING_MAGIC.size + 1 + 1 + 4 + 1 + nameBytes.size)
         buffer.put(ADVERTISING_MAGIC)
         buffer.put(ADVERTISING_FORMAT_VERSION)
+        buffer.put(encodeMode(mode))
         buffer.putInt(lastLineNumber.coerceIn(0, Int.MAX_VALUE.toLong()).toInt())
         buffer.put(nameBytes.size.toByte())
         buffer.put(nameBytes)
@@ -117,12 +221,13 @@ object MuleGattProfile {
      *  too-short/truncated array. Every caller treats null as "unknown" and falls back to
      *  behaving exactly as if this payload didn't exist at all. */
     fun decodeAdvertisedIdentity(bytes: ByteArray?): AdvertisedIdentity? {
-        if (bytes == null || bytes.size < ADVERTISING_MAGIC.size + 1 + 4 + 1) return null
+        if (bytes == null || bytes.size < ADVERTISING_MAGIC.size + 1 + 1 + 4 + 1) return null
         if (!bytes.copyOfRange(0, ADVERTISING_MAGIC.size).contentEquals(ADVERTISING_MAGIC)) return null
         val buffer = java.nio.ByteBuffer.wrap(bytes)
         buffer.position(ADVERTISING_MAGIC.size)
         val version = buffer.get()
         if (version != ADVERTISING_FORMAT_VERSION) return null
+        val mode = decodeMode(buffer.get())
         val lastLineNumber = buffer.int.toLong()
         val nameLen = buffer.get().toInt() and 0xff
         if (buffer.remaining() < nameLen) return null
@@ -130,7 +235,7 @@ object MuleGattProfile {
         buffer.get(nameBytes)
         val deviceName = runCatching { nameBytes.decodeToString(throwOnInvalidSequence = true) }.getOrNull()
             ?: return null
-        return AdvertisedIdentity(lastLineNumber, deviceName)
+        return AdvertisedIdentity(lastLineNumber, deviceName, mode)
     }
 }
 

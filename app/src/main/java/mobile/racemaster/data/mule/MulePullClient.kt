@@ -183,7 +183,14 @@ class MulePullClient {
             // this, especially sinkConfirmedRecordUuids, which could otherwise cover a large
             // race's entire backlog at once (see AckPayload's own doc).
             for (batch in ackBatches(pullerDeviceId, pullerDeviceName, records.map { it.recordUuid }, sinkConfirmedRecordUuids) { json.encodeToString(it) }) {
-                peripheral.write(ackCharacteristic, json.encodeToString(batch).toByteArray(Charsets.UTF_8), WriteType.WithResponse)
+                // WithResponse means this suspends until the peripheral's GATT response
+                // arrives — PeripheralSyncService now always sends one (see its own doc), but
+                // this timeout is defense-in-depth against any peer (a different app version,
+                // or anything else speaking this protocol) that doesn't, so a stuck peer can't
+                // hang this whole pull forever.
+                withTimeout(ACK_WRITE_TIMEOUT) {
+                    peripheral.write(ackCharacteristic, json.encodeToString(batch).toByteArray(Charsets.UTF_8), WriteType.WithResponse)
+                }
                 if (batch.sinkConfirmedRecordUuids.isNotEmpty()) {
                     onConfirmationsRelayed(batch.sinkConfirmedRecordUuids)
                 }
@@ -248,7 +255,12 @@ class MulePullClient {
         // on this characteristic server-side — Kable's write() defaults to
         // WriteType.WithoutResponse, which fails against a with-response-only
         // characteristic ("writeWithoutResponse property not found").
-        peripheral.write(controlCharacteristic, requestJson.toByteArray(Charsets.UTF_8), WriteType.WithResponse)
+        // Same reasoning as the ack write's own ACK_WRITE_TIMEOUT — a WithResponse write
+        // suspends until the peripheral responds, and PULL_TIMEOUT below only bounds the
+        // *data collection* phase that follows, not this write itself.
+        withTimeout(ACK_WRITE_TIMEOUT) {
+            peripheral.write(controlCharacteristic, requestJson.toByteArray(Charsets.UTF_8), WriteType.WithResponse)
+        }
         withTimeout(PULL_TIMEOUT) { collectJob.join() }
 
         chunks.fold(ByteArray(0)) { acc, chunk -> acc + chunk }.toString(Charsets.UTF_8)
@@ -262,6 +274,10 @@ class MulePullClient {
         // aggressively the poll interval is tuned for latency.
         private val CONNECT_TIMEOUT = 10_000.milliseconds
         private val PULL_TIMEOUT = 15_000.milliseconds
+
+        // Bounds a single WithResponse write's wait for the peripheral's GATT response —
+        // see the two call sites' own docs for why this can't just fall under PULL_TIMEOUT.
+        private val ACK_WRITE_TIMEOUT = 10_000.milliseconds
     }
 }
 

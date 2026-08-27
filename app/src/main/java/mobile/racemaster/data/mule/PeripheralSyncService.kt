@@ -34,6 +34,7 @@ import java.util.UUID
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -43,12 +44,14 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.serialization.json.Json
 import kotlin.time.Duration.Companion.milliseconds
 import mobile.racemaster.MainActivity
 import mobile.racemaster.RacemasterApplication
 import mobile.racemaster.data.db.dao.PulledSourceSummary
+import mobile.racemaster.data.settings.AppMode
 
 /**
  * Runs on every device (Time, Bibs, CP and Mule) regardless of which screen is showing, so a
@@ -123,6 +126,13 @@ class PeripheralSyncService : Service() {
     @Volatile
     private var deviceName: String = ""
 
+    // Kept live the same way deviceName is above, by observeAppMode() below — this is what lets
+    // the advertised scan-response payload's mode byte (see MuleGattProfile.AdvertisedIdentity's
+    // own doc) reflect a ModePickerScreen switch on its very next advertisement refresh, not just
+    // the next time this long-running service happens to restart.
+    @Volatile
+    private var currentMode: AppMode? = null
+
     @Volatile
     private var servingState = ServingState()
 
@@ -140,8 +150,20 @@ class PeripheralSyncService : Service() {
         val lastLineNumber: Long = 0,
     )
 
-    // Chunked notification send queue, one per connected central (keyed by MAC address).
-    private val outboundChunks = mutableMapOf<String, ArrayDeque<ByteArray>>()
+    // One outbound chunked-notification stream per connected central (keyed by MAC address).
+    // [device] is kept alongside the queue (not just the address) so the watchdog below can
+    // force-disconnect a stalled stream without a separate connected-devices lookup.
+    // [lastProgressAtMillis] is bumped every time a chunk is actually popped off — a healthy
+    // stream can legitimately sit here a long time with an *empty* queue once fully delivered
+    // (nothing removes the entry until disconnect), so "stalled" only ever means "chunks
+    // remain, but none has moved in a while", never "this connection has been idle".
+    private data class OutboundStream(val device: BluetoothDevice, val chunks: ArrayDeque<ByteArray>, var lastProgressAtMillis: Long)
+
+    // ConcurrentHashMap, not a plain map: mutated both from the GATT callback thread
+    // (sendNextChunk/onConnectionStateChange, invoked directly by the platform, not via
+    // serviceScope) and now from startChunkWatchdogLoop's serviceScope coroutine — genuinely
+    // two threads touching this map, unlike when it only ever saw the single callback thread.
+    private val outboundChunks = java.util.concurrent.ConcurrentHashMap<String, OutboundStream>()
 
     // Lets an already-answered PullRequest.requestKey be replayed instead of recomputed —
     // e.g. the same requester retrying after a dropped mid-stream connection, or asking again
@@ -171,9 +193,11 @@ class PeripheralSyncService : Service() {
         startForegroundWithNotification()
         observeServingState()
         observeDeviceName()
+        observeAppMode()
         observeRelayManifest()
         observeAdvertisingWarning()
         startAdvertisingRetryLoop()
+        startChunkWatchdogLoop()
         container.muleSyncEngine.start()
     }
 
@@ -189,6 +213,21 @@ class PeripheralSyncService : Service() {
         serviceScope.launch {
             container.settingsRepository.deviceName.collect { name ->
                 if (!name.isNullOrBlank()) deviceName = name
+            }
+        }
+    }
+
+    // A mode switch (e.g. Time -> Mule via ModePickerScreen) must be reflected in the advertised
+    // scan-response payload promptly — see the racemaster web app's mule-ble.js `connectToPhone`,
+    // whose requestDevice() picker filter relies on this to only show phones currently in Mule
+    // Mode. scheduleAdvertisedIdentityRefresh() below is the same debounced refresh
+    // observeServingState already drives for lastLineNumber changes.
+    private fun observeAppMode() {
+        serviceScope.launch {
+            container.settingsRepository.appMode.collect { mode ->
+                Log.i(TAG, "App mode observed: $mode (was $currentMode)")
+                currentMode = mode
+                scheduleAdvertisedIdentityRefresh()
             }
         }
     }
@@ -322,8 +361,53 @@ class PeripheralSyncService : Service() {
                 .collect {
                     servingState = it
                     recentResponses = emptyMap()
+                    scheduleAdvertisedIdentityRefresh()
                 }
         }
+    }
+
+    // The scan-response payload built by buildScanResponseData() reads servingState.lastLineNumber
+    // fresh each call, but nothing ever called it again once advertising first succeeded — the
+    // BLE radio just kept re-broadcasting whatever bytes were baked in at that moment, forever.
+    // A peer scanning this device therefore never saw its advertised counter move, so
+    // MuleSyncEngine.shouldConnect's cheap fast path could never fire for any line recorded
+    // after this device started advertising — every reconnect (to notice new data, and
+    // separately to relay a sink confirmation back) fell through to its 60s VERIFY_INTERVAL
+    // backstop instead, compounding into the ~1-2 minute record-to-orange-to-green delay seen
+    // in the field. This job is what actually refreshes the broadcast now.
+    private var advertisedIdentityRefreshJob: Job? = null
+
+    // Debounced rather than refreshing on every single servingState change: a fast burst of
+    // recorded lines (several bib scans in quick succession, say) would otherwise mean
+    // repeatedly stopping/restarting the radio's advertiser within the same few seconds —
+    // exactly the kind of extra radio churn already implicated in the OS Bluetooth daemon
+    // crash this whole subsystem was redesigned around (see MuleSyncEngine's connectSemaphore
+    // doc). Collapsing a burst into one refresh, a short delay after it settles, keeps the
+    // advertised hint reasonably current without that churn.
+    private fun scheduleAdvertisedIdentityRefresh() {
+        advertisedIdentityRefreshJob?.cancel()
+        advertisedIdentityRefreshJob = serviceScope.launch {
+            delay(ADVERTISED_IDENTITY_REFRESH_DEBOUNCE)
+            refreshAdvertisedIdentity()
+        }
+    }
+
+    // Android's BluetoothLeAdvertiser has no "update the scan response in place" API — a plain
+    // stop+restart with freshly-built AdvertiseData (which picks up the current
+    // servingState.lastLineNumber) is the only way to change what's being broadcast.
+    // advertisingAttempt is deliberately left as-is (not reset to 0) rather than routed through
+    // startAdvertising() — this only needs to refresh the payload, not redo the
+    // DATA_TOO_LARGE-retry negotiation that already settled on whatever attempt count is
+    // current. A no-op (not an error) whenever advertising isn't actually up right now —
+    // startAdvertisingRetryLoop already owns getting it started/restarted in that case, on its
+    // own cadence.
+    @SuppressLint("MissingPermission")
+    private fun refreshAdvertisedIdentity() {
+        if (!isAdvertising) return
+        val advertiserLocal = advertiser ?: return
+        if (!hasAdvertisePermission()) return
+        advertiserLocal.stopAdvertising(advertiseCallback)
+        startAdvertisingAttempt(advertiserLocal)
     }
 
     // --- GATT server setup -------------------------------------------------------------
@@ -417,10 +501,20 @@ class PeripheralSyncService : Service() {
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
             .setConnectable(true)
             .build()
-        val data = AdvertiseData.Builder()
+        // MULE_MODE_MARKER_SERVICE_UUID rides in the primary packet (not the scan response),
+        // alongside SERVICE_UUID — see its own doc for why service-UUID filtering, not
+        // manufacturer data, is what the web app's picker actually relies on now, and why this
+        // fits the legacy 31-byte primary-advertisement budget (SERVICE_UUID alone already costs
+        // 18 of those; a short-form 16-bit UUID costs only 4 more).
+        val advertisedInMule = currentMode == AppMode.MULE
+        val dataBuilder = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
             .addServiceUuid(ParcelUuid(MuleGattProfile.SERVICE_UUID))
-            .build()
+        if (advertisedInMule) {
+            dataBuilder.addServiceUuid(ParcelUuid(MuleGattProfile.MULE_MODE_MARKER_SERVICE_UUID))
+        }
+        val data = dataBuilder.build()
+        Log.i(TAG, "Primary advertisement service UUIDs: SERVICE_UUID${if (advertisedInMule) " + MULE_MODE_MARKER_SERVICE_UUID (mode=$currentMode)" else " only (mode=$currentMode)"}")
         advertiserLocal.startAdvertising(settings, data, buildScanResponseData(), advertiseCallback)
     }
 
@@ -429,9 +523,18 @@ class PeripheralSyncService : Service() {
     // this app's advertisement before this change, guaranteeing the worst case is never worse
     // than what already shipped.
     private fun buildScanResponseData(): AdvertiseData? {
-        if (advertisingAttempt >= MAX_SCAN_RESPONSE_ATTEMPTS) return null
+        if (advertisingAttempt >= MAX_SCAN_RESPONSE_ATTEMPTS) {
+            Log.i(TAG, "Scan response: attempt $advertisingAttempt >= $MAX_SCAN_RESPONSE_ATTEMPTS — advertising with NO scan response (mode=$currentMode won't be visible to the web picker's filter)")
+            return null
+        }
         val name = if (advertisingAttempt == 0) deviceName else ""
-        val payload = MuleGattProfile.encodeAdvertisedIdentity(servingState.lastLineNumber, name)
+        val payload = MuleGattProfile.encodeAdvertisedIdentity(servingState.lastLineNumber, name, currentMode)
+        // Temporary/diagnostic — added while tracking down the web app's mode-filtered picker
+        // finding nothing. Hex-dumped so it can be compared byte-for-byte against mule-ble.js's
+        // own "expected prefix" log and against chrome://bluetooth-internals' raw advertisement
+        // view, which shows what a browser actually received over the air regardless of any
+        // page-level requestDevice() filter.
+        Log.i(TAG, "Scan response payload (attempt $advertisingAttempt, mode=$currentMode, lastLineNumber=${servingState.lastLineNumber}, name=\"$name\"): ${payload.joinToString(" ") { "%02x".format(it) }}")
         return AdvertiseData.Builder()
             .addManufacturerData(MuleGattProfile.ADVERTISING_MANUFACTURER_ID, payload)
             .build()
@@ -453,6 +556,7 @@ class PeripheralSyncService : Service() {
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
             isAdvertising = true
+            Log.i(TAG, "Advertising started successfully (attempt $advertisingAttempt, mode=$currentMode)")
             container.bluetoothStateRepository.recordAdvertisingSuccess()
         }
 
@@ -530,12 +634,33 @@ class PeripheralSyncService : Service() {
                     if (request != null) {
                         val originDeviceId = request.originDeviceId
                         serviceScope.launch {
-                            respondWithCache(device, request.requestKey) {
-                                when {
-                                    request.requestRelayManifest -> computeRelayManifestPayload()
-                                    originDeviceId == null -> computeRecordsPayload(request.sinceLineNumber)
-                                    else -> computeRelayedRecordsPayload(originDeviceId, request.originRaceLabel.orEmpty(), request.sinceLineNumber)
+                            // try/catch + timeout, not a bare call — the CONTROL write's own
+                            // GATT response is sent unconditionally below regardless of what
+                            // happens here, so the puller has no idea whether a data response
+                            // is even coming; if compute() (real DB work, contended under a
+                            // busy multi-phone mesh) hangs or throws, this device just silently
+                            // never sends anything and the puller sits waiting on DATA
+                            // notifications that never start — indistinguishable in the field
+                            // from the browser-stall bug the chunk-stream watchdog (see
+                            // checkStalledChunkStreams) was meant to fix, except that watchdog
+                            // only recovers a transfer already in flight; it has nothing to
+                            // watch if sendChunked is never reached at all. On failure, still
+                            // send a terminating empty response rather than leaving the puller
+                            // hanging — cheap, and safe: it just sees "nothing new" and retries
+                            // on its own next cycle.
+                            runCatching {
+                                withTimeout(RESPOND_WITH_CACHE_TIMEOUT) {
+                                    respondWithCache(device, request.requestKey) {
+                                        when {
+                                            request.requestRelayManifest -> computeRelayManifestPayload()
+                                            originDeviceId == null -> computeRecordsPayload(request.sinceLineNumber)
+                                            else -> computeRelayedRecordsPayload(originDeviceId, request.originRaceLabel.orEmpty(), request.sinceLineNumber)
+                                        }
+                                    }
                                 }
+                            }.onFailure {
+                                Log.e(TAG, "respondWithCache failed/timed out for ${device.address}", it)
+                                sendChunked(device, "[]")
                             }
                         }
                     }
@@ -558,9 +683,20 @@ class PeripheralSyncService : Service() {
                     // which is ordinary (and well within spec) for a GATT write-with-response.
                     if (ack != null) {
                         serviceScope.launch {
-                            markSynced(ack)
-                            if (responseNeeded) {
-                                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
+                            // try/finally, not markSynced followed by sendResponse — a puller's
+                            // ack write() blocks until this response arrives (that's the whole
+                            // point, see the doc above), so if markSynced ever throws (or, with
+                            // this timeout, simply hangs — a DB stall, say) and nothing here
+                            // still sent a response, that puller is stuck forever with no way to
+                            // recover short of the OS tearing down the connection. Confirmed in
+                            // the field: a stalled Mule-to-server-app sync that only cleared once
+                            // Bluetooth was manually toggled off and on.
+                            try {
+                                withTimeout(MARK_SYNCED_TIMEOUT) { markSynced(ack) }
+                            } finally {
+                                if (responseNeeded) {
+                                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
+                                }
                             }
                         }
                     } else if (responseNeeded) {
@@ -692,15 +828,16 @@ class PeripheralSyncService : Service() {
             bytes.toList().chunked(chunkSize).map { it.toByteArray() } +
                 listOf(byteArrayOf(MuleGattProfile.END_OF_STREAM_MARKER)),
         )
-        outboundChunks[device.address] = chunks
+        outboundChunks[device.address] = OutboundStream(device, chunks, System.currentTimeMillis())
         sendNextChunk(device)
     }
 
     @SuppressLint("MissingPermission")
     private fun sendNextChunk(device: BluetoothDevice) {
         if (!hasConnectPermission()) return
-        val queue = outboundChunks[device.address] ?: return
-        val chunk = queue.removeFirstOrNull() ?: return
+        val stream = outboundChunks[device.address] ?: return
+        val chunk = stream.chunks.removeFirstOrNull() ?: return
+        stream.lastProgressAtMillis = System.currentTimeMillis()
         val characteristic = dataCharacteristic ?: return
         val server = gattServer ?: return
         // Belt-and-suspenders alongside the chunk-size cap in computeRecordsPayload(): a BLE API call
@@ -724,6 +861,39 @@ class PeripheralSyncService : Service() {
                 server.notifyCharacteristicChanged(device, characteristic, false)
             }
         }.onFailure { Log.e(TAG, "notifyCharacteristicChanged failed for chunk of ${chunk.size} bytes", it) }
+    }
+
+    // Forward progress on a chunk stream depends entirely on onNotificationSent firing so
+    // sendNextChunk can pop the next one — there's no other trigger, and nothing here ever
+    // times that out on its own. If it's ever missed (a documented flakiness point on
+    // BluetoothGattServer generally, and plausibly more likely against a non-Kable central
+    // like a browser's Web Bluetooth stack, which this protocol wasn't primarily field-tested
+    // against), the remaining chunks just sit in the queue forever with nothing to recover
+    // them — confirmed in the field as a Mule-to-browser sync that only cleared once Bluetooth
+    // was manually toggled off and on on the browser side. This loop is the automated
+    // equivalent of that toggle: force-disconnect a stream that's made no progress in
+    // CHUNK_SEND_TIMEOUT, so the central sees a clean disconnect (rather than an indefinite
+    // stall) and can reconnect to retry from a fresh request.
+    private fun startChunkWatchdogLoop() {
+        serviceScope.launch {
+            while (isActive) {
+                delay(CHUNK_WATCHDOG_INTERVAL)
+                checkStalledChunkStreams()
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun checkStalledChunkStreams() {
+        if (!hasConnectPermission()) return
+        val now = System.currentTimeMillis()
+        for (stream in outboundChunks.values) {
+            if (stream.chunks.isEmpty()) continue
+            if (now - stream.lastProgressAtMillis < CHUNK_SEND_TIMEOUT.inWholeMilliseconds) continue
+            Log.w(TAG, "Chunk stream to ${stream.device.address} stalled — forcing disconnect so it can retry")
+            outboundChunks.remove(stream.device.address)
+            runCatching { gattServer?.cancelConnection(stream.device) }
+        }
     }
 
     // [ack] identifies the puller that just took these records and — critically — whether that
@@ -840,6 +1010,26 @@ class PeripheralSyncService : Service() {
         private const val MAX_SCAN_RESPONSE_ATTEMPTS = 2
         private const val MAX_CACHED_RESPONSES = 64
         private const val CACHED_RESPONSE_MAX_AGE_MS = 60_000L
+
+        // Bounds how long a deferred ACK response is allowed to wait on markSynced (a few
+        // suspend DB calls) before sending the response anyway — see its own call site's doc
+        // for why the response must always eventually go out regardless.
+        private val MARK_SYNCED_TIMEOUT = 5_000.milliseconds
+
+        // Bounds respondWithCache's compute() phase — see its call site's own doc for why a
+        // hang here previously meant the puller got no signal at all, not even a slow one.
+        private val RESPOND_WITH_CACHE_TIMEOUT = 5_000.milliseconds
+
+        // See startChunkWatchdogLoop's own doc. Generous relative to how quickly
+        // onNotificationSent normally fires (well under a second in practice) so a merely slow
+        // link never trips this, but short enough that a genuinely stuck stream recovers
+        // quickly rather than the operator having to notice and manually toggle Bluetooth.
+        private val CHUNK_SEND_TIMEOUT = 8_000.milliseconds
+        private val CHUNK_WATCHDOG_INTERVAL = 3_000.milliseconds
+
+        // See scheduleAdvertisedIdentityRefresh's own doc for why this is debounced rather
+        // than immediate.
+        private val ADVERTISED_IDENTITY_REFRESH_DEBOUNCE = 2_000.milliseconds
         val CLIENT_CHARACTERISTIC_CONFIG_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         /** No-ops quietly if Bluetooth runtime permissions haven't been granted yet — the
