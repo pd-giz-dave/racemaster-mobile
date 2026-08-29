@@ -1,6 +1,7 @@
 package mobile.racemaster.data.mule
 
 import android.bluetooth.le.ScanSettings
+import android.util.Log
 import com.juul.kable.Advertisement
 import com.juul.kable.AndroidPeripheral
 import com.juul.kable.ObsoleteKableApi
@@ -13,10 +14,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
+import java.util.Collections
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.toKotlinUuid
@@ -78,7 +83,49 @@ class MulePullClient {
     private fun peripheralFor(advertisement: Advertisement): Peripheral =
         peripherals.getOrPut(advertisement.identifier) { Peripheral(advertisement) }
 
+    // One Mutex per address, guarding the connect→operate→disconnect sequence in
+    // readDeviceInfo/pull/pullRelayManifest below — confirmed in the field as the actual cause
+    // of a device stuck at "Discovering…" (or never resolving at all): a freshly-discovered
+    // device gets an independent connect from both MuleSyncEngine.refreshDeviceInfo (its own
+    // first-sighting resolve) and the very next pullAllVisibleDevices tick (shouldConnect
+    // returns true unconditionally for anything still unresolved), and since both share the
+    // one Peripheral object peripheralFor() reuses for a given address, two concurrent
+    // connect()/read()/disconnect() sequences on it interleave — observed live as one side's
+    // disconnect() throwing NotConnectedException mid-read on the other, and the other's own
+    // characteristic read coming back corrupted/truncated (a JsonDecodingException on visibly
+    // mangled bytes, two responses' worth spliced together). connectSemaphore doesn't prevent
+    // this — it only bounds how many *different* devices are connected at once, not repeat
+    // concurrent use of the *same* one. A device with only one resolved connect at a time never
+    // hits this; only ever seen on a still-unresolved device precisely because it's the one
+    // case two independent call sites both decide to connect to right away.
+    private val peripheralMutexes = mutableMapOf<String, Mutex>()
+
+    @Synchronized
+    private fun mutexFor(advertisement: Advertisement): Mutex =
+        peripheralMutexes.getOrPut(advertisement.identifier) { Mutex() }
+
+    // Temporary/diagnostic — added while chasing a peer that never resolves out of
+    // "Discovering…" (or never appears at all) despite both ends' own advertising/scanning
+    // otherwise looking healthy. Logs every distinct BLE address seen at all (once each, not
+    // per-callback — this scan is unfiltered at the OS level, see scanForDevices' own doc, so
+    // logging every callback would mean logging every ambient BLE device in range on every
+    // ~scan interval) so a peer that never even reaches the SERVICE_UUID filter below is
+    // distinguishable from one that's seen but doesn't match it — those are different bugs
+    // (nothing physically arriving vs. a filter/payload mismatch) that otherwise look identical
+    // from MuleSyncEngine's side (a device that just never shows up).
+    private val loggedRawAddresses = Collections.synchronizedSet(mutableSetOf<String>())
+
     fun scanForDevices(): Flow<Advertisement> = scanner.advertisements
+        .onEach { advertisement ->
+            if (loggedRawAddresses.add(advertisement.identifier)) {
+                Log.d(
+                    TAG,
+                    "raw scan result (first sighting): address=${advertisement.identifier} " +
+                        "name=${advertisement.name} rssi=${advertisement.rssi} uuids=${advertisement.uuids} " +
+                        "hasServiceUuid=${MuleGattProfile.SERVICE_UUID.toKotlinUuid() in advertisement.uuids}",
+                )
+            }
+        }
         .filter { advertisement -> MuleGattProfile.SERVICE_UUID.toKotlinUuid() in advertisement.uuids }
 
     /** Cheap, non-authoritative identity hint read straight off [advertisement]'s scan-response
@@ -100,18 +147,34 @@ class MulePullClient {
     // after it in the same list forever, since the loop itself never moved on. A timeout here
     // turns that into an ordinary, recoverable per-device failure — runCatching at the call
     // site already treats it exactly like a failed read.
-    suspend fun readDeviceInfo(advertisement: Advertisement): DeviceInfo = withTimeout(CONNECT_TIMEOUT) {
-        val peripheral = peripheralFor(advertisement)
-        peripheral.connect()
-        try {
-            val characteristic = characteristicOf(
-                service = MuleGattProfile.SERVICE_UUID.toKotlinUuid(),
-                characteristic = MuleGattProfile.DEVICE_INFO_CHARACTERISTIC_UUID.toKotlinUuid(),
-            )
-            val bytes = peripheral.read(characteristic)
-            json.decodeFromString(String(bytes, Charsets.UTF_8))
-        } finally {
-            peripheral.disconnect()
+    suspend fun readDeviceInfo(advertisement: Advertisement): DeviceInfo = mutexFor(advertisement).withLock {
+        withTimeout(CONNECT_TIMEOUT) {
+            val peripheral = peripheralFor(advertisement)
+            peripheral.connect()
+            try {
+                // Missing before, unlike collectChunkedResponse's identical call (used by
+                // pull()/pullRelayManifest()) — confirmed in the field as the actual cause of a
+                // device stuck at "Discovering…": DeviceInfo's JSON easily exceeds the
+                // un-negotiated default ATT MTU (23 bytes, ~20 usable), so without this the
+                // read falls back to Android's own multi-fragment "read blob" reassembly —
+                // which on at least one real budget/rugged chipset reproducibly corrupted the
+                // result (the same read, retried repeatedly seconds apart against unchanged
+                // data, came back with an identical byte-for-byte splice of two fragments,
+                // never a transient/random glitch). Requesting the larger MTU first lets the
+                // whole value fit in a single ATT response instead, sidestepping that
+                // reassembly path entirely. Best-effort like collectChunkedResponse's own copy
+                // — if negotiation fails/isn't supported, this falls back to the same read-blob
+                // path as before, no worse than today.
+                runCatching { (peripheral as? AndroidPeripheral)?.requestMtu(MuleGattProfile.REQUESTED_MTU) }
+                val characteristic = characteristicOf(
+                    service = MuleGattProfile.SERVICE_UUID.toKotlinUuid(),
+                    characteristic = MuleGattProfile.DEVICE_INFO_CHARACTERISTIC_UUID.toKotlinUuid(),
+                )
+                val bytes = peripheral.read(characteristic)
+                json.decodeFromString(String(bytes, Charsets.UTF_8))
+            } finally {
+                peripheral.disconnect()
+            }
         }
     }
 
@@ -160,43 +223,45 @@ class MulePullClient {
         sinkConfirmedRecordUuids: List<String> = emptyList(),
         onReceived: suspend (List<SyncRecord>) -> Unit,
         onConfirmationsRelayed: suspend (List<String>) -> Unit = {},
-    ): Unit = coroutineScope {
-        val peripheral = peripheralFor(advertisement)
-        // Same reasoning as readDeviceInfo's own CONNECT_TIMEOUT — bounds just the connect
-        // phase so a stuck handshake can't hang this call forever; PULL_TIMEOUT below already
-        // separately bounds the actual data-collection phase once connected.
-        withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }
-        try {
-            val serviceUuid = MuleGattProfile.SERVICE_UUID.toKotlinUuid()
-            val ackCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.ACK_CHARACTERISTIC_UUID.toKotlinUuid())
+    ): Unit = mutexFor(advertisement).withLock {
+        coroutineScope {
+            val peripheral = peripheralFor(advertisement)
+            // Same reasoning as readDeviceInfo's own CONNECT_TIMEOUT — bounds just the connect
+            // phase so a stuck handshake can't hang this call forever; PULL_TIMEOUT below already
+            // separately bounds the actual data-collection phase once connected.
+            withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }
+            try {
+                val serviceUuid = MuleGattProfile.SERVICE_UUID.toKotlinUuid()
+                val ackCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.ACK_CHARACTERISTIC_UUID.toKotlinUuid())
 
-            val requestKey = computeRequestKey(pullerDeviceId, originDeviceId, originRaceLabel, sinceLineNumber)
-            val pullRequest = json.encodeToString(PullRequest(sinceLineNumber, originDeviceId, originRaceLabel, requestKey = requestKey))
-            val payload = collectChunkedResponse(peripheral, pullRequest)
-            val records = if (payload.isBlank()) emptyList() else json.decodeFromString<List<SyncRecord>>(payload)
+                val requestKey = computeRequestKey(pullerDeviceId, originDeviceId, originRaceLabel, sinceLineNumber)
+                val pullRequest = json.encodeToString(PullRequest(sinceLineNumber, originDeviceId, originRaceLabel, requestKey = requestKey))
+                val payload = collectChunkedResponse(peripheral, pullRequest)
+                val records = if (payload.isBlank()) emptyList() else json.decodeFromString<List<SyncRecord>>(payload)
 
-            if (records.isNotEmpty()) {
-                onReceived(records)
-            }
-            // Split across as many separate, independently-complete ack writes as needed —
-            // see ackBatches' own doc for why a single unchunked write can't safely carry
-            // this, especially sinkConfirmedRecordUuids, which could otherwise cover a large
-            // race's entire backlog at once (see AckPayload's own doc).
-            for (batch in ackBatches(pullerDeviceId, pullerDeviceName, records.map { it.recordUuid }, sinkConfirmedRecordUuids) { json.encodeToString(it) }) {
-                // WithResponse means this suspends until the peripheral's GATT response
-                // arrives — PeripheralSyncService now always sends one (see its own doc), but
-                // this timeout is defense-in-depth against any peer (a different app version,
-                // or anything else speaking this protocol) that doesn't, so a stuck peer can't
-                // hang this whole pull forever.
-                withTimeout(ACK_WRITE_TIMEOUT) {
-                    peripheral.write(ackCharacteristic, json.encodeToString(batch).toByteArray(Charsets.UTF_8), WriteType.WithResponse)
+                if (records.isNotEmpty()) {
+                    onReceived(records)
                 }
-                if (batch.sinkConfirmedRecordUuids.isNotEmpty()) {
-                    onConfirmationsRelayed(batch.sinkConfirmedRecordUuids)
+                // Split across as many separate, independently-complete ack writes as needed —
+                // see ackBatches' own doc for why a single unchunked write can't safely carry
+                // this, especially sinkConfirmedRecordUuids, which could otherwise cover a large
+                // race's entire backlog at once (see AckPayload's own doc).
+                for (batch in ackBatches(pullerDeviceId, pullerDeviceName, records.map { it.recordUuid }, sinkConfirmedRecordUuids) { json.encodeToString(it) }) {
+                    // WithResponse means this suspends until the peripheral's GATT response
+                    // arrives — PeripheralSyncService now always sends one (see its own doc), but
+                    // this timeout is defense-in-depth against any peer (a different app version,
+                    // or anything else speaking this protocol) that doesn't, so a stuck peer can't
+                    // hang this whole pull forever.
+                    withTimeout(ACK_WRITE_TIMEOUT) {
+                        peripheral.write(ackCharacteristic, json.encodeToString(batch).toByteArray(Charsets.UTF_8), WriteType.WithResponse)
+                    }
+                    if (batch.sinkConfirmedRecordUuids.isNotEmpty()) {
+                        onConfirmationsRelayed(batch.sinkConfirmedRecordUuids)
+                    }
                 }
+            } finally {
+                peripheral.disconnect()
             }
-        } finally {
-            peripheral.disconnect()
         }
     }
 
@@ -208,15 +273,17 @@ class MulePullClient {
      *  characteristic bounded by the ATT protocol's own 512-byte attribute value cap). Callers
      *  should only bother with this extra round trip when [DeviceInfo.relayCount] from a prior
      *  [readDeviceInfo] read was greater than 0 — see [MuleSyncEngine.pullAllVisibleDevices]. */
-    suspend fun pullRelayManifest(advertisement: Advertisement): List<RelayManifestEntry> = coroutineScope {
-        val peripheral = peripheralFor(advertisement)
-        withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }
-        try {
-            val pullRequest = json.encodeToString(PullRequest(sinceLineNumber = 0, requestRelayManifest = true))
-            val payload = collectChunkedResponse(peripheral, pullRequest)
-            if (payload.isBlank()) emptyList() else json.decodeFromString(payload)
-        } finally {
-            peripheral.disconnect()
+    suspend fun pullRelayManifest(advertisement: Advertisement): List<RelayManifestEntry> = mutexFor(advertisement).withLock {
+        coroutineScope {
+            val peripheral = peripheralFor(advertisement)
+            withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }
+            try {
+                val pullRequest = json.encodeToString(PullRequest(sinceLineNumber = 0, requestRelayManifest = true))
+                val payload = collectChunkedResponse(peripheral, pullRequest)
+                if (payload.isBlank()) emptyList() else json.decodeFromString(payload)
+            } finally {
+                peripheral.disconnect()
+            }
         }
     }
 
@@ -267,6 +334,8 @@ class MulePullClient {
     }
 
     companion object {
+        private const val TAG = "MulePullClient"
+
         // Deliberately independent of MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS — see that
         // constant's own doc for why. These bound how long a single real BLE connect/pull
         // handshake is allowed to take, a hardware-bound concern unrelated to how often the

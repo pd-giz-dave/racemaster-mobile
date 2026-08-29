@@ -492,13 +492,21 @@ class MuleSyncEngine(
         val device = discoveredFlow.value[key] ?: return
         // Shares connectSemaphore with pullAllVisibleDevices' own connects — see that
         // function's own comment at its withPermit call for why one bound has to cover both.
+        // Temporary/diagnostic logging around this connect — see MulePullClient.scanForDevices'
+        // own doc for the matching raw-scan-level logging; together these two spots make a
+        // silently-swallowed runCatching failure (previously invisible from outside the app)
+        // distinguishable from a device that never scans in at all.
+        Log.d(TAG, "first-sighting connect attempt: key=$key")
         val info = connectSemaphore.withPermit {
-            runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }.getOrNull()
+            runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }
+                .onFailure { Log.w(TAG, "first-sighting connect failed: key=$key", it) }
+                .getOrNull()
         }
         if (info == null) {
             markUnreachable(key, device)
             return
         }
+        Log.d(TAG, "first-sighting connect succeeded: key=$key deviceId=${info.deviceId} deviceName=${info.deviceName}")
         val since = muleRepository.lastPulledLineNumber(info.deviceId, info.raceLabel)
         mergeDeviceInfo(key, device, info, since)
     }
@@ -587,6 +595,13 @@ class MuleSyncEngine(
         val now = System.currentTimeMillis()
         val dropThreshold = if (device.deviceId == null) UNRESOLVED_DROP_THRESHOLD else UNREACHABLE_DROP_THRESHOLD
         if (now - device.lastReachableAtMillis >= dropThreshold.inWholeMilliseconds) {
+            // Temporary/diagnostic — see refreshDeviceInfo/pullAllVisibleDevices' own matching
+            // log lines. A device stuck at "Discovering…" that keeps getting re-added by a
+            // fresh scan callback (see startScan's own doc on BLE address rotation) shows up
+            // here as repeated drops under the *same* deviceKey only if the address itself
+            // didn't rotate — a genuinely new key each time means this line alone won't catch
+            // it, but the raw-scan logging in MulePullClient will.
+            Log.d(TAG, "dropping (unresolved=${device.deviceId == null}): key=$key deviceName=${device.deviceName}")
             discoveredFlow.value = discoveredFlow.value - key
             return
         }
@@ -727,7 +742,11 @@ class MuleSyncEngine(
                 // contributed last time so they don't linger alongside (or diverge from) what it's
                 // about to report now; replaced below if it still has any to offer.
                 relayRows.entries.removeAll { it.value.relayedViaDeviceKey == key }
-                val freshInfo = runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }.getOrNull()
+                // Temporary/diagnostic — see refreshDeviceInfo's own matching log lines.
+                Log.d(TAG, "periodic connect attempt: key=$key deviceId=${device.deviceId}")
+                val freshInfo = runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }
+                    .onFailure { Log.w(TAG, "periodic connect failed: key=$key deviceId=${device.deviceId}", it) }
+                    .getOrNull()
                 if (freshInfo == null) {
                     markUnreachable(key, device)
                     return@withPermit
