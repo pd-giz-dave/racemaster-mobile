@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.data.mule.PeripheralSyncService
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.util.withClickSound
 
@@ -127,7 +128,18 @@ fun ModePickerScreen(
             title = { Text("Exit RaceMaster?") },
             text = { Text("Are you sure you want to exit the app?") },
             confirmButton = {
-                TextButton(onClick = withClickSound { activity?.finish() }) { Text("Exit") }
+                TextButton(
+                    onClick = withClickSound {
+                        // Stop the service (and, via its onDestroy, MuleSyncEngine's scan/
+                        // advertise loops) explicitly before finishing — Activity.finish()
+                        // alone leaves both running indefinitely in the background, since
+                        // neither onTaskRemoved nor stopWithTask fires for a plain finish()
+                        // (see PeripheralSyncService.stop's own doc). Confirmed in the field
+                        // as Bluetooth staying visibly active after Exit was confirmed.
+                        activity?.let { PeripheralSyncService.stop(it) }
+                        activity?.finish()
+                    },
+                ) { Text("Exit") }
             },
             dismissButton = {
                 TextButton(onClick = withClickSound { showExitConfirm = false }) { Text("Cancel") }

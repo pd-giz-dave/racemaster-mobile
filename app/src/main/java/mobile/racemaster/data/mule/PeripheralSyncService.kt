@@ -351,6 +351,10 @@ class PeripheralSyncService : Service() {
     override fun onDestroy() {
         stopAdvertisingIfPossible()
         closeGattServerIfPossible()
+        // The central/scanning side of Mule sync — started alongside this service in
+        // onCreate() above, but never itself tied to this service's own lifecycle before; see
+        // MuleSyncEngine.stop's own doc for why that let scanning silently outlive this service.
+        container.muleSyncEngine.stop()
         serviceJob.cancel()
         super.onDestroy()
     }
@@ -1088,6 +1092,19 @@ class PeripheralSyncService : Service() {
             } catch (e: Exception) {
                 Log.w(TAG, "Couldn't start PeripheralSyncService (no foreground context available)", e)
             }
+        }
+
+        /** Explicit stop for the one path that otherwise leaves everything running: the
+         *  operator confirming Exit from the mode picker. That finishes the Activity, but
+         *  Android doesn't tear a Service down just because the Activity that started it
+         *  finished — and neither `onTaskRemoved` nor the manifest's `stopWithTask="true"`
+         *  fire either, since both are about the task being removed from Recents (a swipe),
+         *  not a plain `finish()` call. `stopService` here calls this service's own
+         *  `onDestroy()` (see its own doc — tears down advertising, the GATT server, and
+         *  [MuleSyncEngine]'s scan/auto-sync loops together), so call this before
+         *  `Activity.finish()`, not after. */
+        fun stop(context: Context) {
+            context.stopService(Intent(context, PeripheralSyncService::class.java))
         }
     }
 }

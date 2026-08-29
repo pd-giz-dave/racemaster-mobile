@@ -6,6 +6,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -192,7 +193,10 @@ class MuleSyncEngine(
     private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
         Log.e(TAG, "Uncaught exception in MuleSyncEngine — swallowed to avoid crashing the app", throwable)
     }
-    private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
+    // var, not val — stop() cancels this scope's Job outright (launching on a cancelled scope
+    // fails immediately), so a later start() needs a fresh one to relaunch into. See stop()'s
+    // own doc for why this needs to be restartable at all rather than a one-way shutdown.
+    private var engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
 
     private val discoveredFlow = MutableStateFlow<Map<String, DiscoveredDevice>>(emptyMap())
     // Origins known only transitively, via some other Mule's relay manifest — kept separate
@@ -313,6 +317,29 @@ class MuleSyncEngine(
         startScan()
         startAutoSyncLoop()
         startBluetoothStateLoop()
+    }
+
+    /** Tears down every loop [start] set up — the central-side counterpart to
+     *  [PeripheralSyncService]'s own advertising/GATT-server teardown in its `onDestroy()`,
+     *  called from there so both radio roles actually stop together. Without this, this
+     *  engine's scan/auto-sync/Bluetooth-state loops (all launched into [engineScope], which
+     *  [start] never itself cancels) kept running for the rest of the process's life even once
+     *  the service hosting them was destroyed — confirmed in the field as Bluetooth staying
+     *  visibly active (still scanning, still connecting out to peers) after the operator
+     *  confirmed Exit from the mode picker, since that path finishes the Activity but doesn't
+     *  put the whole process down. Cancels [engineScope] itself (cheaper and more thorough than
+     *  hunting down every individual loop's own Job — [startAutoSyncLoop]/[startBluetoothStateLoop]
+     *  don't even keep theirs around) and replaces it with a fresh one so a later [start] — the
+     *  service restarting because the operator relaunched the app — has somewhere live to
+     *  relaunch into; launching more coroutines on an already-cancelled scope would otherwise
+     *  fail immediately. */
+    @Synchronized
+    fun stop() {
+        if (!started) return
+        started = false
+        engineScope.cancel()
+        engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
+        scanJob = null
     }
 
     // Polls rather than registering a BluetoothAdapter.ACTION_STATE_CHANGED receiver — this
