@@ -38,6 +38,7 @@ import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.formatSplitRef
 import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.ui.components.ModeScreenTopBar
+import mobile.racemaster.ui.components.ServerStatusLine
 import mobile.racemaster.ui.components.SplitRow
 import mobile.racemaster.ui.components.StopOrResetButton
 import mobile.racemaster.ui.components.SyncStatusLine
@@ -157,6 +158,7 @@ private fun TimeModeContent(
                 },
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                ServerStatusLine(uiState.serverStatus)
                 if (!deviceName.isNullOrBlank()) {
                     Text(text = "Device name: $deviceName", style = MaterialTheme.typography.labelMedium)
                 }

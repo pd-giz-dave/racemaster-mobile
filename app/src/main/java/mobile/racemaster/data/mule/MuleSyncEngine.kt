@@ -28,6 +28,7 @@ import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
+import mobile.racemaster.data.db.dao.PulledSourceSummary
 import mobile.racemaster.data.db.entity.KnownDeviceEntity
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.CpModeRepository
@@ -125,6 +126,17 @@ data class DiscoveredDevice(
     // before this whole gating mechanism existed — the optimization below only ever applies to
     // a healthy, unchanged device.
     val lastRealReadAtMillis: Long = 0L,
+    // When this device's data (its own race directly, or — for a relay row — whatever it's
+    // relaying) was last actually pulled — as opposed to [lastRealReadAtMillis], which also
+    // bumps on a real read that found nothing new to pull. Null until the first successful
+    // pull, or for a row nothing has ever been pulled from at all (self; a stale/previously-seen
+    // row — see [mobile.racemaster.ui.mulemode.MuleModeViewModel]'s own doc on why those aren't
+    // populated). Left for [mobile.racemaster.ui.mulemode.MuleModeViewModel] to fill in from
+    // [mobile.racemaster.data.db.dao.PulledSourceSummary] (see [withLastPulledAtMillis]) rather
+    // than tracked here directly — MuleRepository.pullFrom is this engine's own single call
+    // site for every pull, direct or relayed alike, and PulledSourceSummary already reports
+    // this per origin from there with no extra bookkeeping needed in this class.
+    val lastPulledAtMillis: Long? = null,
 )
 
 // discoveredFlow (see below) only ever holds devices that came from a live BLE scan result
@@ -237,6 +249,11 @@ class MuleSyncEngine(
     // already sources every other Mule Mode warning from here, so it's exposed here too rather
     // than adding a second repository reference to the ViewModel just for this one field.
     val advertisingWarning: StateFlow<String?> = bluetoothStateRepository.advertisingWarning
+    // Forwarded the same way advertisingWarning just above is, for the same reason — recorded by
+    // PeripheralSyncService (the only thing with visibility into incoming GATT connections/acks),
+    // exposed here purely so MuleModeViewModel doesn't need a second repository reference.
+    val lastWebAppSeenAtMillis: StateFlow<Long?> = bluetoothStateRepository.lastWebAppSeenAtMillis
+    val lastWebAppPushedAtMillis: StateFlow<Long?> = bluetoothStateRepository.lastWebAppPushedAtMillis
     val isBusy: StateFlow<Boolean> = busyFlow.asStateFlow()
 
     // This device's own unsynced data, shaped as one more DiscoveredDevice (isSelf = true) so
@@ -409,10 +426,24 @@ class MuleSyncEngine(
         scanJob = null
     }
 
+    // Every phone running Mule Mode runs its own independent instance of this loop, all sharing
+    // the identical, unjittered AUTO_SYNC_INTERVAL — confirmed in the field as a real risk: if
+    // several operators start Mule Mode within moments of each other (a common real case right
+    // before a race), their loops settle into whatever relative phase they happened to start at
+    // and never drift apart on their own, since nothing here ever re-randomizes a fixed, repeated
+    // delay. That means their scan/advertise/GATT radio activity can keep landing on the same
+    // instant, tick after tick, rather than just occasionally — a standing, avoidable source of
+    // contention on top of whatever this phone's own connectSemaphore is already managing for
+    // its own connects. Re-randomizing the delay on every single iteration (not just once at
+    // startup) is what actually breaks that lock: two loops that started in phase would still be
+    // in phase after only one jittered wait, so this has to be recomputed every time around, same
+    // reasoning FIRST_SIGHTING_JITTER already applies to a newly-discovered device's own first
+    // connect, just applied continuously here instead of once.
     private fun startAutoSyncLoop() {
         engineScope.launch {
             while (isActive) {
-                delay(AUTO_SYNC_INTERVAL)
+                val jitter = Random.nextDouble(-1.0, 1.0) * AUTO_SYNC_JITTER_FRACTION
+                delay(AUTO_SYNC_INTERVAL * (1.0 + jitter))
                 autoPullAndPushIfArmed()
             }
         }
@@ -817,8 +848,22 @@ class MuleSyncEngine(
         private const val TAG = "MuleSyncEngine"
         // Centralised in MuleGattProfile so every puller on this protocol (this engine's own
         // auto-sync loop included) shares one cadence rather than each hardcoding its own copy —
-        // see MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS's own doc.
+        // see MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS's own doc. This is the *reported*
+        // value (also what DeviceInfo.pollIntervalMs advertises to every puller) — never jittered
+        // itself; see startAutoSyncLoop's own doc for why the actual delay used internally below
+        // is a randomized variant of this, not this constant directly.
         private val AUTO_SYNC_INTERVAL = MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS.milliseconds
+
+        // How much startAutoSyncLoop's own steady-state tick is randomized by, each and every
+        // iteration — see that function's own doc for why. Deliberately narrower than
+        // FIRST_SIGHTING_JITTER below (12.5% of a 5s interval is ~625ms either way): this fires
+        // forever for the whole lifetime of every phone's own engine, not just once per newly-
+        // discovered device, so a wide swing here would itself become a standing source of
+        // schedule variance on top of everything else already competing for this radio. Only
+        // widen this after real field evidence shows the current spread isn't enough, not
+        // preemptively — this loop's timing has a documented history of causing real crashes
+        // when tuned too aggressively (see MAX_CONCURRENT_CONNECTS' own doc).
+        private const val AUTO_SYNC_JITTER_FRACTION = 0.125
 
         // The periodic backstop behind shouldConnect's version-gate: even a device whose
         // advertised counter never seems to move still gets a real GATT connect+DeviceInfo
@@ -981,3 +1026,26 @@ internal fun previouslySeenDevices(
     known: List<KnownDeviceEntity>,
     liveDeviceIds: Set<String>,
 ): List<KnownDeviceEntity> = known.filterNot { it.deviceId in liveDeviceIds }
+
+/**
+ * Merges each [PulledSourceSummary]'s own [PulledSourceSummary.lastPulledAtMillis] into the
+ * matching live device row — matched by deviceId + raceLabel, the same pairing
+ * [PulledSourceSummary] itself groups by, so a relay row (whose data comes from a genuinely
+ * different origin than whatever peer is relaying it) still gets its own origin's pull time,
+ * not the relaying peer's. Pulled out as a pure top-level function (matching
+ * [previouslySeenDevices]'s own precedent) so [mobile.racemaster.ui.mulemode.MuleModeViewModel]'s
+ * combine() block stays a plain wiring step. A row with no matching summary (self; nothing ever
+ * pulled from it) is returned unchanged, leaving [DiscoveredDevice.lastPulledAtMillis] at its
+ * default null.
+ */
+internal fun withLastPulledAtMillis(
+    devices: List<DiscoveredDevice>,
+    summaries: List<PulledSourceSummary>,
+): List<DiscoveredDevice> {
+    val lastPulledAtByOrigin = summaries.associate { (it.sourceDeviceId to it.sourceRaceLabel) to it.lastPulledAtMillis }
+    return devices.map { device ->
+        val deviceId = device.deviceId ?: return@map device
+        val lastPulledAtMillis = lastPulledAtByOrigin[deviceId to device.raceLabel] ?: return@map device
+        device.copy(lastPulledAtMillis = lastPulledAtMillis)
+    }
+}

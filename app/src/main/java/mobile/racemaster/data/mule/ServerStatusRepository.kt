@@ -19,7 +19,18 @@ import kotlinx.coroutines.launch
 // is ready to show the moment sync is turned back on.
 enum class ServerStatus { UNKNOWN, ONLINE, OFFLINE, INVALID, PAUSED }
 
-data class ServerStatusState(val status: ServerStatus, val checkedAtMillis: Long?)
+data class ServerStatusState(
+    val status: ServerStatus,
+    val checkedAtMillis: Long?,
+    // Distinct from checkedAtMillis, which advances on every poll attempt regardless of
+    // outcome — this is the "Last seen" equivalent for the server (mirroring
+    // DiscoveredDevice.lastReachableAtMillis/BluetoothStateRepository.lastWebAppSeenAtMillis):
+    // only bumped when a check actually succeeds (status == ServerStatus.ONLINE that tick), so
+    // an ongoing outage doesn't misleadingly look "just checked fine" from checkedAtMillis
+    // alone advancing every 15s regardless. Null until the very first successful check against
+    // the currently configured server URL.
+    val lastOnlineAtMillis: Long? = null,
+)
 
 /** Turns a raw [PingOutcome] into what it means for the operator: unreachable is OFFLINE
  *  (worth retrying — the server or network could recover); anything that responds but isn't
@@ -33,10 +44,13 @@ fun interpretPingOutcome(outcome: PingOutcome): ServerStatus = when (outcome) {
 
 /**
  * Polls the device's configured Racemaster server URL (see SettingsRepository.serverBaseUrl)
- * on a fixed interval and exposes whether it's reachable — surfaced in the always-visible
- * AppBanner so the operator can tell at a glance, from any screen, whether a push is likely
- * to succeed right now. No URL configured yet reports UNKNOWN (rendered as blank, not an
- * error — that's the expected state before Mule Mode's Setup Server form has been used).
+ * on a fixed interval — using the app's own existing `/api/ping` health check, not a new
+ * mechanism — and exposes both whether it's reachable right now and when it was last actually
+ * confirmed online ([ServerStatusState.lastOnlineAtMillis]). Surfaced in the always-visible
+ * AppBanner so the operator can tell at a glance, from any screen and regardless of mode,
+ * whether a push is likely to succeed right now. No URL configured yet reports UNKNOWN
+ * (rendered as blank, not an error — that's the expected state before Mule Mode's Setup Server
+ * form has been used).
  */
 class ServerStatusRepository(private val syncClient: MuleSyncClient) {
     private val _state = MutableStateFlow(ServerStatusState(ServerStatus.UNKNOWN, null))
@@ -58,9 +72,16 @@ class ServerStatusRepository(private val syncClient: MuleSyncClient) {
                     _state.value = ServerStatusState(ServerStatus.UNKNOWN, null)
                     return@collectLatest
                 }
+                // Local to this collectLatest invocation, not a class field — switching servers
+                // via Setup Server starts a fresh collectLatest block (a new URL cancels the
+                // previous one), so a "last seen" time against the *old* URL is correctly
+                // dropped rather than carried over and shown against the new one.
+                var lastOnlineAtMillis: Long? = null
                 while (isActive) {
                     val status = checkNow(baseUrl)
-                    _state.value = ServerStatusState(status, System.currentTimeMillis())
+                    val now = System.currentTimeMillis()
+                    if (status == ServerStatus.ONLINE) lastOnlineAtMillis = now
+                    _state.value = ServerStatusState(status, now, lastOnlineAtMillis)
                     delay(POLL_INTERVAL)
                 }
             }

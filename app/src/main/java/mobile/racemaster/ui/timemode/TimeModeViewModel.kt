@@ -6,6 +6,9 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.HistoryAction
+import mobile.racemaster.data.mule.ServerStatus
+import mobile.racemaster.data.mule.ServerStatusRepository
+import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.repository.LineSyncState
@@ -56,6 +59,10 @@ data class TimeModeUiState(
     val firstBibNumber: Int? = null,
     val expectedRunnerCount: Int? = null,
     val finishedCount: Int = 0,
+    // Shown as another header line (see ui/components/ServerStatusLine.kt) — server
+    // connectivity matters here just as much as in Mule Mode, since this device pushes its
+    // own recorded data to the server on the same schedule regardless of mode.
+    val serverStatus: ServerStatusState = ServerStatusState(ServerStatus.UNKNOWN, null),
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -63,6 +70,7 @@ class TimeModeViewModel(
     private val timeModeRepository: TimeModeRepository,
     private val raceRepository: RaceRepository,
     settingsRepository: SettingsRepository,
+    private val serverStatusRepository: ServerStatusRepository,
     private val beeper: Beeper,
 ) : ViewModel() {
 
@@ -80,7 +88,8 @@ class TimeModeViewModel(
                 val muleStatusFlow = combine(
                     timeModeRepository.observeUnsyncedCount(raceId),
                     timeModeRepository.observeLastSyncedAtMillis(raceId),
-                ) { unsyncedCount, lastSyncedAtMillis -> unsyncedCount to lastSyncedAtMillis }
+                    serverStatusRepository.state,
+                ) { unsyncedCount, lastSyncedAtMillis, serverStatus -> Triple(unsyncedCount, lastSyncedAtMillis, serverStatus) }
 
                 combine(
                     raceRepository.observeRace(raceId),
@@ -88,7 +97,7 @@ class TimeModeViewModel(
                     tickerFlow,
                     muleStatusFlow,
                     raceRepository.observeLineSyncs(raceId),
-                ) { race, splits, now, (unsyncedCount, lastSyncedAtMillis), lineSyncs ->
+                ) { race, splits, now, (unsyncedCount, lastSyncedAtMillis, serverStatus), lineSyncs ->
                     val linesWithAnySync = linesWithAnySync(lineSyncs)
                     val startedAt = race?.timeModeStartedAtMillis
                     val stoppedAt = race?.timeModeStoppedAtMillis
@@ -129,6 +138,7 @@ class TimeModeViewModel(
                         firstBibNumber = race?.bibsRangeStart,
                         expectedRunnerCount = race?.bibsRangeCount,
                         finishedCount = splits.count { it.action == HistoryAction.SPLIT },
+                        serverStatus = serverStatus,
                     )
                 }
             }
@@ -184,6 +194,7 @@ class TimeModeViewModel(
                     container.timeModeRepository,
                     container.raceRepository,
                     container.settingsRepository,
+                    container.serverStatusRepository,
                     Beeper(applicationContext()),
                 )
             }

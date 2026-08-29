@@ -1,5 +1,6 @@
 package mobile.racemaster.data.mule
 
+import mobile.racemaster.data.db.dao.PulledSourceSummary
 import mobile.racemaster.data.db.entity.KnownDeviceEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -147,6 +148,52 @@ class MuleSyncEngineTest {
     @Test
     fun anEmptyRosterStaysEmpty() {
         assertTrue(previouslySeenDevices(known = emptyList(), liveDeviceIds = setOf("phone-a")).isEmpty())
+    }
+
+    // withLastPulledAtMillis — the per-device "Last pulled" feedback NearbyDevicesSection shows
+    // against every live row, joined from PulledSourceSummary rather than tracked in
+    // DiscoveredDevice itself.
+
+    private fun summary(sourceDeviceId: String, sourceRaceLabel: String = "race-1", lastPulledAtMillis: Long = 1_000L) =
+        PulledSourceSummary(sourceRaceLabel, sourceDeviceId, deviceName = "device-$sourceDeviceId", lastPulledAtMillis, lastLineNumber = 5L)
+
+    @Test
+    fun fillsInLastPulledAtMillisForAMatchingDeviceIdAndRaceLabel() {
+        val devices = listOf(DiscoveredDevice(deviceKey = "phone-a", advertisement = null, deviceId = "phone-a", raceLabel = "race-1"))
+
+        val result = withLastPulledAtMillis(devices, listOf(summary("phone-a", "race-1", lastPulledAtMillis = 5_000L)))
+
+        assertEquals(5_000L, result.single().lastPulledAtMillis)
+    }
+
+    @Test
+    fun leavesARowWithNoMatchingSummaryAtItsDefaultNull() {
+        val devices = listOf(DiscoveredDevice(deviceKey = "phone-a", advertisement = null, deviceId = "phone-a", raceLabel = "race-1"))
+
+        val result = withLastPulledAtMillis(devices, emptyList())
+
+        assertNull(result.single().lastPulledAtMillis)
+    }
+
+    @Test
+    fun aRaceLabelMismatchIsNotTreatedAsAMatch() {
+        // The same physical device running two different race labels over time must not have
+        // one race label's pull time bleed onto the other's row — see PulledSourceSummary's own
+        // doc on why a source is grouped by (device, race label) together, never device alone.
+        val devices = listOf(DiscoveredDevice(deviceKey = "phone-a", advertisement = null, deviceId = "phone-a", raceLabel = "race-2"))
+
+        val result = withLastPulledAtMillis(devices, listOf(summary("phone-a", "race-1")))
+
+        assertNull(result.single().lastPulledAtMillis)
+    }
+
+    @Test
+    fun aSelfRowWithNoDeviceIdIsLeftUnchanged() {
+        val selfDevice = DiscoveredDevice(deviceKey = "self", advertisement = null, deviceId = null, isSelf = true)
+
+        val result = withLastPulledAtMillis(listOf(selfDevice), listOf(summary("phone-a")))
+
+        assertNull(result.single().lastPulledAtMillis)
     }
 
     // shouldConnect — the connect-gating decision that replaces "connect+DeviceInfo-read every

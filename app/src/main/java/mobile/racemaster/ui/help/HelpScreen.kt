@@ -176,10 +176,20 @@ fun HelpScreen(onBack: () -> Unit) {
                     "is discovered and synced automatically. A phone can also be connected to directly " +
                     "over Bluetooth by the RaceMaster web app, which counts as a second, independent " +
                     "destination — a race can reach race control via the server, a Bluetooth-connected " +
-                    "laptop, or both. Nearby devices lists every device Mule can currently see, coloured " +
-                    "red while it still has unsynced data and green once it's fully pulled. Bluetooth, " +
-                    "server sync, force-syncing, and pausing auto-sync are all configured from Options " +
-                    "— see Setup Device below.",
+                    "laptop, or both. Timestamps on this screen are the quickest way to tell " +
+                    "everything is actually working: \"Last push to server\" (this device's own data " +
+                    "reaching the server); \"Web app last seen\"/\"Web app last pushed to\" (a " +
+                    "connected web app contacting this device, and this device's own data actually " +
+                    "reaching it — \"last seen\" alone doesn't mean something's wrong, it just means " +
+                    "nothing new needed sending that time); and, against each entry in Nearby " +
+                    "devices, its own \"Last seen\"/\"Last pulled\" pair, the same distinction in the " +
+                    "other direction (this device successfully contacting it, versus this device " +
+                    "actually pulling new data from it) — Nearby devices itself is also coloured red " +
+                    "while a device still has unsynced data and green once it's fully pulled. None of " +
+                    "these timestamps carries a separate warning of its own; judge each the same way " +
+                    "— if it looks old, something's stopped. Options (top right, next to Mode) covers " +
+                    "Bluetooth on/off, server sync on/off, force-syncing, and " +
+                    "pausing auto-sync — see Setup Device below.",
             )
             HelpSection(
                 title = "Setup Device",
@@ -199,7 +209,14 @@ fun HelpScreen(onBack: () -> Unit) {
                     "Stop auto-sync/Resume auto-sync (pauses or resumes that background cycle). All " +
                     "four apply the same way regardless of mode: a Time/Bibs/CP phone still pushes its " +
                     "own recorded data to the server on the same schedule, it just never pulls from " +
-                    "other phones the way a Mule phone does.",
+                    "other phones the way a Mule phone does. Once a server is configured, every mode's " +
+                    "own screen shows a \"Server: \" line for it (in Mule Mode, directly above \"Last " +
+                    "push to server\") — Online, Offline, Invalid server (wrong URL — a real server " +
+                    "just isn't answering there), or Paused (server sync turned off in Options), " +
+                    "alongside \"(seen HH:MM)\", the last time it was actually confirmed reachable — " +
+                    "judge that the same way as any other last-seen time in this app: if it looks old, " +
+                    "something's stopped. The small dot in the green app banner at the very top " +
+                    "mirrors the same status at a glance, without the timestamp.",
             )
             HelpSection(
                 title = "Sync status colours",

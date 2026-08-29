@@ -4,6 +4,9 @@ import android.util.Log
 import com.juul.kable.Advertisement
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -60,11 +63,6 @@ class MuleRepository(
         pulledRecordDao.observeLastSyncedAtMillis(),
         raceRepository.lastHistorySyncedAtMillisAcrossAllRaces,
     ) { pulled, self -> maxOfNullable(pulled, self) }
-    // Deliberately BLE-pull-only (unlike unsyncedCount/lastSyncedAtMillis above) — self no
-    // longer "pulls" anything, it pushes straight to the server, so this now means exactly
-    // what it says: the last time this device actually received something over the radio from
-    // a peer, not a self-pull tick that ran regardless of whether any radio activity happened.
-    val lastPulledAtMillis: Flow<Long?> = pulledRecordDao.observeLastPulledAtMillis()
     val isLoggedIn: Flow<Boolean> = settingsRepository.authToken.map { it != null }
     val autoSyncStopped: Flow<Boolean> = settingsRepository.autoSyncStopped
     val bluetoothOff: Flow<Boolean> = settingsRepository.bluetoothOff
@@ -72,6 +70,19 @@ class MuleRepository(
 
     val sourceSummaries: Flow<List<PulledSourceSummary>> = pulledRecordDao.observeSourceSummaries()
     val deviceName: Flow<String?> = settingsRepository.deviceName
+
+    // Distinct from lastSyncedAtMillis above, which is really "last time anything was
+    // sink-confirmed" and bumps on a BLE ack from a web-app/mule sink just as much as on an
+    // actual HTTP push — too conflated to answer "is this phone still successfully talking to
+    // the server" on its own (confirmed as a source of confusion: a device could look "synced"
+    // purely from BLE relay confirmations while its own server connection had been broken for
+    // hours). Set at the end of every pushToServer() call that returns normally (even with
+    // nothing new to send — a no-op reconcile still proves the server round trip itself
+    // succeeded), so Mule Mode can show this as its own plain "last push to server" timestamp.
+    // In-memory only (unlike lastSyncedAtMillis, which is DB-backed) — this is a liveness signal
+    // for the current process, not sync history worth persisting across restarts.
+    private val lastPushAttemptAtMillisFlow = MutableStateFlow<Long?>(null)
+    val lastPushAttemptAtMillis: StateFlow<Long?> = lastPushAttemptAtMillisFlow.asStateFlow()
 
     // Exposed for Race History to show a *Mule-pulled* source as "too old, no longer checked
     // against the server" — see PulledRecordDao.RaceLabelActivity's own doc for why this is
@@ -431,6 +442,7 @@ class MuleRepository(
                 }
             }
         }
+        lastPushAttemptAtMillisFlow.value = System.currentTimeMillis()
         return added
     }
 }

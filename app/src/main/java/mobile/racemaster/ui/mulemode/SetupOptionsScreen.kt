@@ -19,7 +19,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import mobile.racemaster.util.formatWallClock
 import mobile.racemaster.util.withClickSound
 
 /** The actual Bluetooth on/off, server-sync on/off, and auto-sync controls — split out from
@@ -86,19 +85,9 @@ internal fun AutoSyncControls(uiState: MuleModeUiState, viewModel: MuleModeViewM
         uiState.autoWarning?.let { warning ->
             Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
-        // Unlike a pull, a push doesn't depend on any nearby device being visible at all — this
-        // device's own data pushes on its own the moment it's logged in, so a genuine "never"
-        // here only ever means one thing: not logged in. Once something has actually pushed,
-        // the qualifier drops — pairing a real timestamp with "(no server)" would read as a
-        // contradiction rather than an explanation.
-        Text(
-            if (uiState.lastSyncedAtMillis == null && !uiState.isLoggedIn) {
-                "Last push: never (no server)"
-            } else {
-                "Last push: ${uiState.lastSyncedAtMillis?.let { formatWallClock(it) } ?: "never"}"
-            },
-            style = MaterialTheme.typography.bodySmall,
-        )
+        // Shared with Mule Mode's own dashboard (see MuleModeScreen.kt's LastPushLine) so
+        // there's one copy of this text, not two that could drift.
+        LastPushLine(uiState)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = withClickSound(viewModel::forceSyncNow), enabled = !uiState.isBusy) {
                 Text("Force sync now")

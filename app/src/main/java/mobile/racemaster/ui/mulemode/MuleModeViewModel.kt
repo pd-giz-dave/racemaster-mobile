@@ -10,11 +10,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import mobile.racemaster.data.db.dao.PulledSourceSummary
 import mobile.racemaster.data.db.entity.KnownDeviceEntity
 import mobile.racemaster.data.mule.DiscoveredDevice
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.MuleSyncEngine
+import mobile.racemaster.data.mule.ServerStatus
+import mobile.racemaster.data.mule.ServerStatusRepository
+import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.data.mule.previouslySeenDevices
+import mobile.racemaster.data.mule.withLastPulledAtMillis
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
@@ -27,7 +32,6 @@ data class MuleModeUiState(
     val discoveredDevices: List<DiscoveredDevice> = emptyList(),
     val unsyncedCount: Int = 0,
     val lastSyncedAtMillis: Long? = null,
-    val lastPulledAtMillis: Long? = null,
     val isLoggedIn: Boolean = false,
     val statusMessage: String? = null,
     val autoWarning: String? = null,
@@ -43,6 +47,23 @@ data class MuleModeUiState(
     // render site here only ever needs this binary distinction; a not-yet-loaded appMode
     // correctly falls out as false (not pulling), no third case to handle anywhere.
     val isMuleMode: Boolean = false,
+    // The three "is everything actually working" timestamps Mule Mode shows: this one is when
+    // this device's own data was last pushed to the server (see MuleRepository.lastPushAttemptAtMillis's
+    // own doc for why it's a distinct signal from lastSyncedAtMillis above); per-device pull
+    // times live on each discoveredDevices row instead (see DiscoveredDevice.lastPulledAtMillis).
+    val lastPushAttemptAtMillis: Long? = null,
+    // The web app equivalent of a nearby device row's own "Last seen"/"Last pulled" pair (see
+    // DiscoveredDevice's own doc): lastWebAppSeenAtMillis bumps on any contact from it, whether
+    // or not it turned up new data; lastWebAppPushedAtMillis only bumps when this device's own
+    // data actually reached it (named from this device's own point of view, like
+    // lastPushAttemptAtMillis above — see BluetoothStateRepository.lastWebAppPushedAtMillis's
+    // own doc for why "pushed", not "pulled").
+    val lastWebAppSeenAtMillis: Long? = null,
+    val lastWebAppPushedAtMillis: Long? = null,
+    // Shown directly above lastPushAttemptAtMillis's own line (see ui/components/
+    // ServerStatusLine.kt and MuleModeScreen) — the same server-reachability feedback every
+    // other mode now shows too, not just Mule.
+    val serverStatus: ServerStatusState = ServerStatusState(ServerStatus.UNKNOWN, null),
 )
 
 /**
@@ -57,6 +78,7 @@ class MuleModeViewModel(
     private val muleRepository: MuleRepository,
     private val muleSyncEngine: MuleSyncEngine,
     private val settingsRepository: SettingsRepository,
+    private val serverStatusRepository: ServerStatusRepository,
 ) : ViewModel() {
 
     val deviceName: StateFlow<String?> = muleRepository.deviceName
@@ -67,7 +89,6 @@ class MuleModeViewModel(
         muleSyncEngine.discoveredDevices,
         muleRepository.unsyncedCount,
         muleRepository.lastSyncedAtMillis,
-        muleRepository.lastPulledAtMillis,
         muleRepository.isLoggedIn,
         muleSyncEngine.statusMessage,
         muleSyncEngine.autoWarning,
@@ -81,16 +102,26 @@ class MuleModeViewModel(
         muleRepository.knownDevices,
         muleSyncEngine.advertisingWarning,
         settingsRepository.appMode,
+        muleRepository.sourceSummaries,
+        muleRepository.lastPushAttemptAtMillis,
+        muleSyncEngine.lastWebAppSeenAtMillis,
+        muleSyncEngine.lastWebAppPushedAtMillis,
+        serverStatusRepository.state,
     ) { values ->
-        val isLoggedIn = values[4] as Boolean
-        val autoSyncStopped = values[8] as Boolean
-        val selfDevice = values[10] as DiscoveredDevice
-        val bluetoothOff = values[11] as Boolean
-        val serverSyncOff = values[12] as Boolean
-        val relayDevices = values[13] as Map<String, DiscoveredDevice>
-        val knownDevices = values[14] as List<KnownDeviceEntity>
-        val advertisingWarning = values[15] as String?
-        val appMode = values[16] as AppMode?
+        val isLoggedIn = values[3] as Boolean
+        val autoSyncStopped = values[7] as Boolean
+        val selfDevice = values[9] as DiscoveredDevice
+        val bluetoothOff = values[10] as Boolean
+        val serverSyncOff = values[11] as Boolean
+        val relayDevices = values[12] as Map<String, DiscoveredDevice>
+        val knownDevices = values[13] as List<KnownDeviceEntity>
+        val advertisingWarning = values[14] as String?
+        val appMode = values[15] as AppMode?
+        val sourceSummaries = values[16] as List<PulledSourceSummary>
+        val lastPushAttemptAtMillis = values[17] as Long?
+        val lastWebAppSeenAtMillis = values[18] as Long?
+        val lastWebAppPushedAtMillis = values[19] as Long?
+        val serverStatus = values[20] as ServerStatusState
         val directDevices = values[0] as Map<String, DiscoveredDevice>
         val liveDeviceIds = (directDevices.values + relayDevices.values).mapNotNull { it.deviceId }.toSet()
         // Stale rows: a device this phone has resolved before but can't currently see, given
@@ -107,17 +138,20 @@ class MuleModeViewModel(
                 isStale = true,
             )
         }
+        // Per-device "last pulled" feedback (see DiscoveredDevice.lastPulledAtMillis's own doc)
+        // — only live rows (direct + relay) get this; self never pulls from itself, and a stale
+        // row already shows its own separate "last seen" text instead.
+        val liveDevices = withLastPulledAtMillis((directDevices.values + relayDevices.values).toList(), sourceSummaries)
         MuleModeUiState(
-            discoveredDevices = (directDevices.values + relayDevices.values + selfDevice + staleDevices)
+            discoveredDevices = (liveDevices + selfDevice + staleDevices)
                 .sortedByDescending { it.lastReachableAtMillis },
             unsyncedCount = values[1] as Int,
             lastSyncedAtMillis = values[2] as Long?,
-            lastPulledAtMillis = values[3] as Long?,
             isLoggedIn = isLoggedIn,
-            statusMessage = values[5] as String?,
-            autoWarning = values[6] as String?,
-            bluetoothWarning = values[9] as String?,
-            isBusy = values[7] as Boolean,
+            statusMessage = values[4] as String?,
+            autoWarning = values[5] as String?,
+            bluetoothWarning = values[8] as String?,
+            isBusy = values[6] as Boolean,
             autoSyncStopped = autoSyncStopped,
             // Armed once logged in, auto-sync hasn't been explicitly stopped, and server sync
             // hasn't been explicitly turned off — no longer gated on any particular device
@@ -129,6 +163,10 @@ class MuleModeViewModel(
             serverSyncOff = serverSyncOff,
             advertisingWarning = advertisingWarning,
             isMuleMode = appMode == AppMode.MULE,
+            lastPushAttemptAtMillis = lastPushAttemptAtMillis,
+            lastWebAppSeenAtMillis = lastWebAppSeenAtMillis,
+            lastWebAppPushedAtMillis = lastWebAppPushedAtMillis,
+            serverStatus = serverStatus,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MuleModeUiState())
 
@@ -179,6 +217,7 @@ class MuleModeViewModel(
                     container.muleRepository,
                     container.muleSyncEngine,
                     container.settingsRepository,
+                    container.serverStatusRepository,
                 )
             }
         }

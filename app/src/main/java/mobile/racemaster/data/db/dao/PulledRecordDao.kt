@@ -104,9 +104,6 @@ interface PulledRecordDao {
     @Query("SELECT MAX(syncedAtMillis) FROM pulled_records")
     fun observeLastSyncedAtMillis(): Flow<Long?>
 
-    @Query("SELECT MAX(pulledAtMillis) FROM pulled_records")
-    fun observeLastPulledAtMillis(): Flow<Long?>
-
     @Query("UPDATE pulled_records SET syncedAtMillis = :syncedAtMillis, syncedTargetName = :targetName WHERE recordUuid IN (:recordUuids)")
     suspend fun markSynced(recordUuids: List<String>, syncedAtMillis: Long, targetName: String? = null)
 

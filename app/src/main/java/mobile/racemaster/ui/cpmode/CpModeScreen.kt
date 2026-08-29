@@ -162,6 +162,7 @@ private fun CpModeContent(
                     finishedCount = uiState.finishedCount,
                     duplicateBibNumbers = uiState.duplicateBibNumbers,
                     outstandingBibs = uiState.outstandingBibs,
+                    serverStatus = uiState.serverStatus,
                 )
                 if (!uiState.started) {
                     // Nothing recorded yet for this segment (a fresh race, a race switched

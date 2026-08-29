@@ -9,6 +9,9 @@ import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.RaceEntity
+import mobile.racemaster.data.mule.ServerStatus
+import mobile.racemaster.data.mule.ServerStatusRepository
+import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.accountedForRecordCount
@@ -42,6 +45,7 @@ private data class RaceContext(
     val unsyncedCount: Int,
     val lastSyncedAtMillis: Long?,
     val linesWithAnySync: Set<Long>,
+    val serverStatus: ServerStatusState,
 )
 
 data class BibsModeUiState(
@@ -76,6 +80,10 @@ data class BibsModeUiState(
     val outstandingBibs: List<Int> = emptyList(),
     // Distinct bib numbers involved in a duplicate log — empty (and hidden) when there are none.
     val duplicateBibNumbers: List<Int> = emptyList(),
+    // Shown as another header line (see ui/components/ServerStatusLine.kt) — server
+    // connectivity matters here just as much as in Mule Mode, since this device pushes its
+    // own recorded data to the server on the same schedule regardless of mode.
+    val serverStatus: ServerStatusState = ServerStatusState(ServerStatus.UNKNOWN, null),
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -83,6 +91,7 @@ class BibsModeViewModel(
     private val bibsModeRepository: BibsModeRepository,
     private val raceRepository: RaceRepository,
     settingsRepository: SettingsRepository,
+    private val serverStatusRepository: ServerStatusRepository,
     private val beeper: Beeper,
 ) : ViewModel() {
 
@@ -97,16 +106,22 @@ class BibsModeViewModel(
 
     private val raceAndEntriesFlow = raceIdFlow.flatMapLatest { raceId ->
         if (raceId == null) {
-            flowOf(RaceContext(null, emptyList(), 0, null, emptySet()))
+            flowOf(RaceContext(null, emptyList(), 0, null, emptySet(), ServerStatusState(ServerStatus.UNKNOWN, null)))
         } else {
             combine(
                 raceRepository.observeRace(raceId),
                 bibsModeRepository.observeCurrentSegmentEntries(raceId),
                 bibsModeRepository.observeUnsyncedCount(raceId),
-                bibsModeRepository.observeLastSyncedAtMillis(raceId),
+                // Paired rather than added as the combine's own 6th argument — kotlinx
+                // coroutines' typed combine() overloads only go up to 5, and this stays a
+                // plain, directly-typed lambda without needing MuleModeViewModel's own
+                // Array<*>-based vararg + @Suppress("UNCHECKED_CAST") approach.
+                combine(bibsModeRepository.observeLastSyncedAtMillis(raceId), serverStatusRepository.state) { lastSyncedAtMillis, serverStatus ->
+                    lastSyncedAtMillis to serverStatus
+                },
                 raceRepository.observeLineSyncs(raceId),
-            ) { race, entries, unsyncedCount, lastSyncedAtMillis, lineSyncs ->
-                RaceContext(race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync(lineSyncs))
+            ) { race, entries, unsyncedCount, (lastSyncedAtMillis, serverStatus), lineSyncs ->
+                RaceContext(race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync(lineSyncs), serverStatus)
             }
         }
     }
@@ -116,7 +131,7 @@ class BibsModeViewModel(
         digitsFlow,
         pendingTypeFlow,
     ) { context, digits, pendingType ->
-        val (race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync) = context
+        val (race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync, serverStatus) = context
         val dupRefs = findDuplicateSplitRefs(entries)
         val needsBib = pendingType in BIB_REQUIRED_ACTIONS
         val outstanding = outstandingBibs(entries, race?.bibsRangeStart, race?.bibsRangeCount)
@@ -159,6 +174,7 @@ class BibsModeViewModel(
             finishedCount = accountedForRecordCount(entries),
             outstandingBibs = outstanding,
             duplicateBibNumbers = duplicateBibNumbers(entries),
+            serverStatus = serverStatus,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BibsModeUiState())
 
@@ -227,6 +243,7 @@ class BibsModeViewModel(
                     container.bibsModeRepository,
                     container.raceRepository,
                     container.settingsRepository,
+                    container.serverStatusRepository,
                     Beeper(applicationContext()),
                 )
             }

@@ -64,12 +64,30 @@ Time mode also records time-of-day for all its  actions, this means an appropria
 ## Re-jig mule mode
 
 - [ ] do not propagate history that is more than 2 days old
-- [ ] on the mule mode screen give feedback that the server and a BT sink is visible and working,
+- [x] on the mule mode screen give feedback that the server and a BT sink is visible and working,
       in particular give persistent feedback that a BT sink is polling us,
+      (done: Mule Mode shows plain "last X at" timestamps rather than a separate
+      connected/stopped state machine per signal — the operator judges staleness by eye the
+      same way they already read Nearby devices' red/green colouring. Last push to server
+      (MuleRepository.lastPushAttemptAtMillis); web app last seen/last pushed to
+      (BluetoothStateRepository.lastWebAppSeenAtMillis/lastWebAppPushedAtMillis — "seen" bumps
+      on any contact, "pushed to" only when this device's own data actually reached it, since
+      the web app's own sendSinkAck never writes an empty ack); and, per row in Nearby devices,
+      last seen/last pulled from that device (DiscoveredDevice.lastReachableAtMillis/
+      lastPulledAtMillis), the same seen-vs-data distinction in the pulling direction. Options
+      moved to the top bar.)
 
 ## All modes
 
-- [ ] provide feedback about online/offline status (in the app title?)
+- [x] provide feedback about online/offline status (in the app title?)
+      (done: a "Server: Online/Offline/Invalid server/Paused (seen HH:MM)" line on every mode's
+      own screen (Time/Bibs/CP as another header line, Mule Mode directly above its own "Last
+      push to server" line) — see ui/components/ServerStatusLine.kt. lastOnlineAtMillis rides
+      the existing /api/ping health check (MuleSyncClient.ping — no new ping mechanism needed,
+      it already existed but wasn't surfacing a timestamp); see
+      ServerStatusRepository.lastOnlineAtMillis. First tried appending this to the always-visible
+      green app banner instead — reverted after it pushed the banner's title into wrapping onto
+      two lines on a real device; the banner's own dot-only indicator is unchanged.)
 - [ ] provide feedback that we are being polled via BT (so user can see if BT has failed - which seems to be common)
       for bt there are 2 scenarios: bt was in use and has stopped, bt was never in use, the user knows if bt is expected to be working or not,
       so maybe an option that says "i expect to be polled" so no polling is an error

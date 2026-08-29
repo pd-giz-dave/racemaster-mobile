@@ -283,6 +283,18 @@ data class DeviceInfo(
     // list is fetched via its own separate pull instead of riding along in this single-read
     // characteristic. A puller only bothers with that extra round trip when this is > 0.
     val relayCount: Int = 0,
+    // Bumped by PeripheralSyncService.observeRelayManifest() every time the underlying relay
+    // manifest genuinely changes content (an origin added/removed, or an existing origin's own
+    // lastLineNumber/deviceName advancing) — never on a no-op re-emission with identical
+    // content. Lets a puller that already has a cached copy of the manifest (see
+    // mule-ble.js's pullFromConnectedPhone) tell "nothing's changed" apart from "the count
+    // happens to be the same but the actual membership swapped" (e.g. one origin fully synced
+    // away at the same moment a different one started relaying through this device) —
+    // relayCount alone can't distinguish those two cases, since it's just a size. Defaulted so
+    // a puller running newer code than an old, already-installed peripheral still deserializes
+    // its DeviceInfo fine and just falls back to relayCount-only comparison, same as before this
+    // field existed.
+    val relayManifestVersion: Int = 0,
     // How often (in ms) a puller should re-poll this device — see
     // MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS's own doc for why this is reported rather
     // than left for every puller to hardcode independently. Defaulted (rather than required) so
@@ -312,7 +324,23 @@ data class DeviceInfo(
  *  `computeRequestKey`), not a fresh random value per call — a random key would never collide
  *  with itself and so could never actually get deduped. Left null (rather than required) so an
  *  old-build requester talking to a new-build responder still decodes fine and simply gets no
- *  dedup benefit — same graceful-degradation precedent as [DeviceInfo.pollIntervalMs]. */
+ *  dedup benefit — same graceful-degradation precedent as [DeviceInfo.pollIntervalMs].
+ *
+ *  [isSink] mirrors [AckPayload.isSink] — the racemaster web app's own BLE client always sets
+ *  it — but present here, on every single request, rather than only on an ack: the web app's
+ *  own `pullFromConnectedPhone` writes one of these on every poll tick regardless of whether
+ *  anything ends up being pulled (see its own doc — no shouldConnect-style skip-if-unchanged
+ *  gate on that side), while it only ever sends an ack when it actually has new lines to
+ *  report (an empty batch never reaches the wire — see `sendSinkAck`'s own doc). Without this
+ *  field, a sink with nothing new to fetch for a while (a perfectly ordinary, healthy state)
+ *  would never self-identify on the wire at all, leaving PeripheralSyncService with no way to
+ *  attribute its CONTROL writes to it specifically until the next time it actually had
+ *  something to ack — confirmed in the field as Mule Mode's "web app last seen" feedback
+ *  staying stuck on "never" the entire time a phone had nothing new to push, even while the
+ *  web app's own BT log showed it polling every few seconds. Left false (rather than required)
+ *  so an old-build requester still decodes fine, simply without contributing to that
+ *  feedback — the same graceful-degradation precedent as [requestKey] above; always false for
+ *  an ordinary racemaster-mobile phone acting as Mule, exactly like [AckPayload.isSink]. */
 @Serializable
 data class PullRequest(
     val sinceLineNumber: Long,
@@ -320,6 +348,7 @@ data class PullRequest(
     val originRaceLabel: String? = null,
     val requestRelayManifest: Boolean = false,
     val requestKey: String? = null,
+    val isSink: Boolean = false,
 )
 
 /** Written to [MuleGattProfile.ACK_CHARACTERISTIC_UUID] once a pulled stream is fully

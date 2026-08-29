@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import mobile.racemaster.data.db.entity.formatSplitRef
+import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.util.formatBibsExpectedText
 
 /** The device/race/location/progress/sync/duplicate/outstanding-bib info block shared by Bibs
@@ -33,7 +34,9 @@ fun EntryModeHeaderInfo(
     finishedCount: Int,
     duplicateBibNumbers: List<Int>,
     outstandingBibs: List<Int>,
+    serverStatus: ServerStatusState,
 ) {
+    ServerStatusLine(serverStatus)
     if (!deviceName.isNullOrBlank()) {
         Text(text = "Device name: $deviceName", style = MaterialTheme.typography.labelMedium)
     }

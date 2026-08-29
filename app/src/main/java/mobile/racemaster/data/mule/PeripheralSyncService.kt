@@ -144,6 +144,11 @@ class PeripheralSyncService : Service() {
     @Volatile
     private var relayManifest: List<PulledSourceSummary> = emptyList()
 
+    // See DeviceInfo.relayManifestVersion's own doc — bumped only in observeRelayManifest()
+    // below, and only when the manifest genuinely changed, never on every emission.
+    @Volatile
+    private var relayManifestVersion: Int = 0
+
     private data class ServingState(
         val raceId: Long? = null,
         val raceLabel: String = "",
@@ -236,11 +241,20 @@ class PeripheralSyncService : Service() {
     // a fresh BLE pull landing in this device's pulled_records inbox must be reflected in the
     // very next DeviceInfo read a neighbour performs, not just the next time this long-running
     // service happens to restart.
+    //
+    // sourceSummaries is a Room @Query Flow — it can re-emit on a write to the underlying table
+    // that doesn't actually change *this* result set (e.g. an unrelated column write elsewhere),
+    // not just on a genuine content change. The `summaries != relayManifest` guard is what keeps
+    // relayManifestVersion (see its own doc) — and recentResponses's own invalidation — tied to
+    // real changes only, rather than bumping on every such spurious re-emission.
     private fun observeRelayManifest() {
         serviceScope.launch {
             container.muleRepository.sourceSummaries.collect { summaries ->
-                relayManifest = summaries
-                recentResponses = emptyMap()
+                if (summaries != relayManifest) {
+                    relayManifest = summaries
+                    relayManifestVersion++
+                    recentResponses = emptyMap()
+                }
             }
         }
     }
@@ -612,6 +626,7 @@ class PeripheralSyncService : Service() {
                 lastLineNumber = servingState.lastLineNumber,
                 deviceName = deviceName,
                 relayCount = relayManifest.size,
+                relayManifestVersion = relayManifestVersion,
             )
             val bytes = json.encodeToString(info).toByteArray(Charsets.UTF_8)
             val value = bytes.drop(offset).toByteArray()
@@ -631,6 +646,11 @@ class PeripheralSyncService : Service() {
             when (characteristic.uuid) {
                 MuleGattProfile.CONTROL_CHARACTERISTIC_UUID -> {
                     val request = runCatching { json.decodeFromString<PullRequest>(String(value, Charsets.UTF_8)) }.getOrNull()
+                    // request?.isSink defaults to false on a decode failure — a no-op unless
+                    // this address was already identified as the web app's own by an earlier
+                    // call (see recordWebAppSeen's own doc), same as an ordinary phone-to-phone
+                    // Mule's request (isSink always false) is treated.
+                    container.bluetoothStateRepository.recordWebAppSeen(device.address, request?.isSink == true)
                     if (request != null) {
                         val originDeviceId = request.originDeviceId
                         serviceScope.launch {
@@ -670,6 +690,14 @@ class PeripheralSyncService : Service() {
                 }
                 MuleGattProfile.ACK_CHARACTERISTIC_UUID -> {
                     val ack = runCatching { json.decodeFromString<AckPayload>(String(value, Charsets.UTF_8)) }.getOrNull()
+                    // Recorded synchronously, ahead of markSynced's own (deferred, timeout-guarded)
+                    // DB work below — an ack write reaching this far already proves this
+                    // device's own data just reached a genuine sink (see AckPayload.isSink's own
+                    // doc — currently only ever the racemaster web app's BLE client), regardless
+                    // of whether markSynced itself later succeeds, times out, or throws.
+                    if (ack != null && ack.isSink) {
+                        container.bluetoothStateRepository.recordWebAppPush(device.address)
+                    }
                     // Deliberately waits for markSynced to actually finish before sending the
                     // GATT write-response, rather than firing the response immediately and
                     // processing in the background — the central (MulePullClient.pull) treats a

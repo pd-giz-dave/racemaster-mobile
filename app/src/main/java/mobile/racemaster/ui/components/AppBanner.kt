@@ -19,6 +19,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -40,6 +41,11 @@ import mobile.racemaster.ui.theme.ServerPausedGrey
  * currently reachable. Composed once outside RacemasterNavHost's back stack (see
  * MainActivity), so the underlying poll loop naturally runs for the whole app session
  * regardless of which screen is showing.
+ *
+ * Deliberately just the dot + label, nothing more — a "last seen" timestamp was tried here
+ * too, appended next to the label, but pushed the title into wrapping onto two lines on a real
+ * device and read as clutter permanently pinned above every screen. That feedback now lives
+ * per-mode instead — see ui/components/ServerStatusLine.kt.
  */
 @Composable
 fun AppBanner(
@@ -73,6 +79,8 @@ fun AppBanner(
             color = Color.White,
             fontWeight = FontWeight.SemiBold,
             fontSize = 17.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         ServerStatusIndicator(serverStatus.status)
