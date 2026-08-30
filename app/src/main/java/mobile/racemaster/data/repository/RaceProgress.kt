@@ -83,9 +83,9 @@ suspend fun isRaceCurrentlyActive(raceId: Long, raceRepository: RaceRepository):
  * Whether [mode] has been started for [race]'s current segment — the per-mode mapping onto
  * whichever of RaceEntity's own timeModeStartedAtMillis/bibsModeStartedAtMillis/
  * cpModeStartedAtMillis fields is the right one to read, pulled out as its own pure function so
- * a caller (see RaceDetailsScreen's own field-locking use) never has to hand-roll that mapping
- * itself. [race] null (not yet loaded, or a dangling id) is never "started". Mule has no started
- * concept of its own — it never owns a race's fields the way Time/Bibs/CP each do.
+ * a caller never has to hand-roll that mapping itself. [race] null (not yet loaded, or a
+ * dangling id) is never "started". Mule has no started concept of its own — it never owns a
+ * race's fields the way Time/Bibs/CP each do.
  */
 fun isModeStarted(mode: AppMode, race: RaceEntity?): Boolean = when (mode) {
     AppMode.BIBS -> race?.bibsModeStartedAtMillis != null

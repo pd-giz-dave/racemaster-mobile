@@ -47,9 +47,11 @@ class RaceRepository(
 
     // The date portion of the label is rebuilt from the race's original createdAtMillis, not
     // the edit time — the date is always auto-derived and fixed once the race is created.
-    // bibsRangeStart/bibsRangeCount are only ever actually *changed* by the caller while the
-    // race is still fresh (see RaceDetailsScreen) — otherwise it just writes back what was
-    // already there. serverUrl is untouched here — it's not on this screen (see
+    // name/course/location are never actually *changed* by the caller (RaceDetailsScreen locks
+    // them read-only for an existing race — see its own doc) — this just writes back what was
+    // already there either way, so the label ends up identical to what it already was. Only
+    // bibsRangeStart/bibsRangeCount are ever genuinely different on a call here. serverUrl is
+    // untouched here — it's not on this screen (see
     // RaceDao.updateDetails). No Mule-inbox retagging needed on a rename (there used to be one
     // here) — MuleRepository.pushToServer now reads this race's own current label fresh from
     // RaceEntity on every attempt rather than tracking a separately-labeled mirrored copy, so a

@@ -43,7 +43,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import mobile.racemaster.data.repository.MAX_BIB_NUMBER
 import mobile.racemaster.data.repository.MIN_BIB_NUMBER
-import mobile.racemaster.data.repository.isModeStarted
 import mobile.racemaster.data.repository.isValidCpLocation
 import mobile.racemaster.data.repository.isValidRaceName
 import mobile.racemaster.data.settings.AppMode
@@ -131,21 +130,21 @@ fun RaceDetailsScreen(
     // on-screen later) stays the same either way, per instruction.
     val showRunnerFields = mode == AppMode.TIME || mode == AppMode.BIBS || mode == AppMode.CP
 
-    // Whether [mode] has been started for this segment — same per-mode startedAtMillis field
-    // isRaceActive/isRaceInProgress read (see RaceProgress.kt), only clearing on Reset, not on
-    // Stop. Once true, every field except runner count locks read-only: name/course/location/
-    // first bib number are what other stations and the server record already key off, so
-    // changing them mid-race would desync what's already been recorded elsewhere — Reset is
-    // the deliberate "start over" escape hatch instead. Runner count stays editable throughout
-    // since the final headcount can genuinely still change right up to race start.
-    val isStarted = existingRaceId != null && isModeStarted(mode, existingRace)
-    val fieldsEnabled = prefilled && !isStarted
-    val countFieldEnabled = prefilled
+    // Name/course/location are fixed at the moment a race is created and never editable again
+    // from here, in any state (fresh, started, stopped, or reset) — they're what the label's
+    // sync identity is built from (see RaceRepository.updateRaceDetails' own doc), and a race
+    // that needs a new name/course/location needs to actually be a new race (New Race), not a
+    // relaunch of this one via Reset + This Race. Bib range fields have no such identity
+    // implication, so stay editable throughout, matching Number of runners' own pre-existing
+    // "can genuinely still change right up to race start" reasoning — now extended to First bib
+    // number too, since neither is part of the label.
+    val identityFieldsEnabled = existingRaceId == null && prefilled
+    val bibFieldsEnabled = prefilled
 
     val start = startText.toIntOrNull()
     val count = countText.toIntOrNull()
     val rangeEnd = if (start != null && count != null) start + count - 1 else null
-    val countFieldsValid = !showRunnerFields || !countFieldEnabled ||
+    val countFieldsValid = !showRunnerFields || !bibFieldsEnabled ||
         (start != null && start in MIN_BIB_NUMBER..MAX_BIB_NUMBER && count != null && count >= 1 && rangeEnd != null && rangeEnd <= MAX_BIB_NUMBER)
     val locationValid = mode != AppMode.CP || isValidCpLocation(location)
     val nameValid = isValidRaceName(name)
@@ -198,7 +197,7 @@ fun RaceDetailsScreen(
                 // count are unrelated and stay exactly as already entered (see
                 // SettingsRepository.raceNameHistory's own doc).
                 history = raceNameHistory,
-                enabled = fieldsEnabled,
+                enabled = identityFieldsEnabled,
                 // Always followed by Course, so always "Next" — see nextFieldAction's own doc.
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                 keyboardActions = nextFieldAction,
@@ -218,7 +217,7 @@ fun RaceDetailsScreen(
                 // Same independent-field behavior as the Race name field above — picking a
                 // previous course only ever fills this field.
                 history = courseHistory,
-                enabled = fieldsEnabled,
+                enabled = identityFieldsEnabled,
                 // Always followed by Location, so always "Next" — see nextFieldAction's own doc.
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                 keyboardActions = nextFieldAction,
@@ -231,7 +230,7 @@ fun RaceDetailsScreen(
                 // Same independent-field behavior as Race name/Course above — picking a
                 // previous location only ever fills this field.
                 history = locationHistory,
-                enabled = fieldsEnabled,
+                enabled = identityFieldsEnabled,
                 // The last field gets "Done" (dismisses the keyboard); every other field gets
                 // "Next" — Location is last exactly when the runner fields aren't shown.
                 keyboardOptions = KeyboardOptions(imeAction = if (showRunnerFields) ImeAction.Next else ImeAction.Done),
@@ -245,10 +244,11 @@ fun RaceDetailsScreen(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            if (isStarted) {
+            if (existingRaceId != null) {
                 Text(
-                    "Once the race has started, only Number of runners can still be changed — " +
-                        "Reset to edit anything else.",
+                    "Race name, course, and location are fixed once a race is created — only " +
+                        "First bib number and Number of runners can be changed here. Start a " +
+                        "New Race for a different name, course, or location.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -259,7 +259,7 @@ fun RaceDetailsScreen(
                 OutlinedTextField(
                     value = startText,
                     onValueChange = { startText = it.filter(Char::isDigit).take(3) },
-                    enabled = fieldsEnabled,
+                    enabled = bibFieldsEnabled,
                     singleLine = true,
                     label = { Text("First bib number (1–999)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
@@ -275,7 +275,7 @@ fun RaceDetailsScreen(
                 OutlinedTextField(
                     value = countText,
                     onValueChange = { countText = it.filter(Char::isDigit).take(3) },
-                    enabled = countFieldEnabled,
+                    enabled = bibFieldsEnabled,
                     singleLine = true,
                     label = { Text("Number of runners") },
                     // Last field in this branch — "Done" dismisses the keyboard.

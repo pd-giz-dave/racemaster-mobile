@@ -19,13 +19,16 @@ import kotlinx.coroutines.flow.stateIn
 
 /**
  * Backs the race details screen used both for creating a new race ([existingRaceId] null) and
- * editing an existing one's name/course/location/runner count/first bib number — same screen, same
- * fields, for every mode (Time Mode never actually uses the bib number for anything, but
- * collects it anyway so both forms stay identical). These fields stay editable after creation
- * too, but only while the race is still "fresh" (no real splits/entries recorded yet — see
- * RaceDetailsScreen's `isFresh`); this ViewModel just writes back whatever the screen passes
- * in either way. Server URL is deliberately not part of this screen — it'll live under Mule
- * Mode setup eventually, device-wide rather than per-race.
+ * editing an existing one's bib range ([existingRaceId] non-null) — same screen, same fields,
+ * for every mode (Time Mode never actually uses the bib number for anything, but collects it
+ * anyway so both forms stay identical). Name/course/location are only ever settable at creation
+ * — RaceDetailsScreen locks them read-only for an existing race, in every state (fresh,
+ * started, stopped, or reset), since they're baked into the label's sync identity (see
+ * RaceRepository.updateRaceDetails' own doc); a race needing a different name/course/location
+ * needs to actually be a new race. This ViewModel just writes back whatever the screen passes
+ * in either way — it has no opinion of its own on which fields a given call site left
+ * unchanged. Server URL is deliberately not part of this screen — it'll live under Mule Mode
+ * setup eventually, device-wide rather than per-race.
  */
 class RaceDetailsViewModel(
     val mode: AppMode,

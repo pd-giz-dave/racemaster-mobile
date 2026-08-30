@@ -169,8 +169,8 @@ class RaceProgressTest {
         assertEquals(emptyList<String>(), activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null, cpModeStartedAtMillis = null))
     }
 
-    // isModeStarted — the per-mode mapping RaceDetailsScreen uses to decide which fields lock
-    // read-only once a race is under way.
+    // isModeStarted — the per-mode mapping onto whichever of RaceEntity's own
+    // timeModeStartedAtMillis/bibsModeStartedAtMillis/cpModeStartedAtMillis fields is right.
 
     @Test
     fun isModeStartedReadsEachModesOwnField() {
