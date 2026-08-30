@@ -137,12 +137,14 @@ object MuleGattProfile {
     // peripheral also happens to reuse 0xFFFF for its own unrelated purpose.
     const val ADVERTISING_MANUFACTURER_ID = 0xFFFF
     val ADVERTISING_MAGIC = byteArrayOf(0x52, 0x4d) // "RM"
-    // Bumped 1 -> 2 for the addition of the mode byte just below — an intentional, deliberate
-    // break: decodeAdvertisedIdentity already treats any version it doesn't recognize as "no
-    // usable payload" (see its own doc), which is exactly the graceful degradation a mixed-build
-    // rollout needs here. A v1 peer's scan response and a v2 decoder (or vice versa) simply never
-    // match, rather than one misreading the other's bytes under a shifted layout.
-    const val ADVERTISING_FORMAT_VERSION: Byte = 2
+    // Bumped 1 -> 2 for the addition of the mode byte, then 2 -> 3 for shortDeviceId (see
+    // AdvertisedIdentity's own doc) — each an intentional, deliberate break:
+    // decodeAdvertisedIdentity already treats any version it doesn't recognize as "no usable
+    // payload" (see its own doc), which is exactly the graceful degradation a mixed-build
+    // rollout needs here. An older-version peer's scan response and a newer decoder (or vice
+    // versa) simply never match, rather than one misreading the other's bytes under a shifted
+    // layout.
+    const val ADVERTISING_FORMAT_VERSION: Byte = 3
 
     // Explicit wire values for AppMode — deliberately NOT AppMode.ordinal, which would silently
     // change meaning (or collide) if the enum's declaration order or membership ever changes for
@@ -172,18 +174,40 @@ object MuleGattProfile {
         else -> null
     }
 
+    // Fixed size of the shortDeviceId field added to the payload — see [shortDeviceId]'s own
+    // doc for what it carries and why.
+    const val SHORT_DEVICE_ID_BYTES = 8
+
     // Legacy BLE scan-response payload is capped at 31 bytes; addManufacturerData costs 4 of
     // those (2-byte AD length+type header + 2-byte company ID) before our own bytes even start.
-    // Our own header (2-byte magic + 1-byte version + 1-byte mode + 4-byte counter + 1-byte
-    // nameLen) is 9 bytes, leaving 31 - 4 - 9 = 18 for the name — see encodeAdvertisedIdentity.
-    const val ADVERTISED_NAME_MAX_BYTES = 18
+    // Our own header (2-byte magic + 1-byte version + 1-byte mode + 4-byte counter + 8-byte
+    // shortDeviceId + 1-byte nameLen) is 17 bytes, leaving 31 - 4 - 17 = 10 for the name — see
+    // encodeAdvertisedIdentity. (Was 18 before shortDeviceId existed, back when the header was
+    // only 9 bytes.)
+    const val ADVERTISED_NAME_MAX_BYTES = 10
+
+    /** Deterministic [SHORT_DEVICE_ID_BYTES]-byte fingerprint of a stable app-level [deviceId]
+     *  (see [mobile.racemaster.data.settings.SettingsRepository.getOrCreateDeviceId]), carried
+     *  in the scan-response payload (see [AdvertisedIdentity.shortDeviceId]) so a scanner can
+     *  recognize the same phone across an Android BLE address rotation (often every ~15
+     *  minutes, sometimes more often) without a GATT connect first — see
+     *  MuleSyncEngine.startScan's own doc on the "Discovering…" ghost pileup this fixes.
+     *  MD5-based (via [UUID.nameUUIDFromBytes]) purely for its convenient built-in 128-bit
+     *  spread — never treated as having any cryptographic property — and deliberately
+     *  truncated to 64 bits: enough to make a same-race collision among the handful of phones
+     *  at one event astronomically unlikely, while leaving room in the 31-byte scan-response
+     *  budget for everything else this payload already carries. */
+    fun shortDeviceId(deviceId: String): Long =
+        UUID.nameUUIDFromBytes(deviceId.toByteArray(Charsets.UTF_8)).mostSignificantBits
 
     /** Decoded contents of the scan-response payload advertised alongside this device's GATT
      *  service — a cheap, non-authoritative hint a scanner can read without ever connecting, so
      *  [MuleSyncEngine] can skip a real GATT connect+[DeviceInfo] read for a device it already
      *  knows is unchanged. [lastLineNumber] mirrors [DeviceInfo.lastLineNumber] for this
      *  device's own race only — never a relayed origin's — since relay-manifest freshness still
-     *  rides on a periodic real connect (see MuleSyncEngine's VERIFY_INTERVAL). [mode] is what
+     *  rides on a periodic real connect (see MuleSyncEngine's VERIFY_INTERVAL). [shortDeviceId]
+     *  is [MuleGattProfile.shortDeviceId] of the advertiser's real [DeviceInfo.deviceId] — see
+     *  that function's own doc for why it exists and its collision math. [mode] is what
      *  lets the racemaster web app's own `requestDevice()` picker filter (see mule-ble.js's
      *  `connectToPhone`) show only phones currently in Mule Mode without ever reading this
      *  payload itself — Chrome applies a manufacturer-data prefix match browser-side before the
@@ -193,22 +217,31 @@ object MuleGattProfile {
      *  here must be re-confirmed by a real [DeviceInfo] read before being relied on for anything
      *  correctness-sensitive; this is only ever used to decide *whether* to bother connecting (or,
      *  on the web side, whether to even offer a phone in the picker at all). */
-    data class AdvertisedIdentity(val lastLineNumber: Long, val deviceName: String, val mode: AppMode? = null)
+    data class AdvertisedIdentity(
+        val lastLineNumber: Long,
+        val shortDeviceId: Long,
+        val deviceName: String,
+        val mode: AppMode? = null,
+    )
 
-    /** Builds the scan-response manufacturer-data payload for [deviceName]/[lastLineNumber]/[mode]
-     *  — see [ADVERTISED_NAME_MAX_BYTES] for the byte budget this stays within. Truncates on a
-     *  UTF-8 codepoint boundary (never mid-character) if [deviceName] doesn't fit. */
-    fun encodeAdvertisedIdentity(lastLineNumber: Long, deviceName: String, mode: AppMode? = null): ByteArray {
+    /** Builds the scan-response manufacturer-data payload for
+     *  [deviceId]/[deviceName]/[lastLineNumber]/[mode] — see [ADVERTISED_NAME_MAX_BYTES] for
+     *  the byte budget this stays within. Truncates on a UTF-8 codepoint boundary (never
+     *  mid-character) if [deviceName] doesn't fit. */
+    fun encodeAdvertisedIdentity(lastLineNumber: Long, deviceId: String, deviceName: String, mode: AppMode? = null): ByteArray {
         var truncated = deviceName
         while (truncated.encodeToByteArray().size > ADVERTISED_NAME_MAX_BYTES) {
             truncated = truncated.substring(0, truncated.length - 1)
         }
         val nameBytes = truncated.encodeToByteArray()
-        val buffer = java.nio.ByteBuffer.allocate(ADVERTISING_MAGIC.size + 1 + 1 + 4 + 1 + nameBytes.size)
+        val buffer = java.nio.ByteBuffer.allocate(
+            ADVERTISING_MAGIC.size + 1 + 1 + 4 + SHORT_DEVICE_ID_BYTES + 1 + nameBytes.size
+        )
         buffer.put(ADVERTISING_MAGIC)
         buffer.put(ADVERTISING_FORMAT_VERSION)
         buffer.put(encodeMode(mode))
         buffer.putInt(lastLineNumber.coerceIn(0, Int.MAX_VALUE.toLong()).toInt())
+        buffer.putLong(shortDeviceId(deviceId))
         buffer.put(nameBytes.size.toByte())
         buffer.put(nameBytes)
         return buffer.array()
@@ -221,7 +254,8 @@ object MuleGattProfile {
      *  too-short/truncated array. Every caller treats null as "unknown" and falls back to
      *  behaving exactly as if this payload didn't exist at all. */
     fun decodeAdvertisedIdentity(bytes: ByteArray?): AdvertisedIdentity? {
-        if (bytes == null || bytes.size < ADVERTISING_MAGIC.size + 1 + 1 + 4 + 1) return null
+        val fixedSize = ADVERTISING_MAGIC.size + 1 + 1 + 4 + SHORT_DEVICE_ID_BYTES + 1
+        if (bytes == null || bytes.size < fixedSize) return null
         if (!bytes.copyOfRange(0, ADVERTISING_MAGIC.size).contentEquals(ADVERTISING_MAGIC)) return null
         val buffer = java.nio.ByteBuffer.wrap(bytes)
         buffer.position(ADVERTISING_MAGIC.size)
@@ -229,13 +263,14 @@ object MuleGattProfile {
         if (version != ADVERTISING_FORMAT_VERSION) return null
         val mode = decodeMode(buffer.get())
         val lastLineNumber = buffer.int.toLong()
+        val shortDeviceId = buffer.long
         val nameLen = buffer.get().toInt() and 0xff
         if (buffer.remaining() < nameLen) return null
         val nameBytes = ByteArray(nameLen)
         buffer.get(nameBytes)
         val deviceName = runCatching { nameBytes.decodeToString(throwOnInvalidSequence = true) }.getOrNull()
             ?: return null
-        return AdvertisedIdentity(lastLineNumber, deviceName, mode)
+        return AdvertisedIdentity(lastLineNumber, shortDeviceId, deviceName, mode)
     }
 }
 

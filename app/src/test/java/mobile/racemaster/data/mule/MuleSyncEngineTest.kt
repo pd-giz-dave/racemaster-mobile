@@ -215,7 +215,7 @@ class MuleSyncEngineTest {
     )
 
     private fun identity(lastLineNumber: Long, name: String = "phone-a") =
-        MuleGattProfile.AdvertisedIdentity(lastLineNumber, name)
+        MuleGattProfile.AdvertisedIdentity(lastLineNumber, MuleGattProfile.shortDeviceId(name), name)
 
     @Test
     fun forceAlwaysConnectsRegardlessOfAnythingElse() {

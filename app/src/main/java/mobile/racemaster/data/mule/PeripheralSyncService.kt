@@ -546,7 +546,7 @@ class PeripheralSyncService : Service() {
             return null
         }
         val name = if (advertisingAttempt == 0) deviceName else ""
-        val payload = MuleGattProfile.encodeAdvertisedIdentity(servingState.lastLineNumber, name, currentMode)
+        val payload = MuleGattProfile.encodeAdvertisedIdentity(servingState.lastLineNumber, deviceId, name, currentMode)
         // Temporary/diagnostic — added while tracking down the web app's mode-filtered picker
         // finding nothing. Hex-dumped so it can be compared byte-for-byte against mule-ble.js's
         // own "expected prefix" log and against chrome://bluetooth-internals' raw advertisement

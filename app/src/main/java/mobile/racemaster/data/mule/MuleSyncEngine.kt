@@ -409,12 +409,21 @@ class MuleSyncEngine(
             try {
                 muleRepository.scanForDevices().collect { advertisement ->
                     val address = advertisement.identifier
+                    val decoded = muleRepository.decodeAdvertisedIdentity(advertisement)
                     // Matched by identity (including a deviceId key it's since been merged
                     // into), not by map key directly — a device rescanned under the same
                     // address must keep its accumulated state (unsyncedCount, confirmedLineNumber,
-                    // reachability history, ...), never get re-added from scratch.
-                    val existingKey = discoveredFlow.value.entries
-                        .firstOrNull { it.value.requiredAdvertisement.identifier == address }?.key
+                    // reachability history, ...), never get re-added from scratch. The
+                    // shortDeviceId check alongside the address check is what keeps that true
+                    // across a BLE address rotation too (see matchesShortDeviceId's own doc) —
+                    // address alone used to miss that case entirely, both before a device's
+                    // first resolve (an endless trail of "Discovering…" ghosts, one per
+                    // rotation) and after (a resolved device's rotation spawning a duplicate
+                    // ghost alongside its already-green row).
+                    val existingKey = discoveredFlow.value.entries.firstOrNull { (_, existing) ->
+                        existing.requiredAdvertisement.identifier == address ||
+                            (decoded != null && matchesShortDeviceId(existing, decoded.shortDeviceId))
+                    }?.key
                     if (existingKey != null) {
                         // Already tracked — still refresh the stored advertisement itself
                         // (a fresh scan callback can carry an updated scan-response payload,
@@ -451,6 +460,20 @@ class MuleSyncEngine(
     private fun stopScan() {
         scanJob?.cancel()
         scanJob = null
+    }
+
+    /** True when [existing] is the same physical phone [shortDeviceId] was just decoded from
+     *  — either because [existing] is already resolved (compares against a fingerprint of its
+     *  confirmed [DiscoveredDevice.deviceId], the authoritative value) or, pre-resolve, because
+     *  its own last-stored advertisement happens to decode to the same fingerprint. This is
+     *  what lets [startScan] recognize a phone across a BLE address rotation (Android's
+     *  periodic random-address privacy feature) without a fresh GATT connect first — see
+     *  [MuleGattProfile.shortDeviceId]'s own doc for why this fingerprint is stable where the
+     *  address isn't, and startScan's own doc for the ghost-pileup this fixes. */
+    private fun matchesShortDeviceId(existing: DiscoveredDevice, shortDeviceId: Long): Boolean {
+        existing.deviceId?.let { return MuleGattProfile.shortDeviceId(it) == shortDeviceId }
+        val existingDecoded = muleRepository.decodeAdvertisedIdentity(existing.requiredAdvertisement)
+        return existingDecoded?.shortDeviceId == shortDeviceId
     }
 
     // Every phone running Mule Mode runs its own independent instance of this loop, all sharing
