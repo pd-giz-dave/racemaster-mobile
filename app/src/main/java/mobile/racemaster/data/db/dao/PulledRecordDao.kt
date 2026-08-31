@@ -107,6 +107,17 @@ interface PulledRecordDao {
     @Query("UPDATE pulled_records SET syncedAtMillis = :syncedAtMillis, syncedTargetName = :targetName WHERE recordUuid IN (:recordUuids)")
     suspend fun markSynced(recordUuids: List<String>, syncedAtMillis: Long, targetName: String? = null)
 
+    // Everything held for [sourceDeviceId]/[sourceRaceLabel] up to and including
+    // [sinceLineNumber] that's never been confirmed reaching a sink — the relay-leg counterpart
+    // to HistoryLineDao's own getUnsyncedRecordUuidsUpTo; see
+    // PeripheralSyncService.backfillSinkAck's own doc for why a relay pull's own sinceLineNumber
+    // is itself proof of this, inclusive.
+    @Query(
+        "SELECT recordUuid FROM pulled_records WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel " +
+            "AND lineNumber <= :sinceLineNumber AND syncedAtMillis IS NULL",
+    )
+    suspend fun getUnsyncedRecordUuidsUpTo(sourceDeviceId: String, sourceRaceLabel: String, sinceLineNumber: Long): List<String>
+
     // The delta-sync cutoff for the next pull from this specific device/race — null (treated
     // as "nothing pulled yet, request everything") the first time.
     @Query("SELECT MAX(lineNumber) FROM pulled_records WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel")

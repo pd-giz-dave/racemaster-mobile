@@ -168,6 +168,10 @@ class MuleRepository(
         pulledRecordDao.markSynced(recordUuids, System.currentTimeMillis(), targetName)
     }
 
+    // See PeripheralSyncService.backfillSinkAck's own doc. Inclusive of sinceLineNumber itself.
+    suspend fun unsyncedPulledRecordUuidsUpTo(sourceDeviceId: String, sourceRaceLabel: String, sinceLineNumber: Long): List<String> =
+        pulledRecordDao.getUnsyncedRecordUuidsUpTo(sourceDeviceId, sourceRaceLabel, sinceLineNumber)
+
     suspend fun setAutoSyncStopped(stopped: Boolean) {
         settingsRepository.setAutoSyncStopped(stopped)
     }
@@ -257,6 +261,28 @@ class MuleRepository(
             },
         )
         return count
+    }
+
+    // Lighter counterpart to pullFrom for when there's nothing new to actually fetch from
+    // [sourceDeviceId] — this device just owes it a sink confirmation and nothing else. See
+    // MulePullClient.relayConfirmationOnly's own doc for why this exists as a separate,
+    // shorter path rather than always going through pullFrom regardless. A no-op if there's
+    // genuinely nothing to relay (the caller's own hasSinkConfirmationToRelay check already
+    // guards this in practice, but this stays self-contained rather than trusting that).
+    suspend fun relayConfirmationOnly(advertisement: Advertisement, sourceRaceLabel: String, sourceDeviceId: String) {
+        val sinkConfirmedRecordUuids = pulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource(sourceDeviceId, sourceRaceLabel)
+        if (sinkConfirmedRecordUuids.isEmpty()) return
+        val myDeviceId = settingsRepository.getOrCreateDeviceId()
+        val myDeviceName = settingsRepository.getOrCreateDeviceName()
+        pullClient.relayConfirmationOnly(
+            advertisement,
+            myDeviceId,
+            myDeviceName,
+            sinkConfirmedRecordUuids,
+            onConfirmationsRelayed = { relayedUuids ->
+                pulledRecordDao.markConfirmationRelayed(relayedUuids, System.currentTimeMillis())
+            },
+        )
     }
 
     private suspend fun storePulledRecords(

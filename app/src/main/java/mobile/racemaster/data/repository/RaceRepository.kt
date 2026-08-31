@@ -210,6 +210,10 @@ class RaceRepository(
     suspend fun getHistoryLineNumbersForUuids(recordUuids: List<String>): List<Long> =
         if (recordUuids.isEmpty()) emptyList() else historyLineDao.getLineNumbersForUuids(recordUuids)
 
+    // See PeripheralSyncService.backfillSinkAck's own doc. Inclusive of sinceLineNumber itself.
+    suspend fun unsyncedRecordUuidsUpTo(raceId: Long, sinceLineNumber: Long): List<String> =
+        historyLineDao.getUnsyncedRecordUuidsUpTo(raceId, sinceLineNumber)
+
     // Per-line "synced to" feedback for a local race — see LineSyncEntity's own doc for what
     // isSink actually means (the red/orange/green threshold), and for why targetId/targetName
     // still only ever names the immediate hop that told this device, even for a confirmation

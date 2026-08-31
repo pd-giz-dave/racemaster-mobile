@@ -107,6 +107,16 @@ interface HistoryLineDao {
     @Query("UPDATE history_lines SET syncedAtMillis = :syncedAtMillis WHERE recordUuid IN (:recordUuids)")
     suspend fun markSynced(recordUuids: List<String>, syncedAtMillis: Long)
 
+    // Everything for [raceId] up to and including [sinceLineNumber] this device's own
+    // bookkeeping never got an explicit ack for — see PeripheralSyncService.backfillSinkAck's
+    // own doc for why a request's own sinceLineNumber is itself proof the requester already has
+    // everything up to and including it (the same inclusive line this protocol's own
+    // getSinceLineNumber query — "lineNumber > :sinceLineNumber" — already treats as already
+    // possessed), even absent an ack (a dropped connection between the puller durably storing
+    // the data and it writing the ack back loses the ack, not the data).
+    @Query("SELECT recordUuid FROM history_lines WHERE raceId = :raceId AND lineNumber <= :sinceLineNumber AND syncedAtMillis IS NULL")
+    suspend fun getUnsyncedRecordUuidsUpTo(raceId: Long, sinceLineNumber: Long): List<String>
+
     // lineNumbers for a batch of confirmed recordUuids — used to attribute a confirmation to
     // specific history lines for per-line "synced to" bookkeeping (see LineSyncEntity).
     @Query("SELECT lineNumber FROM history_lines WHERE recordUuid IN (:recordUuids)")

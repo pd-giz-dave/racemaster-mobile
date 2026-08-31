@@ -83,6 +83,40 @@ class MulePullClient {
     private fun peripheralFor(advertisement: Advertisement): Peripheral =
         peripherals.getOrPut(advertisement.identifier) { Peripheral(advertisement) }
 
+    // Kable's Peripheral becomes permanently unusable once a connect attempt against it is
+    // externally cancelled (e.g. by CONNECT_TIMEOUT below firing while .connect() is still
+    // suspended) — a later .connect() on that exact same instance then throws
+    // IllegalStateException("Cannot connect peripheral that has been cancelled") rather than
+    // retrying, since peripheralFor() above otherwise reuses the identical cached instance
+    // forever (see its own doc for why that reuse exists at all — it's real and still needed
+    // for the healthy case). Confirmed in the field: a source device whose connect timed out
+    // once, deep into a long-running session, then failed *every* subsequent attempt against
+    // it — including the much cheaper readDeviceInfo, not just pull()'s longer round trip — for
+    // the rest of that process's life, and cleared immediately (first attempt succeeded) the
+    // moment the app restarted, i.e. the moment peripherals started out empty again. Evicting
+    // the cached instance here on any connect failure (not narrowly matched to that one
+    // exception type, in case Kable's exact wording ever changes) is what makes restarting the
+    // whole app unnecessary — the next attempt against this address gets a genuinely fresh
+    // Peripheral instead of inheriting a poisoned one. Never swallows the failure itself: always
+    // rethrown, so every existing call site's own runCatching/error handling is unaffected.
+    private fun evictAfterFailedConnect(advertisement: Advertisement) {
+        peripherals.remove(advertisement.identifier)
+    }
+
+    // Shared by pull()/pullRelayManifest()/relayConfirmationOnly() — their identical
+    // "withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }" plus the evictAfterFailedConnect
+    // call above on any failure. readDeviceInfo doesn't use this: its own CONNECT_TIMEOUT
+    // deliberately bounds the read that follows too, not just the connect, so it wraps its
+    // connect+evict by hand instead.
+    private suspend fun connectOrEvict(advertisement: Advertisement, peripheral: Peripheral) {
+        try {
+            withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }
+        } catch (e: Throwable) {
+            evictAfterFailedConnect(advertisement)
+            throw e
+        }
+    }
+
     // One Mutex per address, guarding the connect→operate→disconnect sequence in
     // readDeviceInfo/pull/pullRelayManifest below — confirmed in the field as the actual cause
     // of a device stuck at "Discovering…" (or never resolving at all): a freshly-discovered
@@ -150,7 +184,12 @@ class MulePullClient {
     suspend fun readDeviceInfo(advertisement: Advertisement): DeviceInfo = mutexFor(advertisement).withLock {
         withTimeout(CONNECT_TIMEOUT) {
             val peripheral = peripheralFor(advertisement)
-            peripheral.connect()
+            try {
+                peripheral.connect()
+            } catch (e: Throwable) {
+                evictAfterFailedConnect(advertisement)
+                throw e
+            }
             try {
                 // Missing before, unlike collectChunkedResponse's identical call (used by
                 // pull()/pullRelayManifest()) — confirmed in the field as the actual cause of a
@@ -229,7 +268,7 @@ class MulePullClient {
             // Same reasoning as readDeviceInfo's own CONNECT_TIMEOUT — bounds just the connect
             // phase so a stuck handshake can't hang this call forever; PULL_TIMEOUT below already
             // separately bounds the actual data-collection phase once connected.
-            withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }
+            connectOrEvict(advertisement, peripheral)
             try {
                 val serviceUuid = MuleGattProfile.SERVICE_UUID.toKotlinUuid()
                 val ackCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.ACK_CHARACTERISTIC_UUID.toKotlinUuid())
@@ -265,6 +304,48 @@ class MulePullClient {
         }
     }
 
+    /** Lighter-weight counterpart to [pull] for when [advertisement] owes nothing new — this
+     *  device just owes it a previously-learned sink confirmation (see
+     *  MuleRepository.hasSinkConfirmationToRelay's own doc) and nothing else. [pull] connects,
+     *  negotiates MTU, subscribes to DATA, writes CONTROL, and waits for a full chunked
+     *  response before it ever gets to writing the ack — a meaningfully longer, more
+     *  failure-prone sequence on a marginal BLE link than this: connect, write the ack
+     *  directly, disconnect. Confirmed in the field as the actual fix for a source device whose
+     *  full [pull] kept timing out (10s connect budget, then further MTU/CONTROL/DATA round
+     *  trips on top) purely to relay a confirmation it had nothing new to pair it with — this
+     *  shorter exchange got through reliably instead. Matters because, per this protocol's own
+     *  design, once a line has genuinely reached a sink, the operator watching the *source*
+     *  device needs to see that — it shouldn't matter that the only thing standing between them
+     *  was an otherwise-idle connection too fragile for the full pull dance. */
+    suspend fun relayConfirmationOnly(
+        advertisement: Advertisement,
+        pullerDeviceId: String,
+        pullerDeviceName: String,
+        sinkConfirmedRecordUuids: List<String>,
+        onConfirmationsRelayed: suspend (List<String>) -> Unit,
+    ): Unit = mutexFor(advertisement).withLock {
+        coroutineScope {
+            val peripheral = peripheralFor(advertisement)
+            connectOrEvict(advertisement, peripheral)
+            try {
+                val ackCharacteristic = characteristicOf(
+                    service = MuleGattProfile.SERVICE_UUID.toKotlinUuid(),
+                    characteristic = MuleGattProfile.ACK_CHARACTERISTIC_UUID.toKotlinUuid(),
+                )
+                for (batch in ackBatches(pullerDeviceId, pullerDeviceName, emptyList(), sinkConfirmedRecordUuids) { json.encodeToString(it) }) {
+                    withTimeout(ACK_WRITE_TIMEOUT) {
+                        peripheral.write(ackCharacteristic, json.encodeToString(batch).toByteArray(Charsets.UTF_8), WriteType.WithResponse)
+                    }
+                    if (batch.sinkConfirmedRecordUuids.isNotEmpty()) {
+                        onConfirmationsRelayed(batch.sinkConfirmedRecordUuids)
+                    }
+                }
+            } finally {
+                peripheral.disconnect()
+            }
+        }
+    }
+
     /** Fetches a peripheral's own current relay manifest — everything else it's holding
      *  relayable data for on behalf of other, genuinely different origin devices (see
      *  RelayManifestEntry's own doc for why this is its own separate, chunked pull rather than
@@ -276,7 +357,7 @@ class MulePullClient {
     suspend fun pullRelayManifest(advertisement: Advertisement): List<RelayManifestEntry> = mutexFor(advertisement).withLock {
         coroutineScope {
             val peripheral = peripheralFor(advertisement)
-            withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }
+            connectOrEvict(advertisement, peripheral)
             try {
                 val pullRequest = json.encodeToString(PullRequest(sinceLineNumber = 0, requestRelayManifest = true))
                 val payload = collectChunkedResponse(peripheral, pullRequest)

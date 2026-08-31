@@ -624,6 +624,18 @@ class PeripheralSyncService : Service() {
                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, null)
                 return
             }
+            // isSink=false — exactly the same "only bumps lastWebAppSeenAtMillis if this
+            // address was already identified as the web app's own" no-op-for-an-ordinary-Mule
+            // behavior recordWebAppSeen's own doc already describes for a phone-to-phone
+            // CONTROL write. Needed here too: mule-ble.js's pullFromConnectedPhone always reads
+            // DeviceInfo on every poll, but deliberately skips the CONTROL write entirely
+            // (isSink:true never sent) once this device has both no race of its own and nothing
+            // left to relay — the exact state a Mule is in right after its held history is
+            // cleared. Without this, "web app last seen" freezes there forever even while the
+            // web app keeps successfully reading this device fine every few seconds — confirmed
+            // live in the field as a real, currently-connected browser session whose reads kept
+            // succeeding the whole time this stayed stuck on "never".
+            container.bluetoothStateRepository.recordWebAppSeen(device.address, isSink = false)
             val info = DeviceInfo(
                 deviceId = deviceId,
                 raceLabel = servingState.raceLabel,
@@ -650,6 +662,12 @@ class PeripheralSyncService : Service() {
             when (characteristic.uuid) {
                 MuleGattProfile.CONTROL_CHARACTERISTIC_UUID -> {
                     val request = runCatching { json.decodeFromString<PullRequest>(String(value, Charsets.UTF_8)) }.getOrNull()
+                    // Temporary/diagnostic — chasing a live report of "web app last seen" staying
+                    // stuck despite the web app genuinely still polling (confirmed via a currently
+                    // open GATT server connection at the OS level). Logs every CONTROL write's
+                    // raw address/isSink/decode outcome so a write that never reaches here at all
+                    // is distinguishable from one that reaches here but decodes wrong.
+                    Log.d(TAG, "CONTROL write: address=${device.address} isSink=${request?.isSink} decodedOk=${request != null} rawLen=${value.size}")
                     // request?.isSink defaults to false on a decode failure — a no-op unless
                     // this address was already identified as the web app's own by an earlier
                     // call (see recordWebAppSeen's own doc), same as an ordinary phone-to-phone
@@ -658,6 +676,19 @@ class PeripheralSyncService : Service() {
                     if (request != null) {
                         val originDeviceId = request.originDeviceId
                         serviceScope.launch {
+                            // A genuine sink's own sinceLineNumber is proof it already has
+                            // everything below it, even if this device's own ack-bookkeeping
+                            // never heard back — see backfillSinkAck's own doc. Run ahead of
+                            // the data response below (not raced against it) so a browser that
+                            // reconnected after silently missing an earlier ack gets its
+                            // "Synced to" state caught up before this same tick's new delta
+                            // arrives, not one tick later. Its own runCatching, separate from
+                            // the data-response one below — a failure here must never cost the
+                            // puller its actual data response.
+                            if (request.isSink && !request.requestRelayManifest) {
+                                runCatching { backfillSinkAck(originDeviceId, request.originRaceLabel, request.sinceLineNumber) }
+                                    .onFailure { Log.e(TAG, "backfillSinkAck failed for ${device.address}", it) }
+                            }
                             // try/catch + timeout, not a bare call — the CONTROL write's own
                             // GATT response is sent unconditionally below regardless of what
                             // happens here, so the puller has no idea whether a data response
@@ -928,6 +959,41 @@ class PeripheralSyncService : Service() {
         }
     }
 
+    // A genuine sink's own PullRequest.sinceLineNumber is proof it already durably has
+    // everything up to and including it for this leg — same inclusive meaning this protocol's
+    // own delta-sync query already gives it (HistoryLineDao.getSinceLineNumber's own
+    // "lineNumber > :sinceLineNumber": X itself is never re-sent, exactly because the requester
+    // is trusted to already have it). mule-ble.js only ever advances its locally-persisted
+    // cursor after a pull's DATA stream is fully received and stored (see
+    // advanceLastPulledLineNumber's own call site), strictly before it writes the matching ack
+    // — so a request for sinceLineNumber=X is exactly as strong a signal as an explicit ack for
+    // everything up to and including X would have been. What it's proof *against* is
+    // specifically a dropped-ack, not a dropped-anything-else: the browser reconnecting after
+    // silently losing just the ack write (data safely received and stored, only the "you can
+    // mark this synced" confirmation lost) previously left those lines stuck red/orange
+    // forever, since a fresh connection's next request only ever asks for what's still missing
+    // (past X), never re-requests X's own recordUuids for this to key an explicit ack off of.
+    // [originDeviceId]/
+    // [originRaceLabel] null means this device's own race; non-null means a relayed leg for
+    // that true origin, matching markSynced's own two-table split just below. Deliberately
+    // gated by callers to isSink requests only (never an ordinary phone-to-phone Mule's own
+    // PullRequest, whose sinceLineNumber says nothing about anything reaching a genuine sink)
+    // — see this function's own call site.
+    private suspend fun backfillSinkAck(originDeviceId: String?, originRaceLabel: String?, sinceLineNumber: Long) {
+        if (sinceLineNumber <= 0) return
+        if (originDeviceId == null) {
+            val raceId = servingState.raceId ?: return
+            val uuids = container.raceRepository.unsyncedRecordUuidsUpTo(raceId, sinceLineNumber)
+            if (uuids.isEmpty()) return
+            container.raceRepository.markHistorySyncedByUuid(uuids)
+            val lineNumbers = container.raceRepository.getHistoryLineNumbersForUuids(uuids)
+            container.raceRepository.recordLineSyncs(raceId, lineNumbers, WEB_APP_TARGET_ID, targetName = WEB_APP_TARGET_NAME, isSink = true)
+        } else {
+            val uuids = container.muleRepository.unsyncedPulledRecordUuidsUpTo(originDeviceId, originRaceLabel.orEmpty(), sinceLineNumber)
+            container.muleRepository.markRelayedRecordsSynced(uuids, WEB_APP_TARGET_NAME)
+        }
+    }
+
     // [ack] identifies the puller that just took these records and — critically — whether that
     // puller is itself a genuine data sink, and what it separately already knows is
     // sink-confirmed further up an N-hop mule chain (see AckPayload's own doc).
@@ -1042,6 +1108,13 @@ class PeripheralSyncService : Service() {
         private const val MAX_SCAN_RESPONSE_ATTEMPTS = 2
         private const val MAX_CACHED_RESPONSES = 64
         private const val CACHED_RESPONSE_MAX_AGE_MS = 60_000L
+
+        // Mirrors mule-ble.js's own WEB_DEVICE_ID/deviceName exactly (see sendSinkAck there) —
+        // used only for backfillSinkAck's own inferred LineSyncEntity rows, so a "Synced to"
+        // entry looks identical in Race History regardless of whether it came from an explicit
+        // ack or was backfilled from a reconnect's own sinceLineNumber.
+        private const val WEB_APP_TARGET_ID = "racemaster-web"
+        private const val WEB_APP_TARGET_NAME = "RaceMaster (web)"
 
         // Bounds how long a deferred ACK response is allowed to wait on markSynced (a few
         // suspend DB calls) before sending the response anyway — see its own call site's doc

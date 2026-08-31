@@ -778,9 +778,18 @@ class MuleSyncEngine(
                 mergeDeviceInfo(key, device, freshInfo, since)
                 // Also reconnects with zero new lines to pull when there's a sink confirmation to
                 // relay back — otherwise a source that's already fully pulled would never learn its
-                // data has since reached a sink, since nothing would ever re-trigger pullFrom for it.
+                // data has since reached a sink, since nothing would ever re-trigger a connect for
+                // it. That confirmation-only case goes through the lighter relayConfirmationOnly
+                // path rather than pullFrom's full round trip (connect, MTU negotiate, CONTROL
+                // write, wait for a chunked DATA response, only then ack) — see
+                // MulePullClient.relayConfirmationOnly's own doc for why that shorter exchange
+                // reliably gets through on a marginal link where the full one keeps timing out,
+                // confirmed in the field against a real source device. A genuine sink confirmation
+                // must reach the operator watching that source regardless of which specific path
+                // got it there.
                 val hasPendingConfirmation = muleRepository.hasSinkConfirmationToRelay(freshInfo.deviceId, freshInfo.raceLabel)
-                if (freshInfo.lastLineNumber - since > 0 || hasPendingConfirmation) {
+                val hasNewData = freshInfo.lastLineNumber - since > 0
+                if (hasNewData) {
                     val result = runCatching {
                         muleRepository.pullFrom(
                             device.requiredAdvertisement,
@@ -799,6 +808,10 @@ class MuleSyncEngine(
                             mergeDeviceInfo(key, device, it, newSince)
                         }
                     }
+                } else if (hasPendingConfirmation) {
+                    runCatching {
+                        muleRepository.relayConfirmationOnly(device.requiredAdvertisement, freshInfo.raceLabel, freshInfo.deviceId)
+                    }.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
                 }
 
                 // A separate, chunked pull rather than something freshInfo already carries — see
