@@ -19,10 +19,12 @@ val RaceMasterGreen = Color(0xFF1A6E3C)
 // colour scheme, since sync status is a universal signal an operator needs to read at a
 // glance, not something that should shift with wallpaper-derived theming. RelayedOrange is the
 // third, intermediate state (see LineSyncState) — relayed to a mule, but not yet confirmed
-// reaching a genuine sink — sitting visually between the other two the same way it sits
-// between them in meaning.
+// reaching a genuine sink. An earlier value (0xFFEF6C00, a deep orange) sat hue-wise between
+// red and green to match its in-between meaning, but that put it too close to UnsyncedRed to
+// tell apart at a glance (confirmed in the field) — a gold/amber further from red on the wheel
+// (and lighter than either neighbour) reads as clearly distinct from both instead.
 val SyncedGreen = Color(0xFF2E7D32)
-val RelayedOrange = Color(0xFFEF6C00)
+val RelayedOrange = Color(0xFFF9A825)
 val UnsyncedRed = Color(0xFFC62828)
 
 // Server reachability dot colors for the AppBanner — fixed, not theme-derived, same reasoning
