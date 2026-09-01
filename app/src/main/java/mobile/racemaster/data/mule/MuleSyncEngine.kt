@@ -518,6 +518,9 @@ class MuleSyncEngine(
         // frees, rather than spreading naturally across FIRST_SIGHTING_JITTER's window.
         delay(Random.nextLong(FIRST_SIGHTING_JITTER.inWholeMilliseconds))
         val device = discoveredFlow.value[key] ?: return
+        // Falls back to the raw key (a BLE address, pre-resolve) when there's no name yet —
+        // see BluetoothStateRepository.recordConnectAttempt's own doc for what this identifies.
+        val peerLabel = device.deviceName.ifBlank { key }
         // Shares connectSemaphore with pullAllVisibleDevices' own connects — see that
         // function's own comment at its withPermit call for why one bound has to cover both.
         // Temporary/diagnostic logging around this connect — see MulePullClient.scanForDevices'
@@ -527,7 +530,7 @@ class MuleSyncEngine(
         Log.d(TAG, "first-sighting connect attempt: key=$key")
         val info = connectSemaphore.withPermit {
             runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }
-                .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess) }
+                .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
                 .onFailure { Log.w(TAG, "first-sighting connect failed: key=$key", it) }
                 .getOrNull()
         }
@@ -771,6 +774,12 @@ class MuleSyncEngine(
                 // contributed last time so they don't linger alongside (or diverge from) what it's
                 // about to report now; replaced below if it still has any to offer.
                 relayRows.entries.removeAll { it.value.relayedViaDeviceKey == key }
+                // Every connect attempt below is against this same physical peer (device), even
+                // the ones fetching a *relayed* origin's data — see
+                // BluetoothStateRepository.recordConnectAttempt's own doc for what this
+                // identifies and why it matters that it's this peer, not whichever origin the
+                // data happens to be attributed to.
+                val peerLabel = device.deviceName.ifBlank { key }
                 // Temporary/diagnostic — see refreshDeviceInfo's own matching log lines.
                 Log.d(TAG, "periodic connect attempt: key=$key deviceId=${device.deviceId}")
                 // device.deviceId/raceLabel (already known — this device has resolved at least
@@ -785,7 +794,7 @@ class MuleSyncEngine(
                 val freshInfo = runCatching {
                     muleRepository.readDeviceInfo(device.requiredAdvertisement, device.deviceId, device.raceLabel)
                 }
-                    .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess) }
+                    .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
                     .onFailure { Log.w(TAG, "periodic connect failed: key=$key deviceId=${device.deviceId}", it) }
                     .getOrNull()
                 if (freshInfo == null) {
@@ -805,13 +814,13 @@ class MuleSyncEngine(
                             freshInfo.deviceName,
                             since,
                         )
-                    }.also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess) }
+                    }.also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
                     result.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
                     result.onSuccess {
                         // Reflects the drop in outstanding lines immediately rather than waiting for
                         // the next periodic refresh, up to AUTO_SYNC_INTERVAL later.
                         runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }
-                            .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess) }
+                            .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
                             .getOrNull()?.let {
                                 val newSince = muleRepository.lastPulledLineNumber(it.deviceId, it.raceLabel)
                                 mergeDeviceInfo(key, device, it, newSince)
@@ -825,7 +834,7 @@ class MuleSyncEngine(
                 // Time/Bibs/CP phone (always relayCount == 0) never pays this extra round trip.
                 val relayEntries = if (freshInfo.relayCount > 0) {
                     runCatching { muleRepository.pullRelayManifest(device.requiredAdvertisement) }
-                        .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess) }
+                        .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
                         .getOrElse { emptyList() }
                 } else {
                     emptyList()
@@ -856,7 +865,7 @@ class MuleSyncEngine(
                             requestOriginDeviceId = entry.originDeviceId,
                             requestOriginRaceLabel = entry.originRaceLabel,
                         )
-                    }.also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess) }
+                    }.also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
                     relayResult.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
                     relayResult.onSuccess {
                         val newSince = muleRepository.lastPulledLineNumber(entry.originDeviceId, entry.originRaceLabel)

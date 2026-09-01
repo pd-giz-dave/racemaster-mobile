@@ -26,6 +26,14 @@ data class ConnectHealth(
     // see MuleSyncEngine.shouldConnect's own doc), rather than a bare count that reads as "just
     // now" regardless of how stale it actually is.
     val oldestAttemptAtMillis: Long? = null,
+    // Non-null only when the failures within this window are concentrated against a single
+    // peer (see BluetoothStateRepository.recordConnectAttempt's own doc for the exact
+    // threshold) rather than spread across several — the whole point of this being a
+    // *phone-wide* signal, not a per-device one, is to attribute failures to this phone's own
+    // radio; a Mule sitting next to one genuinely bad peer would otherwise get blamed for that
+    // peer's problem and get needlessly swapped out, when swapping wouldn't help at all since
+    // the same bad peer would still be just as bad against whatever replaced it.
+    val dominantFailurePeerName: String? = null,
 ) {
     val recentFailures: Int get() = recentAttempts - recentSuccesses
 
@@ -39,9 +47,17 @@ data class ConnectHealth(
     // this waits for before it's willing to say anything at all.
     val isStruggling: Boolean get() = recentAttempts >= CONNECT_HEALTH_MIN_SAMPLE && failureRate >= CONNECT_HEALTH_WARNING_THRESHOLD
 
-    private companion object {
-        const val CONNECT_HEALTH_MIN_SAMPLE = 5
-        const val CONNECT_HEALTH_WARNING_THRESHOLD = 0.4
+    companion object {
+        private const val CONNECT_HEALTH_MIN_SAMPLE = 5
+        private const val CONNECT_HEALTH_WARNING_THRESHOLD = 0.4
+
+        // See dominantFailurePeerName's own doc. Both gates matter: FAILURE_MIN_COUNT keeps 1
+        // failure out of 1 against a peer from immediately being called "dominant" (that's just
+        // the only data point so far, not a pattern), and FAILURE_FRACTION is what actually
+        // distinguishes "basically only this one peer" from "failures spread across several
+        // peers, one of which happens to be the single largest share".
+        internal const val DOMINANT_FAILURE_MIN_COUNT = 3
+        internal const val DOMINANT_FAILURE_FRACTION = 0.7
     }
 }
 
@@ -154,27 +170,32 @@ class BluetoothStateRepository(private val context: Context) {
         lastWebAppPushedAtMillisFlow.value = now
     }
 
-    // See ConnectHealth's own doc for what this is tracking and why. A plain list of (when,
-    // succeeded) pairs, not a StateFlow of the raw attempts themselves — only the derived
-    // ConnectHealth snapshot needs to be observable; the rolling window itself is purely
-    // internal bookkeeping. atMillis is what lets ConnectHealth.oldestAttemptAtMillis report
-    // how far back the window actually reaches.
+    // See ConnectHealth's own doc for what this is tracking and why. A plain list of records,
+    // not a StateFlow of the raw attempts themselves — only the derived ConnectHealth snapshot
+    // needs to be observable; the rolling window itself is purely internal bookkeeping.
+    // peerLabel (a device name, falling back to its raw BLE address/key if unresolved — see
+    // this function's own callers) is what dominantFailurePeerName is computed from below.
+    private data class ConnectAttemptRecord(val atMillis: Long, val succeeded: Boolean, val peerLabel: String)
+
     @Volatile
-    private var connectAttempts: List<Pair<Long, Boolean>> = emptyList()
+    private var connectAttempts: List<ConnectAttemptRecord> = emptyList()
     private val connectHealthFlow = MutableStateFlow(ConnectHealth())
 
     val connectHealth: StateFlow<ConnectHealth> = connectHealthFlow.asStateFlow()
 
-    /** Records the outcome of one BLE central connect attempt — see [ConnectHealth]'s own doc
-     *  for what "one attempt" means here and why it's counted regardless of which peer it was
-     *  against. */
+    /** Records the outcome of one BLE central connect attempt against [peerLabel] — see
+     *  [ConnectHealth]'s own doc for what "one attempt" means here and why it's counted
+     *  regardless of which peer it was against, and [ConnectHealth.dominantFailurePeerName]'s
+     *  own doc for what [peerLabel] itself is used for. */
     @Synchronized
-    fun recordConnectAttempt(succeeded: Boolean) {
-        connectAttempts = (connectAttempts + (System.currentTimeMillis() to succeeded)).takeLast(CONNECT_HEALTH_WINDOW)
+    fun recordConnectAttempt(succeeded: Boolean, peerLabel: String) {
+        connectAttempts = (connectAttempts + ConnectAttemptRecord(System.currentTimeMillis(), succeeded, peerLabel))
+            .takeLast(CONNECT_HEALTH_WINDOW)
         connectHealthFlow.value = ConnectHealth(
             recentAttempts = connectAttempts.size,
-            recentSuccesses = connectAttempts.count { it.second },
-            oldestAttemptAtMillis = connectAttempts.firstOrNull()?.first,
+            recentSuccesses = connectAttempts.count { it.succeeded },
+            oldestAttemptAtMillis = connectAttempts.firstOrNull()?.atMillis,
+            dominantFailurePeerName = dominantFailurePeer(connectAttempts.filterNot { it.succeeded }.map { it.peerLabel }),
         )
     }
 
@@ -182,4 +203,17 @@ class BluetoothStateRepository(private val context: Context) {
         const val ADVERTISING_FAILURE_THRESHOLD = 5
         const val CONNECT_HEALTH_WINDOW = 20
     }
+}
+
+/** The single peer responsible for most of [recentFailurePeerLabels] (one entry per failed
+ *  connect attempt currently in the window, in [BluetoothStateRepository.recordConnectAttempt]'s
+ *  own recording order), or null when no one peer dominates — see
+ *  [ConnectHealth.dominantFailurePeerName]'s own doc for why this distinction matters. Pulled
+ *  out as its own pure top-level function, matching MuleSyncEngine.kt's own shouldConnect
+ *  precedent (see that function's own doc), so this decision is directly testable without any
+ *  BLE plumbing. */
+internal fun dominantFailurePeer(recentFailurePeerLabels: List<String>): String? {
+    if (recentFailurePeerLabels.size < ConnectHealth.DOMINANT_FAILURE_MIN_COUNT) return null
+    val (peer, count) = recentFailurePeerLabels.groupingBy { it }.eachCount().maxByOrNull { it.value } ?: return null
+    return peer.takeIf { count >= recentFailurePeerLabels.size * ConnectHealth.DOMINANT_FAILURE_FRACTION }
 }

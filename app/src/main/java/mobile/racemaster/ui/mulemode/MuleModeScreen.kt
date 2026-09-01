@@ -171,8 +171,14 @@ internal fun ConnectivityStatusText(uiState: MuleModeUiState) {
                 val sinceText = health.oldestAttemptAtMillis?.let { " since ${formatTimeOfDay(it, locale)}" }.orEmpty()
                 val healthText = "Connection health: ${health.recentFailures}/${health.recentAttempts} bad$sinceText"
                 if (health.isStruggling) {
+                    // dominantFailurePeerName non-null means the recent failures are mostly
+                    // against one specific peer, not spread across several — see its own doc:
+                    // that's that peer's problem, not this phone's radio, and swapping Mule
+                    // phones wouldn't fix it, so the suggestion has to say something different.
+                    val suggestion = health.dominantFailurePeerName?.let { "mostly $it, may not be this phone" }
+                        ?: "try a different Mule phone"
                     Text(
-                        "$healthText — try a different Mule phone",
+                        "$healthText — $suggestion",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
