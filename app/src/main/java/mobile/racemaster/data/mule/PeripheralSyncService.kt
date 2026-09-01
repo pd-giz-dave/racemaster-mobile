@@ -515,7 +515,21 @@ class PeripheralSyncService : Service() {
     @SuppressLint("MissingPermission")
     private fun startAdvertisingAttempt(advertiserLocal: BluetoothLeAdvertiser) {
         val settings = AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_POWER)
+            // Was ADVERTISE_MODE_LOW_POWER (the longest possible interval between advertising
+            // bursts) — see MulePullClient's own SCAN_MODE_BALANCED doc for why that side was
+            // deliberately kept off LOW_POWER despite this one going there, and its own note to
+            // "revisit empirically against real multi-device field testing before ever going
+            // lower". That evidence has since shown up: a real device (Qualcomm Bluetooth
+            // chipset) whose own logcat showed its BT controller repeatedly waking for under
+            // 100ms then immediately re-entering deep in-band-sleep (IBS_SLEEP_IND) — nowhere
+            // near long enough to complete an incoming connection handshake — while purely
+            // advertising at LOW_POWER, with every other role healthy (its own advertising was
+            // received fine; only *inbound connects* against it during one of these brief
+            // windows kept failing/timing out). BALANCED's shorter interval keeps the radio
+            // busy enough that a low-power chipset has less opportunity to fully sleep through
+            // an incoming connection attempt, at the cost of the same advertising-frequency
+            // battery tradeoff SCAN_MODE_BALANCED already accepts on the scanning side.
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
             .setConnectable(true)
             .build()
