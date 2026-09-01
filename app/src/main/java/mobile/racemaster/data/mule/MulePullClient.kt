@@ -99,20 +99,32 @@ class MulePullClient {
     // whole app unnecessary — the next attempt against this address gets a genuinely fresh
     // Peripheral instead of inheriting a poisoned one. Never swallows the failure itself: always
     // rethrown, so every existing call site's own runCatching/error handling is unaffected.
-    private fun evictAfterFailedConnect(advertisement: Advertisement) {
+    //
+    // Also disconnects the evicted instance (best-effort, swallowed) before discarding it —
+    // without this, only *our own* cache entry was ever forgotten; whatever native
+    // BluetoothGatt/gatt_if client registration the OS had already allocated for this attempt
+    // before it timed out was never explicitly released, since connectOrEvict is called outside
+    // every caller's own try/finally { peripheral.disconnect() }, so that cleanup never runs on
+    // a failed connect either. That's exactly the same gatt_if-exhaustion class of bug
+    // peripheralFor()'s own reuse was originally built to prevent (see its own doc), just
+    // reintroduced via this eviction path instead — confirmed in the field as a device whose
+    // connect attempts were originally an intermittent mix of successes/timeouts degrading, over
+    // a long session with repeated failures, into every single attempt against every peer
+    // failing near-instantly (milliseconds, not CONNECT_TIMEOUT) once the OS's GATT client table
+    // was exhausted.
+    private suspend fun evictAfterFailedConnect(advertisement: Advertisement, peripheral: Peripheral) {
         peripherals.remove(advertisement.identifier)
+        runCatching { peripheral.disconnect() }
     }
 
-    // Shared by pull()/pullRelayManifest() — their identical
+    // Shared by readDeviceInfo/pull()/pullRelayManifest() — their identical
     // "withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }" plus the evictAfterFailedConnect
-    // call above on any failure. readDeviceInfo doesn't use this: its own CONNECT_TIMEOUT
-    // deliberately bounds the read (and, now, an optional piggybacked ack write) that follows
-    // too, not just the connect, so it wraps its connect+evict by hand instead.
+    // call above on any failure.
     private suspend fun connectOrEvict(advertisement: Advertisement, peripheral: Peripheral) {
         try {
             withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }
         } catch (e: Throwable) {
-            evictAfterFailedConnect(advertisement)
+            evictAfterFailedConnect(advertisement, peripheral)
             throw e
         }
     }
