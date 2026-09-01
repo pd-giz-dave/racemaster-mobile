@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import mobile.racemaster.data.db.dao.PulledSourceSummary
 import mobile.racemaster.data.db.entity.KnownDeviceEntity
+import mobile.racemaster.data.mule.ConnectHealth
 import mobile.racemaster.data.mule.DiscoveredDevice
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.MuleSyncEngine
@@ -64,6 +65,13 @@ data class MuleModeUiState(
     // ServerStatusLine.kt and MuleModeScreen) — the same server-reachability feedback every
     // other mode now shows too, not just Mule.
     val serverStatus: ServerStatusState = ServerStatusState(ServerStatus.UNKNOWN, null),
+    // This phone's own recent BLE central connect success/failure rate — see ConnectHealth's
+    // own doc for why this exists at all: some phones' peripheral role works fine while their
+    // central role fails on most connect attempts, purely a chipset/driver limitation no code
+    // fix here can overcome, but invisible to an operator without this without a laptop and
+    // logcat. Lets them notice and swap to a different phone as Mule before a race rather than
+    // during one.
+    val connectHealth: ConnectHealth = ConnectHealth(),
 )
 
 /**
@@ -107,6 +115,7 @@ class MuleModeViewModel(
         muleSyncEngine.lastWebAppSeenAtMillis,
         muleSyncEngine.lastWebAppPushedAtMillis,
         serverStatusRepository.state,
+        muleSyncEngine.connectHealth,
     ) { values ->
         val isLoggedIn = values[3] as Boolean
         val autoSyncStopped = values[7] as Boolean
@@ -122,6 +131,7 @@ class MuleModeViewModel(
         val lastWebAppSeenAtMillis = values[18] as Long?
         val lastWebAppPushedAtMillis = values[19] as Long?
         val serverStatus = values[20] as ServerStatusState
+        val connectHealth = values[21] as ConnectHealth
         val directDevices = values[0] as Map<String, DiscoveredDevice>
         val liveDeviceIds = (directDevices.values + relayDevices.values).mapNotNull { it.deviceId }.toSet()
         // Stale rows: a device this phone has resolved before but can't currently see, given
@@ -167,6 +177,7 @@ class MuleModeViewModel(
             lastWebAppSeenAtMillis = lastWebAppSeenAtMillis,
             lastWebAppPushedAtMillis = lastWebAppPushedAtMillis,
             serverStatus = serverStatus,
+            connectHealth = connectHealth,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MuleModeUiState())
 

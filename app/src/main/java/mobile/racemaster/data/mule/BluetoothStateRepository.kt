@@ -6,6 +6,35 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+/** A rolling snapshot of this device's own recent BLE *central* connect attempts (see
+ *  [BluetoothStateRepository.recordConnectAttempt]) — every [MuleRepository.readDeviceInfo]/
+ *  `pullFrom`/`pullRelayManifest` call MuleSyncEngine makes, regardless of which peer, since
+ *  what this is meant to surface is this *phone's own* radio health, not any one peer's.
+ *  Confirmed in the field as a real, chipset-dependent split: a phone's peripheral role
+ *  (advertising, serving GATT reads to others) can work perfectly while its own central role
+ *  fails on the majority of connect attempts, on hardware no code fix here can improve — the
+ *  practical remedy is running a different phone as Mule, which an operator can only act on if
+ *  something in the app actually tells them, since this failure mode is otherwise invisible
+ *  without a laptop and logcat. */
+data class ConnectHealth(val recentAttempts: Int = 0, val recentSuccesses: Int = 0) {
+    val recentFailures: Int get() = recentAttempts - recentSuccesses
+
+    // 0.0 (no data yet, or a clean run) rather than NaN for the recentAttempts == 0 case —
+    // callers comparing this against a threshold shouldn't each have to special-case "no
+    // attempts yet" separately from "attempts so far all succeeded".
+    val failureRate: Double get() = if (recentAttempts == 0) 0.0 else recentFailures.toDouble() / recentAttempts
+
+    // Gated on a minimum sample size as well as the rate itself — two failed attempts out of
+    // two is a 100% rate but tells an operator nothing yet; CONNECT_HEALTH_MIN_SAMPLE is what
+    // this waits for before it's willing to say anything at all.
+    val isStruggling: Boolean get() = recentAttempts >= CONNECT_HEALTH_MIN_SAMPLE && failureRate >= CONNECT_HEALTH_WARNING_THRESHOLD
+
+    private companion object {
+        const val CONNECT_HEALTH_MIN_SAMPLE = 5
+        const val CONNECT_HEALTH_WARNING_THRESHOLD = 0.4
+    }
+}
+
 /** Whether the device's Bluetooth radio is currently on — checked before starting a Kable
  *  scan, since scanning with it off throws (com.juul.kable.UnmetRequirementException)
  *  instead of just failing, and Kable's own reconnection handling doesn't cover "the radio
@@ -115,7 +144,26 @@ class BluetoothStateRepository(private val context: Context) {
         lastWebAppPushedAtMillisFlow.value = now
     }
 
+    // See ConnectHealth's own doc for what this is tracking and why. A plain ArrayDeque, not a
+    // StateFlow of the raw attempts themselves — only the derived ConnectHealth snapshot needs
+    // to be observable; the rolling window itself is purely internal bookkeeping.
+    @Volatile
+    private var connectAttempts: List<Boolean> = emptyList()
+    private val connectHealthFlow = MutableStateFlow(ConnectHealth())
+
+    val connectHealth: StateFlow<ConnectHealth> = connectHealthFlow.asStateFlow()
+
+    /** Records the outcome of one BLE central connect attempt — see [ConnectHealth]'s own doc
+     *  for what "one attempt" means here and why it's counted regardless of which peer it was
+     *  against. */
+    @Synchronized
+    fun recordConnectAttempt(succeeded: Boolean) {
+        connectAttempts = (connectAttempts + succeeded).takeLast(CONNECT_HEALTH_WINDOW)
+        connectHealthFlow.value = ConnectHealth(connectAttempts.size, connectAttempts.count { it })
+    }
+
     private companion object {
         const val ADVERTISING_FAILURE_THRESHOLD = 5
+        const val CONNECT_HEALTH_WINDOW = 20
     }
 }

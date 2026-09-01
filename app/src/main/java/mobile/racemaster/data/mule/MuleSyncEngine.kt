@@ -258,6 +258,11 @@ class MuleSyncEngine(
     // exposed here purely so MuleModeViewModel doesn't need a second repository reference.
     val lastWebAppSeenAtMillis: StateFlow<Long?> = bluetoothStateRepository.lastWebAppSeenAtMillis
     val lastWebAppPushedAtMillis: StateFlow<Long?> = bluetoothStateRepository.lastWebAppPushedAtMillis
+    // Forwarded the same way advertisingWarning/lastWebAppSeenAtMillis above are — this engine
+    // is what actually records every attempt (see its own recordConnectAttempt call sites), but
+    // the aggregation itself lives on bluetoothStateRepository since that's the one thing every
+    // BLE-attempting part of this app (PeripheralSyncService included) already shares.
+    val connectHealth: StateFlow<ConnectHealth> = bluetoothStateRepository.connectHealth
     val isBusy: StateFlow<Boolean> = busyFlow.asStateFlow()
 
     // This device's own unsynced data, shaped as one more DiscoveredDevice (isSelf = true) so
@@ -522,6 +527,7 @@ class MuleSyncEngine(
         Log.d(TAG, "first-sighting connect attempt: key=$key")
         val info = connectSemaphore.withPermit {
             runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }
+                .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess) }
                 .onFailure { Log.w(TAG, "first-sighting connect failed: key=$key", it) }
                 .getOrNull()
         }
@@ -779,6 +785,7 @@ class MuleSyncEngine(
                 val freshInfo = runCatching {
                     muleRepository.readDeviceInfo(device.requiredAdvertisement, device.deviceId, device.raceLabel)
                 }
+                    .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess) }
                     .onFailure { Log.w(TAG, "periodic connect failed: key=$key deviceId=${device.deviceId}", it) }
                     .getOrNull()
                 if (freshInfo == null) {
@@ -798,15 +805,17 @@ class MuleSyncEngine(
                             freshInfo.deviceName,
                             since,
                         )
-                    }
+                    }.also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess) }
                     result.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
                     result.onSuccess {
                         // Reflects the drop in outstanding lines immediately rather than waiting for
                         // the next periodic refresh, up to AUTO_SYNC_INTERVAL later.
-                        runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }.getOrNull()?.let {
-                            val newSince = muleRepository.lastPulledLineNumber(it.deviceId, it.raceLabel)
-                            mergeDeviceInfo(key, device, it, newSince)
-                        }
+                        runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }
+                            .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess) }
+                            .getOrNull()?.let {
+                                val newSince = muleRepository.lastPulledLineNumber(it.deviceId, it.raceLabel)
+                                mergeDeviceInfo(key, device, it, newSince)
+                            }
                     }
                 }
 
@@ -815,7 +824,9 @@ class MuleSyncEngine(
                 // Only bothered with when that count says there's something to fetch, so a leaf
                 // Time/Bibs/CP phone (always relayCount == 0) never pays this extra round trip.
                 val relayEntries = if (freshInfo.relayCount > 0) {
-                    runCatching { muleRepository.pullRelayManifest(device.requiredAdvertisement) }.getOrElse { emptyList() }
+                    runCatching { muleRepository.pullRelayManifest(device.requiredAdvertisement) }
+                        .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess) }
+                        .getOrElse { emptyList() }
                 } else {
                     emptyList()
                 }
@@ -845,7 +856,7 @@ class MuleSyncEngine(
                             requestOriginDeviceId = entry.originDeviceId,
                             requestOriginRaceLabel = entry.originRaceLabel,
                         )
-                    }
+                    }.also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess) }
                     relayResult.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
                     relayResult.onSuccess {
                         val newSince = muleRepository.lastPulledLineNumber(entry.originDeviceId, entry.originRaceLabel)

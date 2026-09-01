@@ -144,6 +144,32 @@ internal fun ConnectivityStatusText(uiState: MuleModeUiState) {
             uiState.advertisingWarning?.let { warning ->
                 Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
+            // This phone's own recent BLE central connect success rate — see ConnectHealth's
+            // own doc for why this matters: some phones' peripheral role (the "ON — visible to
+            // nearby Mule devices" line just above, and every other branch here) works fine
+            // while their central role (this phone actively pulling, isMuleMode only) fails on
+            // most connect attempts, purely a chipset/driver limitation confirmed in the field
+            // — no code fix can improve it, but an operator who can see this can swap to a
+            // different phone as Mule before a race rather than mid-event. Gated on
+            // recentAttempts > 0 so a Mule that's only just started (nothing to report yet)
+            // doesn't show either line.
+            if (uiState.connectHealth.recentAttempts > 0) {
+                val health = uiState.connectHealth
+                if (health.isStruggling) {
+                    Text(
+                        "This phone is struggling to connect to nearby devices " +
+                            "(${health.recentFailures}/${health.recentAttempts} recent attempts failed) — " +
+                            "try a different phone as Mule if this keeps happening.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                } else {
+                    Text(
+                        "Connection health: ${health.recentSuccesses}/${health.recentAttempts} recent attempts succeeded",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
         }
         if (uiState.serverSyncOff) {
             Text(
