@@ -7,6 +7,7 @@ import com.juul.kable.AndroidPeripheral
 import com.juul.kable.ObsoleteKableApi
 import com.juul.kable.Peripheral
 import com.juul.kable.Scanner
+import com.juul.kable.State
 import com.juul.kable.WriteType
 import com.juul.kable.characteristicOf
 import kotlinx.coroutines.coroutineScope
@@ -120,7 +121,29 @@ class MulePullClient {
     // Shared by readDeviceInfo/pull()/pullRelayManifest() — their identical
     // "withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }" plus the evictAfterFailedConnect
     // call above on any failure.
+    //
+    // Proactively checks peripheral.state before ever calling connect() — a cached Peripheral
+    // reused across calls (see peripheralFor's own doc) should always already be Disconnected
+    // here: either this is its first-ever use, or the previous call's own
+    // try/finally { peripheral.disconnect() } (on success) or evictAfterFailedConnect above (on
+    // failure) already returned it there. Kable's own connect() has no independent "are you
+    // actually free right now" guard of its own — see evictAfterFailedConnect's own doc for what
+    // happens when a connect attempt is abandoned (by our own CONNECT_TIMEOUT) without first
+    // telling Kable to stop it: the underlying attempt keeps running orphaned in Kable's own
+    // Peripheral-scoped coroutine (entirely independent of whatever coroutine is awaiting
+    // connect()), so a later blind connect() call on the same instance doesn't fail outright,
+    // it just piles a fresh attempt on top of one Kable still believes is in flight. Finding
+    // anything other than Disconnected here means some earlier call path didn't clean up after
+    // itself as expected — logged so that's visible — and is treated the same way
+    // evictAfterFailedConnect already does: disconnect (cancels and joins whatever's still
+    // running) before ever attempting a fresh connect, rather than trusting every call site
+    // upstream got its own cleanup right.
     private suspend fun connectOrEvict(advertisement: Advertisement, peripheral: Peripheral) {
+        val stateBeforeConnect = peripheral.state.value
+        if (stateBeforeConnect !is State.Disconnected) {
+            Log.w(TAG, "peripheral not Disconnected before connect (was $stateBeforeConnect) — disconnecting first: address=${advertisement.identifier}")
+            runCatching { peripheral.disconnect() }
+        }
         try {
             withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }
         } catch (e: Throwable) {
