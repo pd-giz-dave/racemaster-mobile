@@ -161,23 +161,23 @@ internal fun ConnectivityStatusText(uiState: MuleModeUiState) {
             // because a real reconnect to an already-resolved peer is throttled to roughly once
             // a minute — see ConnectHealth's own doc — so this window can genuinely take several
             // minutes to fill even on a healthy Mule; without the span, a bare count reads as
-            // "just now" regardless of how stale it actually is.
+            // "just now" regardless of how stale it actually is. Always the *failure* count, in
+            // both the healthy and struggling case — a fraction that means "successes" in one
+            // branch and "failures" in the other (this used to read "6/6 succeeded" alongside
+            // "13/20 failed") makes an operator do arithmetic to tell if a number is good news;
+            // one consistent "N bad" convention means 0 always reads as good news outright.
             if (uiState.connectHealth.recentAttempts > 0) {
                 val health = uiState.connectHealth
                 val sinceText = health.oldestAttemptAtMillis?.let { " since ${formatTimeOfDay(it, locale)}" }.orEmpty()
+                val healthText = "Connection health: ${health.recentFailures}/${health.recentAttempts} bad$sinceText"
                 if (health.isStruggling) {
                     Text(
-                        "This phone is struggling to connect to nearby devices " +
-                            "(${health.recentFailures}/${health.recentAttempts} attempts failed$sinceText) — " +
-                            "try a different phone as Mule if this keeps happening.",
+                        "$healthText — try a different Mule phone",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
                 } else {
-                    Text(
-                        "Connection health: ${health.recentSuccesses}/${health.recentAttempts} attempts succeeded$sinceText",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                    Text(healthText, style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
