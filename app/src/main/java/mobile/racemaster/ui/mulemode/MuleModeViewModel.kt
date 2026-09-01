@@ -92,6 +92,21 @@ class MuleModeViewModel(
     val deviceName: StateFlow<String?> = muleRepository.deviceName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    // See SettingsRepository.raceStaleAfterDays's own doc — surfaced here (rather than baked
+    // into uiState's own combine()) the same way deviceName above is: a plain settings value
+    // SetupOptionsScreen edits directly, unrelated to the live BLE/sync state the big combine()
+    // otherwise exists to assemble. null (not yet loaded), like deviceName above, rather than
+    // eagerly defaulting to DEFAULT_RACE_STALE_AFTER_DAYS — a fast-firing prefill effect on the
+    // Options screen couldn't otherwise tell "genuinely persisted as 2" apart from "DataStore
+    // hasn't answered yet", locking the field in at the default before the real read landed;
+    // confirmed live as an edited-and-saved value reverting to 2 on the very next app restart.
+    val raceStaleAfterDays: StateFlow<Int?> = settingsRepository.raceStaleAfterDays
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun setRaceStaleAfterDays(days: Int) {
+        viewModelScope.launch { settingsRepository.setRaceStaleAfterDays(days) }
+    }
+
     @Suppress("UNCHECKED_CAST")
     val uiState: StateFlow<MuleModeUiState> = combine(
         muleSyncEngine.discoveredDevices,

@@ -63,7 +63,12 @@ Time mode also records time-of-day for all its  actions, this means an appropria
 
 ## Re-jig mule mode
 
-- [ ] do not propagate history that is more than 2 days old
+- [x] do not propagate history that is more than 2 days old
+      (done: PeripheralSyncService's own relay manifest — what this device offers other Mules
+      to pull via BLE — now excludes any source whose most recent pull is older than the same
+      raceStaleAfterDays setting below, recomputed fresh against the wall clock on every
+      DEVICE_INFO read/manifest fetch rather than baked in once, since staleness itself has
+      nothing to do with the underlying data actually changing.)
 - [x] on the mule mode screen give feedback that the server and a BT sink is visible and working,
       in particular give persistent feedback that a BT sink is polling us,
       (done: Mule Mode shows plain "last X at" timestamps rather than a separate
@@ -76,6 +81,14 @@ Time mode also records time-of-day for all its  actions, this means an appropria
       last seen/last pulled from that device (DiscoveredDevice.lastReachableAtMillis/
       lastPulledAtMillis), the same seen-vs-data distinction in the pulling direction. Options
       moved to the top bar.)
+- [x] mule mode needs a stale race time limit just like the server push, that limit should be a general
+      option and not specific to setup server
+      (done: SettingsRepository.raceStaleAfterDays generalizes the old serverSyncMaxAgeDays —
+      same DataStore key, unchanged default of 2 days — into the one cutoff both
+      MuleRepository.pushToServer's server-sync reconciliation and PeripheralSyncService's BLE
+      relay-manifest serving now share (see isRaceStale). Moved off the Setup Server form onto
+      the general Options screen (SetupOptionsScreen), with its own explicit Save since that
+      screen otherwise has no submit step.)
 
 ## All modes
 

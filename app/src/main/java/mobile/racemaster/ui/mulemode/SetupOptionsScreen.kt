@@ -5,17 +5,27 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -52,7 +62,73 @@ fun SetupOptionsScreen(
             BluetoothAndServerSyncToggles(uiState = uiState, viewModel = viewModel)
             HorizontalDivider()
             AutoSyncControls(uiState = uiState, viewModel = viewModel)
+            HorizontalDivider()
+            RaceStalenessControl(viewModel = viewModel)
         }
+    }
+}
+
+// See SettingsRepository.raceStaleAfterDays's own doc — a general setting (not specific to
+// Setup Server, unlike its predecessor) governing both the server-push reconciliation
+// (MuleRepository.pushToServer) and what this device is willing to relay onward to another
+// Mule over BLE (PeripheralSyncService's own freshRelayManifest). Given its own explicit "Save"
+// (rather than autosaving on every keystroke, or requiring a focus-loss/dismiss gesture the way
+// a full-page form's "Log-in" button used to bundle it in) since this screen otherwise has no
+// submit step of its own — every other control here is an immediate-effect toggle/button.
+@Composable
+internal fun RaceStalenessControl(viewModel: MuleModeViewModel) {
+    val savedDays by viewModel.raceStaleAfterDays.collectAsStateWithLifecycle()
+    val focusManager = LocalFocusManager.current
+    var text by remember { mutableStateOf("") }
+    // Pre-fill exactly once from whatever's already saved, same reasoning as
+    // MuleServerSetupScreen's own "prefilled" flag — later emissions (this screen's own Save
+    // below included) must not stomp on what the operator is mid-typing.
+    var prefilled by remember { mutableStateOf(false) }
+    LaunchedEffect(savedDays) {
+        if (prefilled) return@LaunchedEffect
+        // null means "DataStore hasn't answered yet" (distinct from a genuinely-loaded 2 —
+        // see raceStaleAfterDays' own doc) — wait for the real value rather than locking the
+        // field in at whatever the StateFlow's initial placeholder happened to be.
+        val loaded = savedDays ?: return@LaunchedEffect
+        text = loaded.toString()
+        prefilled = true
+    }
+    val value = text.toIntOrNull()
+    val canSave = value != null && value >= 1 && value != savedDays
+    // Re-parses text (a live State, unlike a captured val) at the moment this actually runs,
+    // rather than trusting canSave/value as captured above — a real device under heavy
+    // background BLE/GATT load can process a queued tap well after the keystroke that made it
+    // valid, invoking a save() closure bound to an already-stale composition whose captured
+    // value was still null/unchanged; confirmed live via logging (a tap logged text="7" but a
+    // captured value of null from an earlier recomposition). Reading straight off
+    // viewModel.raceStaleAfterDays.value rather than the collected savedDays for the same
+    // reason — a StateFlow read is always current, a Compose state snapshot from an earlier
+    // frame might not be.
+    fun save() {
+        val parsed = text.toIntOrNull() ?: return
+        if (parsed < 1 || parsed == viewModel.raceStaleAfterDays.value) return
+        viewModel.setRaceStaleAfterDays(parsed)
+        focusManager.clearFocus()
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it.filter(Char::isDigit).take(3) },
+                singleLine = true,
+                label = { Text("Skip races older than (days)") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                // save() re-validates internally (see its own doc) — no need to gate this on
+                // the possibly-stale canSave read here too.
+                keyboardActions = KeyboardActions(onDone = { save() }),
+                modifier = Modifier.weight(1f),
+            )
+            Button(onClick = withClickSound(::save), enabled = canSave) { Text("Save") }
+        }
+        Text(
+            "Races untouched this long are no longer checked against the server or relayed to other Mules.",
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }
 

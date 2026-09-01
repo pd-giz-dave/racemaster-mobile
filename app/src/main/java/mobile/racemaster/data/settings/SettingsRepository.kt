@@ -28,8 +28,8 @@ private val DEFAULT_COURSES = listOf("Seniors", "Juniors", "Pairs")
 // one — the common finish/start/checkpoint stations. See locationHistory's own doc.
 private val DEFAULT_LOCATIONS = listOf("Finish", "Start") + (1..9).map { "CP$it" }
 
-// See SettingsRepository.serverSyncMaxAgeDays's own doc.
-const val DEFAULT_SERVER_SYNC_MAX_AGE_DAYS = 2
+// See SettingsRepository.raceStaleAfterDays's own doc.
+const val DEFAULT_RACE_STALE_AFTER_DAYS = 2
 
 class SettingsRepository(
     private val dataStore: DataStore<Preferences>,
@@ -51,7 +51,10 @@ class SettingsRepository(
         val COURSE_HISTORY = stringPreferencesKey("course_history")
         val LOCATION_HISTORY = stringPreferencesKey("location_history")
         val SERVER_CREDENTIAL_HISTORY = stringPreferencesKey("server_credential_history")
-        val SERVER_SYNC_MAX_AGE_DAYS = intPreferencesKey("server_sync_max_age_days")
+        // Key string itself is unchanged from when this was server-sync-specific (see
+        // raceStaleAfterDays's own doc) — renaming it would silently reset every existing
+        // install's setting back to the default on upgrade for no benefit.
+        val RACE_STALE_AFTER_DAYS = intPreferencesKey("server_sync_max_age_days")
     }
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -296,16 +299,23 @@ class SettingsRepository(
         dataStore.edit { prefs -> prefs[Keys.SERVER_SYNC_OFF] = off }
     }
 
-    // Bounds MuleRepository.pushToServer's own per-tick reconciliation (see its own doc) to
-    // only races Mule has touched within this many days — without a cutoff, every sync
-    // attempt re-checks the server's stored state for every race label this device has ever
-    // held, forever, which is the deliberate trade that catches a server-side file
-    // disappearing (see MuleSyncEngine.pushIfNeeded's own doc) but has no reason to keep
-    // re-checking a race that wrapped up days ago. Exposed on the Setup Server form.
-    val serverSyncMaxAgeDays: Flow<Int> =
-        dataStore.data.map { prefs -> prefs[Keys.SERVER_SYNC_MAX_AGE_DAYS] ?: DEFAULT_SERVER_SYNC_MAX_AGE_DAYS }
+    // General "how long is a race worth still chasing" cutoff, shared by every sync path
+    // rather than each having its own: bounds MuleRepository.pushToServer's own per-tick
+    // reconciliation (see its own doc) to only races Mule has touched within this many days —
+    // without a cutoff, every sync attempt re-checks the server's stored state for every race
+    // label this device has ever held, forever, which is the deliberate trade that catches a
+    // server-side file disappearing (see MuleSyncEngine.pushIfNeeded's own doc) but has no
+    // reason to keep re-checking a race that wrapped up days ago. Also bounds what
+    // PeripheralSyncService is willing to relay onward to another Mule (see its own
+    // freshRelayManifest) — a race this stale has no reason to keep being offered to every
+    // passing Mule either. Originally server-sync-specific (hence the unchanged DataStore key
+    // above) and only exposed on the Setup Server form; generalized to cover BLE relay too and
+    // moved to the general Options screen (SetupOptionsScreen) once it started governing more
+    // than just the HTTP push path.
+    val raceStaleAfterDays: Flow<Int> =
+        dataStore.data.map { prefs -> prefs[Keys.RACE_STALE_AFTER_DAYS] ?: DEFAULT_RACE_STALE_AFTER_DAYS }
 
-    suspend fun setServerSyncMaxAgeDays(days: Int) {
-        dataStore.edit { prefs -> prefs[Keys.SERVER_SYNC_MAX_AGE_DAYS] = days }
+    suspend fun setRaceStaleAfterDays(days: Int) {
+        dataStore.edit { prefs -> prefs[Keys.RACE_STALE_AFTER_DAYS] = days }
     }
 }

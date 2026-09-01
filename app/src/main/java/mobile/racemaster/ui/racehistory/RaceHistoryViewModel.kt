@@ -8,11 +8,11 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.db.dao.PulledSourceSummary
 import mobile.racemaster.data.mule.MuleRepository
+import mobile.racemaster.data.mule.isRaceStale
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.activeModeLabels
 import mobile.racemaster.data.repository.isRaceActive
 import mobile.racemaster.di.appContainer
-import kotlin.time.Duration.Companion.days
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -62,13 +62,11 @@ sealed interface HistoryItemUi {
     ) : HistoryItemUi
 }
 
-// null (no activity signal at all — a Mule-pulled label never seen, or a local race with no
-// history yet) is never stale, only a genuine timestamp older than the cutoff counts.
-internal fun isSkippedAsStale(lastTouchedAtMillis: Long?, maxAgeDays: Int): Boolean {
-    if (lastTouchedAtMillis == null) return false
-    val cutoffMillis = System.currentTimeMillis() - maxAgeDays.days.inWholeMilliseconds
-    return lastTouchedAtMillis < cutoffMillis
-}
+// Thin, directly-testable name for this screen's own display badge — see isRaceStale's own
+// doc for the actual rule, shared with MuleRepository.pushToServer and PeripheralSyncService's
+// relay-manifest serving so all three agree on exactly the same cutoff.
+internal fun isSkippedAsStale(lastTouchedAtMillis: Long?, maxAgeDays: Int): Boolean =
+    isRaceStale(lastTouchedAtMillis, maxAgeDays)
 
 private data class HistorySources(
     val races: List<RaceEntity>,
@@ -87,7 +85,7 @@ class RaceHistoryViewModel(
         raceRepository.observeAllRaces(),
         muleRepository.sourceSummaries,
         muleRepository.raceLabelLastTouchedAtMillis,
-        muleRepository.serverSyncMaxAgeDays,
+        muleRepository.raceStaleAfterDays,
     ) { races, sourceSummaries, lastTouchedAtMillis, maxAgeDays ->
         HistorySources(races, sourceSummaries, lastTouchedAtMillis, maxAgeDays)
     }

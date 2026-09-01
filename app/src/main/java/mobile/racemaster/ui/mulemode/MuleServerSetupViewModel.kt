@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import mobile.racemaster.data.mule.MuleRepository
-import mobile.racemaster.data.settings.DEFAULT_SERVER_SYNC_MAX_AGE_DAYS
 import mobile.racemaster.data.settings.ServerSetupDraft
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
@@ -45,24 +44,17 @@ class MuleServerSetupViewModel(
     val credentialHistory: StateFlow<List<ServerSetupDraft>> = settingsRepository.serverCredentialHistory
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    // See SettingsRepository.serverSyncMaxAgeDays's own doc.
-    val maxAgeDays: StateFlow<Int> = settingsRepository.serverSyncMaxAgeDays
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DEFAULT_SERVER_SYNC_MAX_AGE_DAYS)
-
     // See SettingsRepository.revertServerSetupDraft's own doc — undoes the sticky-draft side
     // effect of a failed save() above when the operator cancels out instead of retrying.
     suspend fun revertDraft(lastKnownGood: ServerSetupDraft) {
         settingsRepository.revertServerSetupDraft(lastKnownGood.url, lastKnownGood.username, lastKnownGood.password)
     }
 
-    suspend fun save(url: String, username: String, password: String, maxAgeDays: Int) {
+    suspend fun save(url: String, username: String, password: String) {
         // Saved before attempting login, not after — so a failed attempt (e.g. a password
         // typo) still leaves the form sticky for a quick retry rather than losing everything
-        // typed. maxAgeDays is a general Mule setting, unrelated to login success either way,
-        // so it's persisted right alongside the draft rather than gated on the login call
-        // below actually succeeding.
+        // typed.
         settingsRepository.saveServerSetupDraft(url, username, password)
-        settingsRepository.setServerSyncMaxAgeDays(maxAgeDays)
         muleRepository.login(url, username, password)
     }
 

@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import kotlin.time.Duration.Companion.days
 import kotlinx.serialization.json.Json
 import mobile.racemaster.data.db.dao.KnownDeviceDao
 import mobile.racemaster.data.db.dao.PulledRecordDao
@@ -88,7 +87,7 @@ class MuleRepository(
     // against the server" — see PulledRecordDao.RaceLabelActivity's own doc for why this is
     // scoped to genuinely-pulled-from-others data only; a local race's own staleness uses
     // RaceRepository.observeLastActivityAtMillis instead.
-    val serverSyncMaxAgeDays: Flow<Int> = settingsRepository.serverSyncMaxAgeDays
+    val raceStaleAfterDays: Flow<Int> = settingsRepository.raceStaleAfterDays
     val raceLabelLastTouchedAtMillis: Flow<Map<String, Long>> = pulledRecordDao.observeLastTouchedByRaceLabel()
         .map { rows -> rows.associate { it.sourceRaceLabel to it.lastTouchedAtMillis } }
 
@@ -364,7 +363,7 @@ class MuleRepository(
      *  not the full send size. Skips any race-label group with no recent activity — a local
      *  race's own [RaceRepository.observeLastActivityAtMillis], a Mule-pulled source's own
      *  `pulledAtMillis`, or (a label with both) whichever is more recent — within
-     *  [SettingsRepository.serverSyncMaxAgeDays]; see that setting's own doc for why every
+     *  [SettingsRepository.raceStaleAfterDays]; see that setting's own doc for why every
      *  sync attempt now always reconciles rather than skipping when nothing looks locally
      *  unsynced. A skipped group is simply left as it is; nothing about it is marked one way
      *  or the other. */
@@ -376,8 +375,7 @@ class MuleRepository(
         val localRaces = raceRepository.observeAllRaces().first()
         if (pulledRows.isEmpty() && localRaces.isEmpty()) return 0
 
-        val maxAgeDays = settingsRepository.serverSyncMaxAgeDays.first()
-        val touchedSinceMillis = System.currentTimeMillis() - maxAgeDays.days.inWholeMilliseconds
+        val maxAgeDays = settingsRepository.raceStaleAfterDays.first()
         val myDeviceName = settingsRepository.getOrCreateDeviceName()
 
         val pulledByLabel = pulledRows.groupBy { it.sourceRaceLabel }
@@ -392,7 +390,7 @@ class MuleRepository(
             val pulledTouchedAtMillis = pulledForRace.maxOfOrNull { it.pulledAtMillis }
             val localTouchedAtMillis = localRace?.let { raceRepository.observeLastActivityAtMillis(it.id).first() }
             val touchedAtMillis = maxOfNullable(pulledTouchedAtMillis, localTouchedAtMillis) ?: continue
-            if (touchedAtMillis < touchedSinceMillis) continue
+            if (isRaceStale(touchedAtMillis, maxAgeDays)) continue
 
             val status = runCatching { syncClient.getSyncStatus(baseUrl, token, raceLabel) }.getOrDefault(emptyMap())
 

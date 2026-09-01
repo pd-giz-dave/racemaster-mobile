@@ -52,6 +52,7 @@ import mobile.racemaster.MainActivity
 import mobile.racemaster.RacemasterApplication
 import mobile.racemaster.data.db.dao.PulledSourceSummary
 import mobile.racemaster.data.settings.AppMode
+import mobile.racemaster.data.settings.DEFAULT_RACE_STALE_AFTER_DAYS
 
 /**
  * Runs on every device (Time, Bibs, CP and Mule) regardless of which screen is showing, so a
@@ -149,6 +150,14 @@ class PeripheralSyncService : Service() {
     @Volatile
     private var relayManifestVersion: Int = 0
 
+    // Kept live the same way deviceName/currentMode are above, by observeRaceStaleAfterDays()
+    // below — SettingsRepository.raceStaleAfterDays's general cutoff, applied here to what this
+    // device is willing to relay onward to another Mule (see freshRelayManifest below), the BLE
+    // counterpart to MuleRepository.pushToServer's own identical cutoff — closes TODO.md's "do
+    // not propagate history that is more than 2 days old".
+    @Volatile
+    private var raceStaleAfterDays: Int = DEFAULT_RACE_STALE_AFTER_DAYS
+
     private data class ServingState(
         val raceId: Long? = null,
         val raceLabel: String = "",
@@ -200,6 +209,7 @@ class PeripheralSyncService : Service() {
         observeDeviceName()
         observeAppMode()
         observeRelayManifest()
+        observeRaceStaleAfterDays()
         observeAdvertisingWarning()
         startAdvertisingRetryLoop()
         startChunkWatchdogLoop()
@@ -258,6 +268,21 @@ class PeripheralSyncService : Service() {
             }
         }
     }
+
+    // See raceStaleAfterDays' own doc.
+    private fun observeRaceStaleAfterDays() {
+        serviceScope.launch {
+            container.settingsRepository.raceStaleAfterDays.collect { days -> raceStaleAfterDays = days }
+        }
+    }
+
+    // relayManifest only refreshes on a genuine change to the underlying pulled_records table
+    // (see observeRelayManifest's own `!=` guard) — but staleness is purely a function of
+    // elapsed wall-clock time, unrelated to any write happening, so it can't be baked into that
+    // field once and left; it has to be recomputed fresh on every actual use (a DEVICE_INFO read
+    // or a relay-manifest fetch) instead. See isRaceStale's own doc for the shared cutoff rule.
+    private fun freshRelayManifest(): List<PulledSourceSummary> =
+        relayManifest.filterNot { isRaceStale(it.lastPulledAtMillis, raceStaleAfterDays) }
 
     // Surfaces BluetoothStateRepository.advertisingWarning (see its own doc) in the ongoing
     // foreground notification too, not just MuleModeScreen — this service, and the
@@ -655,7 +680,7 @@ class PeripheralSyncService : Service() {
                 raceLabel = servingState.raceLabel,
                 lastLineNumber = servingState.lastLineNumber,
                 deviceName = deviceName,
-                relayCount = relayManifest.size,
+                relayCount = freshRelayManifest().size,
                 relayManifestVersion = relayManifestVersion,
             )
             val bytes = json.encodeToString(info).toByteArray(Charsets.UTF_8)
@@ -878,7 +903,7 @@ class PeripheralSyncService : Service() {
     // from relayManifest, same live field DEVICE_INFO's own read uses, so a manifest fetched
     // right after seeing relayCount > 0 always reflects what that count was counting.
     private fun computeRelayManifestPayload(): String {
-        val entries = relayManifest.map { RelayManifestEntry(it.sourceDeviceId, it.deviceName, it.sourceRaceLabel, it.lastLineNumber) }
+        val entries = freshRelayManifest().map { RelayManifestEntry(it.sourceDeviceId, it.deviceName, it.sourceRaceLabel, it.lastLineNumber) }
         return json.encodeToString(entries)
     }
 
