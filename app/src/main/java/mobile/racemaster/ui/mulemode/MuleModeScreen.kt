@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -29,6 +30,7 @@ import mobile.racemaster.ui.components.ServerStatusLine
 import mobile.racemaster.ui.components.SyncStatusLine
 import mobile.racemaster.ui.theme.SyncedGreen
 import mobile.racemaster.ui.theme.UnsyncedRed
+import mobile.racemaster.util.formatTimeOfDay
 import mobile.racemaster.util.formatWallClock
 import mobile.racemaster.util.withClickSound
 
@@ -114,6 +116,9 @@ fun MuleModeScreen(
 // the same feedback without needing the actual toggle buttons alongside it).
 @Composable
 internal fun ConnectivityStatusText(uiState: MuleModeUiState) {
+    // Read via LocalConfiguration rather than Locale.getDefault() directly — see
+    // formatTimeOfDay's own doc for why (Compose only recomposes on the former).
+    val locale = LocalConfiguration.current.locales[0]
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         if (uiState.bluetoothOff) {
             Text(
@@ -152,20 +157,25 @@ internal fun ConnectivityStatusText(uiState: MuleModeUiState) {
             // — no code fix can improve it, but an operator who can see this can swap to a
             // different phone as Mule before a race rather than mid-event. Gated on
             // recentAttempts > 0 so a Mule that's only just started (nothing to report yet)
-            // doesn't show either line.
+            // doesn't show either line. The "since HH:mm" span (oldestAttemptAtMillis) matters
+            // because a real reconnect to an already-resolved peer is throttled to roughly once
+            // a minute — see ConnectHealth's own doc — so this window can genuinely take several
+            // minutes to fill even on a healthy Mule; without the span, a bare count reads as
+            // "just now" regardless of how stale it actually is.
             if (uiState.connectHealth.recentAttempts > 0) {
                 val health = uiState.connectHealth
+                val sinceText = health.oldestAttemptAtMillis?.let { " since ${formatTimeOfDay(it, locale)}" }.orEmpty()
                 if (health.isStruggling) {
                     Text(
                         "This phone is struggling to connect to nearby devices " +
-                            "(${health.recentFailures}/${health.recentAttempts} recent attempts failed) — " +
+                            "(${health.recentFailures}/${health.recentAttempts} attempts failed$sinceText) — " +
                             "try a different phone as Mule if this keeps happening.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
                 } else {
                     Text(
-                        "Connection health: ${health.recentSuccesses}/${health.recentAttempts} recent attempts succeeded",
+                        "Connection health: ${health.recentSuccesses}/${health.recentAttempts} attempts succeeded$sinceText",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }

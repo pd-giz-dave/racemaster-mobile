@@ -5,8 +5,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
-import java.text.SimpleDateFormat
-import java.util.Date
+import mobile.racemaster.util.formatTimeOfDay
 
 /** Shared "N unsynced · last synced HH:MM" caption shown in Time, Bibs, and Mule mode —
  *  sourced from [mobile.racemaster.data.mule.MuleRepository] in each mode's ViewModel. */
@@ -16,11 +15,7 @@ fun SyncStatusLine(unsyncedCount: Int, lastSyncedAtMillis: Long?, modifier: Modi
     // observable by Compose, so this composable wouldn't recompose if the user changes their
     // system locale mid-session.
     val locale = LocalConfiguration.current.locales[0]
-    val lastSyncedText = if (lastSyncedAtMillis == null) {
-        "never"
-    } else {
-        SimpleDateFormat("HH:mm", locale).format(Date(lastSyncedAtMillis))
-    }
+    val lastSyncedText = if (lastSyncedAtMillis == null) "never" else formatTimeOfDay(lastSyncedAtMillis, locale)
     Text(
         "$unsyncedCount unsynced · last synced $lastSyncedText",
         style = MaterialTheme.typography.labelSmall,

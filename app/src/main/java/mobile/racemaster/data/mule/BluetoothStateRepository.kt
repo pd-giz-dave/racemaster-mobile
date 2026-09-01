@@ -16,7 +16,17 @@ import kotlinx.coroutines.flow.asStateFlow
  *  practical remedy is running a different phone as Mule, which an operator can only act on if
  *  something in the app actually tells them, since this failure mode is otherwise invisible
  *  without a laptop and logcat. */
-data class ConnectHealth(val recentAttempts: Int = 0, val recentSuccesses: Int = 0) {
+data class ConnectHealth(
+    val recentAttempts: Int = 0,
+    val recentSuccesses: Int = 0,
+    // When the oldest attempt still counted in [recentAttempts] happened — null only when
+    // recentAttempts is 0. Lets a caller show *how far back* "recent" actually reaches (a
+    // struggling/quiet Mule can take several minutes to fill even a 20-attempt window, since a
+    // real reconnect to an already-resolved peer is throttled to once every VERIFY_INTERVAL —
+    // see MuleSyncEngine.shouldConnect's own doc), rather than a bare count that reads as "just
+    // now" regardless of how stale it actually is.
+    val oldestAttemptAtMillis: Long? = null,
+) {
     val recentFailures: Int get() = recentAttempts - recentSuccesses
 
     // 0.0 (no data yet, or a clean run) rather than NaN for the recentAttempts == 0 case —
@@ -144,11 +154,13 @@ class BluetoothStateRepository(private val context: Context) {
         lastWebAppPushedAtMillisFlow.value = now
     }
 
-    // See ConnectHealth's own doc for what this is tracking and why. A plain ArrayDeque, not a
-    // StateFlow of the raw attempts themselves — only the derived ConnectHealth snapshot needs
-    // to be observable; the rolling window itself is purely internal bookkeeping.
+    // See ConnectHealth's own doc for what this is tracking and why. A plain list of (when,
+    // succeeded) pairs, not a StateFlow of the raw attempts themselves — only the derived
+    // ConnectHealth snapshot needs to be observable; the rolling window itself is purely
+    // internal bookkeeping. atMillis is what lets ConnectHealth.oldestAttemptAtMillis report
+    // how far back the window actually reaches.
     @Volatile
-    private var connectAttempts: List<Boolean> = emptyList()
+    private var connectAttempts: List<Pair<Long, Boolean>> = emptyList()
     private val connectHealthFlow = MutableStateFlow(ConnectHealth())
 
     val connectHealth: StateFlow<ConnectHealth> = connectHealthFlow.asStateFlow()
@@ -158,8 +170,12 @@ class BluetoothStateRepository(private val context: Context) {
      *  against. */
     @Synchronized
     fun recordConnectAttempt(succeeded: Boolean) {
-        connectAttempts = (connectAttempts + succeeded).takeLast(CONNECT_HEALTH_WINDOW)
-        connectHealthFlow.value = ConnectHealth(connectAttempts.size, connectAttempts.count { it })
+        connectAttempts = (connectAttempts + (System.currentTimeMillis() to succeeded)).takeLast(CONNECT_HEALTH_WINDOW)
+        connectHealthFlow.value = ConnectHealth(
+            recentAttempts = connectAttempts.size,
+            recentSuccesses = connectAttempts.count { it.second },
+            oldestAttemptAtMillis = connectAttempts.firstOrNull()?.first,
+        )
     }
 
     private companion object {
