@@ -114,7 +114,33 @@ class MuleRepository(
     fun decodeAdvertisedIdentity(advertisement: Advertisement): MuleGattProfile.AdvertisedIdentity? =
         pullClient.decodeAdvertisedIdentity(advertisement)
 
-    suspend fun readDeviceInfo(advertisement: Advertisement): DeviceInfo = pullClient.readDeviceInfo(advertisement)
+    // [sourceDeviceId]/[sourceRaceLabel], when this source has already been resolved at least
+    // once before, let this same connection also deliver any sink confirmation already owed to
+    // it — see MulePullClient.readDeviceInfo's own doc for why piggybacking onto a connection
+    // already being made for this refresh, rather than a separate relayConfirmationOnly-style
+    // reconnect moments later, is what makes that delivery reliable rather than a
+    // 100%-reproducible failure against a real device. Harmless, self-correcting redundancy on
+    // a tick where pullFrom also ends up running afterward and delivers the same confirmation
+    // again via its own ack — nothing is left to redeliver by the next tick either way.
+    suspend fun readDeviceInfo(advertisement: Advertisement, sourceDeviceId: String? = null, sourceRaceLabel: String? = null): DeviceInfo {
+        val sinkConfirmedRecordUuids = if (sourceDeviceId != null && sourceRaceLabel != null) {
+            pulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource(sourceDeviceId, sourceRaceLabel)
+        } else {
+            emptyList()
+        }
+        if (sinkConfirmedRecordUuids.isEmpty()) return pullClient.readDeviceInfo(advertisement)
+        val myDeviceId = settingsRepository.getOrCreateDeviceId()
+        val myDeviceName = settingsRepository.getOrCreateDeviceName()
+        return pullClient.readDeviceInfo(
+            advertisement,
+            myDeviceId,
+            myDeviceName,
+            sinkConfirmedRecordUuids,
+            onConfirmationsRelayed = { relayedUuids ->
+                pulledRecordDao.markConfirmationRelayed(relayedUuids, System.currentTimeMillis())
+            },
+        )
+    }
 
     // See MulePullClient.pullRelayManifest's own doc — a separate, chunked fetch of a peer's
     // full relay manifest, only worth calling once readDeviceInfo has shown relayCount > 0.
@@ -261,28 +287,6 @@ class MuleRepository(
             },
         )
         return count
-    }
-
-    // Lighter counterpart to pullFrom for when there's nothing new to actually fetch from
-    // [sourceDeviceId] — this device just owes it a sink confirmation and nothing else. See
-    // MulePullClient.relayConfirmationOnly's own doc for why this exists as a separate,
-    // shorter path rather than always going through pullFrom regardless. A no-op if there's
-    // genuinely nothing to relay (the caller's own hasSinkConfirmationToRelay check already
-    // guards this in practice, but this stays self-contained rather than trusting that).
-    suspend fun relayConfirmationOnly(advertisement: Advertisement, sourceRaceLabel: String, sourceDeviceId: String) {
-        val sinkConfirmedRecordUuids = pulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource(sourceDeviceId, sourceRaceLabel)
-        if (sinkConfirmedRecordUuids.isEmpty()) return
-        val myDeviceId = settingsRepository.getOrCreateDeviceId()
-        val myDeviceName = settingsRepository.getOrCreateDeviceName()
-        pullClient.relayConfirmationOnly(
-            advertisement,
-            myDeviceId,
-            myDeviceName,
-            sinkConfirmedRecordUuids,
-            onConfirmationsRelayed = { relayedUuids ->
-                pulledRecordDao.markConfirmationRelayed(relayedUuids, System.currentTimeMillis())
-            },
-        )
     }
 
     private suspend fun storePulledRecords(

@@ -767,7 +767,18 @@ class MuleSyncEngine(
                 relayRows.entries.removeAll { it.value.relayedViaDeviceKey == key }
                 // Temporary/diagnostic — see refreshDeviceInfo's own matching log lines.
                 Log.d(TAG, "periodic connect attempt: key=$key deviceId=${device.deviceId}")
-                val freshInfo = runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }
+                // device.deviceId/raceLabel (already known — this device has resolved at least
+                // once before) let this same connection also deliver any sink confirmation
+                // already owed to it, if there is one — see MuleRepository.readDeviceInfo's own
+                // doc for why that's now the only reliable way to deliver one: a *separate*
+                // reconnect just for the confirmation, moments after this same read's own
+                // connect, failed 100% of the time against a real device (always right at
+                // CONNECT_TIMEOUT), even though this read's own connect kept succeeding fast and
+                // reliably moments earlier. A genuine sink confirmation must reach the operator
+                // watching that source regardless of which specific connection carried it.
+                val freshInfo = runCatching {
+                    muleRepository.readDeviceInfo(device.requiredAdvertisement, device.deviceId, device.raceLabel)
+                }
                     .onFailure { Log.w(TAG, "periodic connect failed: key=$key deviceId=${device.deviceId}", it) }
                     .getOrNull()
                 if (freshInfo == null) {
@@ -776,19 +787,8 @@ class MuleSyncEngine(
                 }
                 val since = muleRepository.lastPulledLineNumber(freshInfo.deviceId, freshInfo.raceLabel)
                 mergeDeviceInfo(key, device, freshInfo, since)
-                // Also reconnects with zero new lines to pull when there's a sink confirmation to
-                // relay back — otherwise a source that's already fully pulled would never learn its
-                // data has since reached a sink, since nothing would ever re-trigger a connect for
-                // it. That confirmation-only case goes through the lighter relayConfirmationOnly
-                // path rather than pullFrom's full round trip (connect, MTU negotiate, CONTROL
-                // write, wait for a chunked DATA response, only then ack) — see
-                // MulePullClient.relayConfirmationOnly's own doc for why that shorter exchange
-                // reliably gets through on a marginal link where the full one keeps timing out,
-                // confirmed in the field against a real source device. A genuine sink confirmation
-                // must reach the operator watching that source regardless of which specific path
-                // got it there.
-                val hasPendingConfirmation = muleRepository.hasSinkConfirmationToRelay(freshInfo.deviceId, freshInfo.raceLabel)
                 val hasNewData = freshInfo.lastLineNumber - since > 0
+                Log.d(TAG, "pull decision: key=$key deviceId=${freshInfo.deviceId} lastLineNumber=${freshInfo.lastLineNumber} since=$since hasNewData=$hasNewData")
                 if (hasNewData) {
                     val result = runCatching {
                         muleRepository.pullFrom(
@@ -808,10 +808,6 @@ class MuleSyncEngine(
                             mergeDeviceInfo(key, device, it, newSince)
                         }
                     }
-                } else if (hasPendingConfirmation) {
-                    runCatching {
-                        muleRepository.relayConfirmationOnly(device.requiredAdvertisement, freshInfo.raceLabel, freshInfo.deviceId)
-                    }.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
                 }
 
                 // A separate, chunked pull rather than something freshInfo already carries — see
