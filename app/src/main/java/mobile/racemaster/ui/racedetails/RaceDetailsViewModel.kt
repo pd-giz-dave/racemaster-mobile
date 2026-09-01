@@ -19,16 +19,16 @@ import kotlinx.coroutines.flow.stateIn
 
 /**
  * Backs the race details screen used both for creating a new race ([existingRaceId] null) and
- * editing an existing one's bib range ([existingRaceId] non-null) — same screen, same fields,
- * for every mode (Time Mode never actually uses the bib number for anything, but collects it
- * anyway so both forms stay identical). Name/course/location are only ever settable at creation
- * — RaceDetailsScreen locks them read-only for an existing race, in every state (fresh,
- * started, stopped, or reset), since they're baked into the label's sync identity (see
- * RaceRepository.updateRaceDetails' own doc); a race needing a different name/course/location
- * needs to actually be a new race. This ViewModel just writes back whatever the screen passes
- * in either way — it has no opinion of its own on which fields a given call site left
- * unchanged. Server URL is deliberately not part of this screen — it'll live under Mule Mode
- * setup eventually, device-wide rather than per-race.
+ * editing an existing one ([existingRaceId] non-null) — same screen, same fields, for every mode
+ * (Time Mode never actually uses the bib number for anything, but collects it anyway so both
+ * forms stay identical). Name/course/location stay editable until the race has genuinely
+ * started a mode — RaceDetailsScreen locks them read-only only once [raceIsActive] is true (see
+ * that flow's own doc and RaceRepository.updateRaceDetails' own doc for why that's safe); a
+ * race that's already recording history needs a different name/course/location to actually be a
+ * new race instead, since they're baked into the label's sync identity. This ViewModel just
+ * writes back whatever the screen passes in either way — it has no opinion of its own on which
+ * fields a given call site left unchanged. Server URL is deliberately not part of this screen —
+ * it'll live under Mule Mode setup eventually, device-wide rather than per-race.
  */
 class RaceDetailsViewModel(
     val mode: AppMode,
@@ -44,18 +44,21 @@ class RaceDetailsViewModel(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     }
 
+    // Whether this race has genuinely started any mode (a real *ModeStartedAtMillis, not merely
+    // "was created" or "was opened") — the one gate both identityFieldsEnabled below (via
+    // RaceDetailsScreen) and canClearRace rely on. False for a brand-new, not-yet-saved race
+    // (existingRace is a fixed null StateFlow in that case) — nothing to be active yet. Computed
+    // reactively (not a one-shot check) so both derived flows update live if this race's state
+    // changes while the form is open, same as NameDeviceViewModel.hasActiveRace already does.
+    val raceIsActive: StateFlow<Boolean> = existingRace.map { race ->
+        race != null && isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.cpModeStartedAtMillis)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     // "Clear race" (RaceDetailsScreen's second button, mirroring Setup Server's own "No
     // Server") is only ever offered for an existing race that isn't active — same definition
-    // isRaceCurrentlyActive/RaceRepository.deleteRace already enforce, computed reactively here
-    // (rather than a one-shot isRaceCurrentlyActive call) so the button updates live if this
-    // race's state changes while the form is open, same as NameDeviceViewModel.hasActiveRace.
-    val canClearRace: StateFlow<Boolean> = if (existingRaceId == null) {
-        MutableStateFlow(false)
-    } else {
-        existingRace.map { race ->
-            race != null && !isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.cpModeStartedAtMillis)
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
-    }
+    // isRaceCurrentlyActive/RaceRepository.deleteRace already enforce.
+    val canClearRace: StateFlow<Boolean> = raceIsActive.map { active -> existingRaceId != null && !active }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     val deviceName: StateFlow<String?> = settingsRepository.deviceName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)

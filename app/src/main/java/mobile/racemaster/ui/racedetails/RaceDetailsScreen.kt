@@ -60,6 +60,7 @@ fun RaceDetailsScreen(
     viewModel: RaceDetailsViewModel = viewModel(factory = RaceDetailsViewModel.factory(mode, existingRaceId)),
 ) {
     val existingRace by viewModel.existingRace.collectAsStateWithLifecycle()
+    val raceIsActive by viewModel.raceIsActive.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     val raceNameHistory by viewModel.raceNameHistory.collectAsStateWithLifecycle()
     val courseHistory by viewModel.courseHistory.collectAsStateWithLifecycle()
@@ -130,15 +131,17 @@ fun RaceDetailsScreen(
     // on-screen later) stays the same either way, per instruction.
     val showRunnerFields = mode == AppMode.TIME || mode == AppMode.BIBS || mode == AppMode.CP
 
-    // Name/course/location are fixed at the moment a race is created and never editable again
-    // from here, in any state (fresh, started, stopped, or reset) — they're what the label's
-    // sync identity is built from (see RaceRepository.updateRaceDetails' own doc), and a race
-    // that needs a new name/course/location needs to actually be a new race (New Race), not a
+    // Name/course/location stay editable right up until the race genuinely starts a mode (a
+    // real *ModeStartedAtMillis, not merely "was created" or "this screen was opened") — before
+    // that, no history can exist yet for this race (see RaceRepository.updateRaceDetails' own
+    // doc), so there's nothing anywhere that could already depend on the old name/course baked
+    // into the label. Once started, they lock — a race that's already recording history and
+    // needs a different name/course/location needs to actually be a new race (New Race), not a
     // relaunch of this one via Reset + This Race. Bib range fields have no such identity
     // implication, so stay editable throughout, matching Number of runners' own pre-existing
     // "can genuinely still change right up to race start" reasoning — now extended to First bib
     // number too, since neither is part of the label.
-    val identityFieldsEnabled = existingRaceId == null && prefilled
+    val identityFieldsEnabled = prefilled && !raceIsActive
     val bibFieldsEnabled = prefilled
 
     val start = startText.toIntOrNull()
@@ -244,11 +247,11 @@ fun RaceDetailsScreen(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            if (existingRaceId != null) {
+            if (existingRaceId != null && raceIsActive) {
                 Text(
-                    "Race name, course, and location are fixed once a race is created — only " +
-                        "First bib number and Number of runners can be changed here. Start a " +
-                        "New Race for a different name, course, or location.",
+                    "Race name, course, and location are locked because this race has already " +
+                        "started — only First bib number and Number of runners can still be " +
+                        "changed here. Start a New Race for a different name, course, or location.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

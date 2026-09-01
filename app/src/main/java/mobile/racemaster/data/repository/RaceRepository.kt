@@ -47,11 +47,13 @@ class RaceRepository(
 
     // The date portion of the label is rebuilt from the race's original createdAtMillis, not
     // the edit time — the date is always auto-derived and fixed once the race is created.
-    // name/course/location are never actually *changed* by the caller (RaceDetailsScreen locks
-    // them read-only for an existing race — see its own doc) — this just writes back what was
-    // already there either way, so the label ends up identical to what it already was. Only
-    // bibsRangeStart/bibsRangeCount are ever genuinely different on a call here. serverUrl is
-    // untouched here — it's not on this screen (see
+    // name/course/location genuinely can change here now — RaceDetailsScreen only locks them
+    // once the race has actually started a mode (see its own identityFieldsEnabled doc); before
+    // that, no history can possibly exist for this race yet (every mode's own startXxxMode is
+    // what both sets its *ModeStartedAtMillis and inserts its first history row, in the same
+    // transaction), so nothing anywhere could already be referencing the old label. Only
+    // bibsRangeStart/bibsRangeCount are the sole fields a *started* race can still genuinely
+    // change here. serverUrl is untouched here — it's not on this screen (see
     // RaceDao.updateDetails). No Mule-inbox retagging needed on a rename (there used to be one
     // here) — MuleRepository.pushToServer now reads this race's own current label fresh from
     // RaceEntity on every attempt rather than tracking a separately-labeled mirrored copy, so a
