@@ -46,12 +46,24 @@ fun RaceHistoryScreen(
     // A separate dialog from pendingDelete above — an active race needs its stuck mode(s)
     // cleared first (see RaceRepository.forceResetActiveModes' own doc), not immediate deletion.
     var pendingForceReset by remember { mutableStateOf<HistoryItemUi.LocalRace?>(null) }
+    var pendingDeleteAllStale by remember { mutableStateOf(false) }
+    // Recomputed on every recomposition (a plain list scan, cheap) rather than a dedicated
+    // ViewModel StateFlow — see staleDeletionSummary's own doc.
+    val staleSummary = staleDeletionSummary(items)
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Past Races") },
                 navigationIcon = { TextButton(onClick = withClickSound(onBack)) { Text("Back") } },
+                actions = {
+                    // Hidden entirely rather than disabled when there's nothing to sweep — this
+                    // is an occasional maintenance action, not a primary control, and most
+                    // visits to this screen have zero stale items to offer.
+                    if (staleSummary.total > 0) {
+                        TextButton(onClick = withClickSound { pendingDeleteAllStale = true }) { Text("Delete stale") }
+                    }
+                },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },
@@ -229,6 +241,35 @@ fun RaceHistoryScreen(
             },
             dismissButton = {
                 TextButton(onClick = withClickSound { pendingMuleSourceDelete = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (pendingDeleteAllStale) {
+        AlertDialog(
+            onDismissRequest = { pendingDeleteAllStale = false },
+            title = { Text("Delete ${staleSummary.total} stale race${if (staleSummary.total == 1) "" else "s"}?") },
+            text = {
+                Text(
+                    listOfNotNull(
+                        "${staleSummary.localRaceCount} race(s) will be permanently deleted with their history."
+                            .takeIf { staleSummary.localRaceCount > 0 },
+                        "${staleSummary.muleSourceCount} pulled record set(s) will be removed locally " +
+                            "(still safely re-pullable from their source)."
+                            .takeIf { staleSummary.muleSourceCount > 0 },
+                    ).joinToString("\n\n"),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = withClickSound {
+                        viewModel.deleteAllStale()
+                        pendingDeleteAllStale = false
+                    },
+                ) { Text("Delete all", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = withClickSound { pendingDeleteAllStale = false }) { Text("Cancel") }
             },
         )
     }

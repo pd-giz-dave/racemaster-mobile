@@ -68,6 +68,33 @@ sealed interface HistoryItemUi {
 internal fun isSkippedAsStale(lastTouchedAtMillis: Long?, maxAgeDays: Int): Boolean =
     isRaceStale(lastTouchedAtMillis, maxAgeDays)
 
+// The bulk-delete counterpart to this screen's own per-item delete gating: a LocalRace is only
+// swept up while active (RaceRepository.deleteRace's own isRaceCurrentlyActive backstop would
+// silently no-op it anyway, same as single-item delete already defers to — see deleteAllStale's
+// own doc for why bulk delete doesn't route an active race through force-reset the way the
+// single-item delete button does); a MuleSource has no such guard, same as its own single-item
+// delete.
+internal fun HistoryItemUi.isStaleAndDeletable(): Boolean = when (this) {
+    is HistoryItemUi.LocalRace -> serverSyncSkippedAsStale && !isActive
+    is HistoryItemUi.MuleSource -> serverSyncSkippedAsStale
+}
+
+// What RaceHistoryScreen's "Delete stale" confirmation dialog shows — split by kind since the
+// two have genuinely different consequences (a race's history is gone for good; a Mule source
+// is just a local copy, safely re-pullable). Pulled out as a pure function, like
+// isSkippedAsStale above, so it's directly testable without the ViewModel's full Flow graph.
+internal data class StaleDeletionSummary(val localRaceCount: Int, val muleSourceCount: Int) {
+    val total: Int get() = localRaceCount + muleSourceCount
+}
+
+internal fun staleDeletionSummary(items: List<HistoryItemUi>): StaleDeletionSummary {
+    val deletable = items.filter { it.isStaleAndDeletable() }
+    return StaleDeletionSummary(
+        localRaceCount = deletable.count { it is HistoryItemUi.LocalRace },
+        muleSourceCount = deletable.count { it is HistoryItemUi.MuleSource },
+    )
+}
+
 private data class HistorySources(
     val races: List<RaceEntity>,
     val sourceSummaries: List<PulledSourceSummary>,
@@ -143,6 +170,24 @@ class RaceHistoryViewModel(
     // above has.
     fun deleteMuleSource(raceLabel: String, sourceDeviceId: String) {
         viewModelScope.launch { muleRepository.deleteSource(raceLabel, sourceDeviceId) }
+    }
+
+    // Bulk counterpart to deleteRace/deleteMuleSource above, for RaceHistoryScreen's own
+    // "Delete stale" action. Reads historyItems.value fresh at call time — not whatever
+    // snapshot the confirmation dialog was opened against — so an item that changed state
+    // (e.g. a race going active) while the dialog was up is decided correctly. An active
+    // LocalRace is simply skipped rather than routed through forceResetActiveModes the way
+    // the single-item delete button does — a bulk sweep isn't the moment to force-reset
+    // someone's still-running race out from under them.
+    fun deleteAllStale() {
+        viewModelScope.launch {
+            for (item in historyItems.value.filter { it.isStaleAndDeletable() }) {
+                when (item) {
+                    is HistoryItemUi.LocalRace -> raceRepository.deleteRace(item.id)
+                    is HistoryItemUi.MuleSource -> muleRepository.deleteSource(item.raceLabel, item.sourceDeviceId)
+                }
+            }
+        }
     }
 
     companion object {
