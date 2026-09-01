@@ -177,7 +177,7 @@ internal fun ConnectivityStatusText(uiState: MuleModeUiState) {
                         color = MaterialTheme.colorScheme.error,
                     )
                 } else {
-                    Text(healthText, style = MaterialTheme.typography.bodySmall)
+                    Text("$healthText — OK", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
