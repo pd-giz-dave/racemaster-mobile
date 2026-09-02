@@ -675,6 +675,12 @@ class PeripheralSyncService : Service() {
             // live in the field as a real, currently-connected browser session whose reads kept
             // succeeding the whole time this stayed stuck on "never".
             container.bluetoothStateRepository.recordWebAppSeen(device.address, isSink = false)
+            // Unconditional, unlike recordWebAppSeen above — every central (an ordinary Mule
+            // phone or the web app alike) always reads DEVICE_INFO on every poll tick, so this
+            // is the one hook point that lets a leaf device (which otherwise never sees who's
+            // connecting to it) show its own operator a plain "last polled" timestamp. See
+            // BluetoothStateRepository.lastPolledAtMillis's own doc.
+            container.bluetoothStateRepository.recordPolled()
             val info = DeviceInfo(
                 deviceId = deviceId,
                 raceLabel = servingState.raceLabel,

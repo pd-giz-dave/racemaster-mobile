@@ -61,6 +61,15 @@ data class ConnectHealth(
     }
 }
 
+/** What Time/Bibs/CP mode's own "am I actually being polled over BT" line is built from — see
+ *  [mobile.racemaster.ui.components.BtPollingStatusLine]. [advertisingWarning] (a definite, actively-detected
+ *  failure — see [BluetoothStateRepository.advertisingWarning]'s own doc) takes priority when
+ *  present; otherwise [lastPolledAtMillis] is shown plain, same "operator judges staleness by
+ *  eye" reasoning as every other "last X" timestamp in this app. Bundled into one class (rather
+ *  than each mode's UiState combining the two repository flows itself) so that combining and
+ *  the display logic both live in one place. */
+data class BtPollingStatus(val advertisingWarning: String? = null, val lastPolledAtMillis: Long? = null)
+
 /** Whether the device's Bluetooth radio is currently on — checked before starting a Kable
  *  scan, since scanning with it off throws (com.juul.kable.UnmetRequirementException)
  *  instead of just failing, and Kable's own reconnection handling doesn't cover "the radio
@@ -101,6 +110,24 @@ class BluetoothStateRepository(private val context: Context) {
             advertisingWarningFlow.value =
                 "Not visible to nearby devices — if turning Bluetooth off/on doesn't fix it, restart the phone"
         }
+    }
+
+    private val lastPolledAtMillisFlow = MutableStateFlow<Long?>(null)
+
+    /** Null until any central (an ordinary Mule phone or the web app alike — unlike
+     *  [lastWebAppSeenAtMillis], this is never scoped to one identified address) has read this
+     *  device's own DEVICE_INFO characteristic at least once this process's life; the timestamp
+     *  of the most recent read after that. What lets a Time/Bibs/CP phone — which only ever
+     *  acts as a BLE peripheral, so it otherwise has zero visibility into whether anyone is
+     *  actually polling it — show the operator a plain "last polled" timestamp to judge
+     *  staleness by eye, the same way [lastWebAppSeenAtMillis] already lets Mule Mode judge the
+     *  web app specifically (see that field's own doc for why a plain timestamp, not a computed
+     *  live "stopped" state, is this app's established way of surfacing this). */
+    val lastPolledAtMillis: StateFlow<Long?> = lastPolledAtMillisFlow.asStateFlow()
+
+    /** Called on every DEVICE_INFO read, from any central — see [lastPolledAtMillis]'s own doc. */
+    fun recordPolled() {
+        lastPolledAtMillisFlow.value = System.currentTimeMillis()
     }
 
     // Identified by either PullRequest.isSink or AckPayload.isSink (see recordWebAppSeen/

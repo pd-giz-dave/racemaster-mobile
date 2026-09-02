@@ -101,7 +101,20 @@ Time mode also records time-of-day for all its  actions, this means an appropria
       ServerStatusRepository.lastOnlineAtMillis. First tried appending this to the always-visible
       green app banner instead — reverted after it pushed the banner's title into wrapping onto
       two lines on a real device; the banner's own dot-only indicator is unchanged.)
-- [ ] provide feedback that we are being polled via BT (so user can see if BT has failed - which seems to be common)
-      for bt there are 2 scenarios: bt was in use and has stopped, bt was never in use, the user knows if bt is expected to be working or not,
-      so maybe an option that says "i expect to be polled" so no polling is an error
-
+- [x] in all non mule modes provide feedback that we are being polled via BT (so user can see if BT has failed - which seems to be common)
+      the objective is to let a user know bt polling has stopped and suggest a bt on/off cycle,
+      can that be automated
+      (done: a "Last polled by BT: HH:MM" line on Time/Bibs/CP's own header (same slot
+      ServerStatusLine already occupies) — see ui/components/BtPollingStatusLine.kt.
+      BluetoothStateRepository.lastPolledAtMillis is bumped unconditionally on every
+      DEVICE_INFO read in PeripheralSyncService, regardless of which central reads it (an
+      ordinary Mule or the web app), unlike the existing web-app-scoped lastWebAppSeenAtMillis
+      — a leaf device previously had zero visibility into being polled by an ordinary Mule at
+      all. Shows BluetoothStateRepository.advertisingWarning instead when that's set (a
+      definite, already-detected wedged-advertiser failure), otherwise the plain timestamp,
+      same "operator judges staleness by eye" approach as every other "last X" line in this
+      app, deliberately not a computed live "stopped" state (would need its own ticker).
+      Automating a real BT on/off cycle turned out not to be possible from app code at all on
+      modern Android (no public API for a non-privileged app to toggle the system radio) —
+      left undone; advertisingWarning's own message already tells the operator to try that
+      manually, or restart the phone, in system Settings.)

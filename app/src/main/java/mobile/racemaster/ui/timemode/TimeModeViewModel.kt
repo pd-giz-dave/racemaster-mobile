@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.HistoryAction
+import mobile.racemaster.data.mule.BluetoothStateRepository
+import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.data.mule.ServerStatus
 import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.mule.ServerStatusState
@@ -71,6 +73,7 @@ class TimeModeViewModel(
     private val raceRepository: RaceRepository,
     settingsRepository: SettingsRepository,
     private val serverStatusRepository: ServerStatusRepository,
+    bluetoothStateRepository: BluetoothStateRepository,
     private val beeper: Beeper,
 ) : ViewModel() {
 
@@ -79,6 +82,14 @@ class TimeModeViewModel(
 
     val deviceName: StateFlow<String?> = settingsRepository.deviceName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    // Device-wide, not tied to whether a race is selected — same reasoning as deviceName above;
+    // whether this phone is actually being polled over BT has nothing to do with race state.
+    val btPollingStatus: StateFlow<BtPollingStatus> = combine(
+        bluetoothStateRepository.advertisingWarning,
+        bluetoothStateRepository.lastPolledAtMillis,
+        ::BtPollingStatus,
+    ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BtPollingStatus())
 
     val uiState: StateFlow<TimeModeUiState> = raceIdFlow
         .flatMapLatest { raceId ->
@@ -195,6 +206,7 @@ class TimeModeViewModel(
                     container.raceRepository,
                     container.settingsRepository,
                     container.serverStatusRepository,
+                    container.bluetoothStateRepository,
                     Beeper(applicationContext()),
                 )
             }

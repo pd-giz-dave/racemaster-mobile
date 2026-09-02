@@ -37,6 +37,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.MainActivity
 import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
 import mobile.racemaster.data.db.entity.HistoryAction
+import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.ui.components.ActionPickerDialog
 import mobile.racemaster.ui.components.DigitKeypad
 import mobile.racemaster.ui.components.EntryLogList
@@ -65,6 +66,7 @@ fun BibsModeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
+    val btPollingStatus by viewModel.btPollingStatus.collectAsStateWithLifecycle()
 
     // Same external HID trigger mechanism Time Mode uses (MainActivity.onExternalSplitTrigger),
     // registered here while Bibs Mode is on screen so a volume button (or any other recognized
@@ -97,6 +99,7 @@ fun BibsModeScreen(
         BibsModeContent(
             uiState = uiState,
             deviceName = deviceName,
+            btPollingStatus = btPollingStatus,
             onStart = viewModel::startBibsMode,
             onDigit = viewModel::onDigit,
             onBackspace = viewModel::onBackspace,
@@ -120,6 +123,7 @@ fun BibsModeScreen(
 private fun BibsModeContent(
     uiState: BibsModeUiState,
     deviceName: String?,
+    btPollingStatus: BtPollingStatus,
     onStart: () -> Unit,
     onDigit: (Int) -> Unit,
     onBackspace: () -> Unit,
@@ -184,6 +188,7 @@ private fun BibsModeContent(
                     duplicateBibNumbers = uiState.duplicateBibNumbers,
                     outstandingBibs = uiState.outstandingBibs,
                     serverStatus = uiState.serverStatus,
+                    btPollingStatus = btPollingStatus,
                 )
                 if (!uiState.started) {
                     // Nothing recorded yet for this segment (a fresh race, a race switched

@@ -36,7 +36,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.MainActivity
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.formatSplitRef
+import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.ui.bibsmode.displayName
+import mobile.racemaster.ui.components.BtPollingStatusLine
 import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.ServerStatusLine
 import mobile.racemaster.ui.components.SplitRow
@@ -58,6 +60,7 @@ fun TimeModeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
+    val btPollingStatus by viewModel.btPollingStatus.collectAsStateWithLifecycle()
 
     // Registers this screen's main action as the target for an external USB/Bluetooth trigger
     // (see MainActivity.onExternalSplitTrigger) while it's on screen — mirrors the big on-screen
@@ -95,6 +98,7 @@ fun TimeModeScreen(
         TimeModeContent(
             uiState = uiState,
             deviceName = deviceName,
+            btPollingStatus = btPollingStatus,
             onStart = viewModel::startStopwatch,
             onSplit = viewModel::recordSplit,
             onStop = viewModel::stopStopwatch,
@@ -114,6 +118,7 @@ fun TimeModeScreen(
 private fun TimeModeContent(
     uiState: TimeModeUiState,
     deviceName: String?,
+    btPollingStatus: BtPollingStatus,
     onStart: () -> Unit,
     onSplit: () -> Unit,
     onStop: () -> Unit,
@@ -159,6 +164,7 @@ private fun TimeModeContent(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 ServerStatusLine(uiState.serverStatus)
+                BtPollingStatusLine(btPollingStatus)
                 if (!deviceName.isNullOrBlank()) {
                     Text(text = "Device name: $deviceName", style = MaterialTheme.typography.labelMedium)
                 }

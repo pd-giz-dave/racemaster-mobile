@@ -32,6 +32,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.MainActivity
 import mobile.racemaster.data.db.entity.HistoryAction
+import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.ui.components.DigitKeypad
 import mobile.racemaster.ui.components.EntryLogList
 import mobile.racemaster.ui.components.EntryModeHeaderInfo
@@ -66,6 +67,7 @@ fun CpModeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
+    val btPollingStatus by viewModel.btPollingStatus.collectAsStateWithLifecycle()
 
     // Same external HID trigger mechanism Time/Bibs Mode use (MainActivity.onExternalSplitTrigger)
     // — a volume button (or any other recognized HID key) logs a Pass, CP's primary action,
@@ -97,6 +99,7 @@ fun CpModeScreen(
         CpModeContent(
             uiState = uiState,
             deviceName = deviceName,
+            btPollingStatus = btPollingStatus,
             onStart = viewModel::startCpMode,
             onDigit = viewModel::onDigit,
             onBackspace = viewModel::onBackspace,
@@ -120,6 +123,7 @@ fun CpModeScreen(
 private fun CpModeContent(
     uiState: CpModeUiState,
     deviceName: String?,
+    btPollingStatus: BtPollingStatus,
     onStart: () -> Unit,
     onDigit: (Int) -> Unit,
     onBackspace: () -> Unit,
@@ -163,6 +167,7 @@ private fun CpModeContent(
                     duplicateBibNumbers = uiState.duplicateBibNumbers,
                     outstandingBibs = uiState.outstandingBibs,
                     serverStatus = uiState.serverStatus,
+                    btPollingStatus = btPollingStatus,
                 )
                 if (!uiState.started) {
                     // Nothing recorded yet for this segment (a fresh race, a race switched

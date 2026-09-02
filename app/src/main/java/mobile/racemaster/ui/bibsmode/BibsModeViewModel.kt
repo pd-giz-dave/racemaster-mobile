@@ -9,6 +9,8 @@ import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.RaceEntity
+import mobile.racemaster.data.mule.BluetoothStateRepository
+import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.data.mule.ServerStatus
 import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.mule.ServerStatusState
@@ -92,6 +94,7 @@ class BibsModeViewModel(
     private val raceRepository: RaceRepository,
     settingsRepository: SettingsRepository,
     private val serverStatusRepository: ServerStatusRepository,
+    bluetoothStateRepository: BluetoothStateRepository,
     private val beeper: Beeper,
 ) : ViewModel() {
 
@@ -100,6 +103,13 @@ class BibsModeViewModel(
 
     val deviceName: StateFlow<String?> = settingsRepository.deviceName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    // See TimeModeViewModel.btPollingStatus's own doc — device-wide, not tied to race selection.
+    val btPollingStatus: StateFlow<BtPollingStatus> = combine(
+        bluetoothStateRepository.advertisingWarning,
+        bluetoothStateRepository.lastPolledAtMillis,
+        ::BtPollingStatus,
+    ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BtPollingStatus())
 
     private val digitsFlow = MutableStateFlow("")
     private val pendingTypeFlow = MutableStateFlow(HistoryAction.FINISH)
@@ -244,6 +254,7 @@ class BibsModeViewModel(
                     container.raceRepository,
                     container.settingsRepository,
                     container.serverStatusRepository,
+                    container.bluetoothStateRepository,
                     Beeper(applicationContext()),
                 )
             }
