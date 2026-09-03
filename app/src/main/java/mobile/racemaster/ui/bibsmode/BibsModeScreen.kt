@@ -1,6 +1,5 @@
 package mobile.racemaster.ui.bibsmode
 
-import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -23,19 +22,15 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import mobile.racemaster.MainActivity
-import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.ui.components.ActionPickerDialog
@@ -51,8 +46,8 @@ import mobile.racemaster.util.withClickSound
 private const val BUTTON_HEIGHT_DP = 48
 
 // Default Material button horizontal padding (24dp/side) leaves almost no room for text once
-// four buttons share a row — cut it down instead of shrinking the font, so labels like
-// "Finish"/"Seniors" stay readable.
+// three buttons share a row — cut it down instead of shrinking the font, so labels like
+// "Event"/"Stopped" stay readable.
 private val BUTTON_ROW_CONTENT_PADDING = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -68,16 +63,8 @@ fun BibsModeScreen(
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     val btPollingStatus by viewModel.btPollingStatus.collectAsStateWithLifecycle()
 
-    // Same external HID trigger mechanism Time Mode uses (MainActivity.onExternalSplitTrigger),
-    // registered here while Bibs Mode is on screen so a volume button (or any other recognized
-    // HID key) logs the pending event exactly like tapping the Log button.
-    val activity = LocalActivity.current as MainActivity
-    val currentOnSubmit by rememberUpdatedState(viewModel::submit)
-    val canExternalTrigger by rememberUpdatedState(uiState.canSubmit)
-    DisposableEffect(activity) {
-        activity.onExternalSplitTrigger = { if (canExternalTrigger) currentOnSubmit() }
-        onDispose { activity.onExternalSplitTrigger = null }
-    }
+    // No external HID trigger here (unlike Time Mode) — entry is now bib-driven/auto-saving
+    // rather than a single "log the pending event" action a volume button could stand in for.
 
     Scaffold(
         topBar = {
@@ -104,8 +91,7 @@ fun BibsModeScreen(
             onDigit = viewModel::onDigit,
             onBackspace = viewModel::onBackspace,
             onClear = viewModel::onClear,
-            onSetPendingEventType = viewModel::setPendingEventType,
-            onSubmit = viewModel::submit,
+            onEventTypeSelected = viewModel::onEventTypeSelected,
             onStop = viewModel::stopBibsMode,
             onReset = viewModel::resetBibsMode,
             onUndo = viewModel::undoLast,
@@ -128,8 +114,7 @@ private fun BibsModeContent(
     onDigit: (Int) -> Unit,
     onBackspace: () -> Unit,
     onClear: () -> Unit,
-    onSetPendingEventType: (HistoryAction) -> Unit,
-    onSubmit: () -> Unit,
+    onEventTypeSelected: (HistoryAction) -> Unit,
     onStop: () -> Unit,
     onReset: () -> Unit,
     onUndo: () -> Unit,
@@ -205,32 +190,33 @@ private fun BibsModeContent(
                     ) { Text("START", style = MaterialTheme.typography.displaySmall) }
                 } else {
                     Text(
-                        text = if (uiState.pendingEventType in BIB_REQUIRED_ACTIONS) {
-                            uiState.currentDigits.ifEmpty { "Enter bib" }
-                        } else {
-                            uiState.pendingEventType.displayName()
-                        },
+                        text = uiState.currentDigits.ifEmpty { "Enter bib" },
                         style = MaterialTheme.typography.headlineSmall,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth(),
                     )
 
                     DigitKeypad(
-                        onDigit = onDigit,
+                        // A digit tap may be the 3rd one, which auto-saves — trigger the list's
+                        // click guard here, before that async save, same as every other
+                        // record-triggering tap (see ListClickGuard's own doc for why it must be
+                        // this early).
+                        onDigit = { digit -> listClickGuard.trigger(); onDigit(digit) },
                         onBackspace = onBackspace,
                         onClear = onClear,
-                        enabled = uiState.raceId != null,
+                        // Stopped disables entry entirely — a digit reaching 3 auto-saves (see
+                        // BibsModeViewModel.onDigit), so with no separate Submit button left to
+                        // gate, the keypad itself is what must stay disabled once stopped,
+                        // matching Event's own `!uiState.stopped` below.
+                        enabled = uiState.raceId != null && !uiState.stopped,
                         buttonHeight = 52.dp,
                         spacing = 4.dp,
                     )
 
+                    // No Submit/Finish button — every bib auto-saves as a Finish the moment its
+                    // 3rd digit is typed (see BibsModeViewModel.onDigit); Event is what corrects
+                    // it afterward if it wasn't actually a finish.
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Button(
-                            onClick = withClickSound { listClickGuard.trigger(); onSubmit() },
-                            enabled = uiState.canSubmit,
-                            contentPadding = BUTTON_ROW_CONTENT_PADDING,
-                            modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
-                        ) { Text(uiState.pendingEventType.displayName()) }
                         OutlinedButton(
                             onClick = withClickSound { showEventPicker = true },
                             enabled = uiState.raceId != null && !uiState.stopped,
@@ -256,10 +242,11 @@ private fun BibsModeContent(
 
                     if (showEventPicker) {
                         ActionPickerDialog(
-                            options = EVENT_PICKER_OPTIONS,
-                            current = uiState.pendingEventType,
+                            options = uiState.eventOptions,
+                            current = uiState.entries.firstOrNull()?.type ?: HistoryAction.FINISH,
                             onSelect = { type ->
-                                onSetPendingEventType(type)
+                                listClickGuard.trigger()
+                                onEventTypeSelected(type)
                                 showEventPicker = false
                             },
                             onDismiss = { showEventPicker = false },

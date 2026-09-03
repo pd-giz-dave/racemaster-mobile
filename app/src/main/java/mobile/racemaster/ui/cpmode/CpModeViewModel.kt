@@ -62,10 +62,10 @@ data class CpModeUiState(
     val nextSplitNumber: Int = 1,
     val dupCount: Int = 0,
     val entries: List<EntryLogUi> = emptyList(),
-    // True once a bib is entered — both of CP's two actions (Pass, Retire) always require one,
-    // unlike Bibs' Submit button whose enablement depends on whichever pending type is
-    // currently selected.
-    val canSubmit: Boolean = false,
+    // True only immediately after this device auto-saved the currently-displayed bib as a Pass
+    // (see CpModeViewModel.canRetagFlow) — gates the Retire button, which now retags that entry
+    // in place rather than submitting a fresh one.
+    val canRetag: Boolean = false,
     val canUndo: Boolean = false,
     val stopped: Boolean = false,
     val raceInProgress: Boolean = false,
@@ -106,6 +106,10 @@ class CpModeViewModel(
     ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BtPollingStatus())
 
     private val digitsFlow = MutableStateFlow("")
+    // See BibsModeViewModel's own doc for both of these — same state machine, just with PASS/
+    // RETIRE in place of FINISH/the Event picker.
+    private val digitsFrozenFlow = MutableStateFlow(false)
+    private val canRetagFlow = MutableStateFlow(false)
 
     private val raceAndEntriesFlow = raceIdFlow.flatMapLatest { raceId ->
         if (raceId == null) {
@@ -132,7 +136,8 @@ class CpModeViewModel(
     val uiState: StateFlow<CpModeUiState> = combine(
         raceAndEntriesFlow,
         digitsFlow,
-    ) { context, digits ->
+        canRetagFlow,
+    ) { context, digits, canRetag ->
         val (race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync, serverStatus) = context
         val dupRefs = findDuplicateSplitRefs(entries)
         val outstanding = outstandingBibs(entries, race?.bibsRangeStart, race?.bibsRangeCount)
@@ -156,7 +161,7 @@ class CpModeViewModel(
                     rangeWarning = rangeWarningMessage(it.bibNumber, race?.bibsRangeStart, race?.bibsRangeCount),
                 )
             },
-            canSubmit = race != null && race.cpModeStoppedAtMillis == null && digits.isNotEmpty(),
+            canRetag = canRetag,
             canUndo = entries.hasRealEntries(),
             stopped = race?.cpModeStoppedAtMillis != null,
             raceInProgress = isRaceInProgress(
@@ -183,35 +188,67 @@ class CpModeViewModel(
         viewModelScope.launch { cpModeRepository.startCpMode(raceId) }
     }
 
+    // Auto-saves as a PASS the moment the 3rd digit is typed — see BibsModeViewModel.onDigit's
+    // own doc for the identical reasoning/state machine (digitsFrozenFlow/canRetagFlow), applied
+    // here with PASS in place of FINISH and no Event picker (CP only ever needs the one
+    // alternative, RETIRE — see retagLastToRetire).
     fun onDigit(digit: Int) {
+        if (digitsFrozenFlow.value) {
+            digitsFlow.value = ""
+            digitsFrozenFlow.value = false
+            canRetagFlow.value = false
+        }
         if (digitsFlow.value.length >= MAX_BIB_DIGITS) return
         digitsFlow.value += digit.toString()
+        if (digitsFlow.value.length == MAX_BIB_DIGITS) {
+            val raceId = raceIdFlow.value ?: return
+            val bib = digitsFlow.value.toIntOrNull() ?: return
+            viewModelScope.launch {
+                cpModeRepository.recordEntry(raceId, HistoryAction.PASS, bib, note = null)
+                digitsFrozenFlow.value = true
+                canRetagFlow.value = true
+                beeper.beep()
+            }
+        }
     }
 
     fun onBackspace() {
+        if (digitsFrozenFlow.value) { onClear(); return }
         digitsFlow.value = digitsFlow.value.dropLast(1)
     }
 
     fun onClear() {
         digitsFlow.value = ""
+        digitsFrozenFlow.value = false
+        canRetagFlow.value = false
     }
 
-    // [action] is HistoryAction.PASS or HistoryAction.RETIRE, whichever button was tapped —
-    // both always need the bib currently entered, unlike Bibs' submit() which stages a pending
-    // type first (see CpModeScreen for why CP's two fixed buttons don't need that staging step).
-    fun submit(action: HistoryAction) {
-        val raceId = raceIdFlow.value ?: return
-        val bib = digitsFlow.value.toIntOrNull() ?: return
+    // Retags the just-auto-saved Pass into a Retire, keeping its bib — only callable while
+    // canRetagFlow is true (the Retire button is disabled otherwise, see CpModeScreen). Makes a
+    // Retire 4 keystrokes total (3 digits + this tap) instead of the old flow's 4 typed digits
+    // plus a separate Retire tap that re-read the keypad.
+    fun retagLastToRetire() {
+        if (!canRetagFlow.value) return
         viewModelScope.launch {
-            cpModeRepository.recordEntry(raceId, action, bib, note = null)
+            val targetId = uiState.value.entries.firstOrNull()?.id ?: return@launch
+            val bib = digitsFlow.value.toIntOrNull()
+            cpModeRepository.updateEntry(targetId, bib, HistoryAction.RETIRE, note = null)
             digitsFlow.value = ""
+            digitsFrozenFlow.value = false
+            canRetagFlow.value = false
             beeper.beep()
         }
     }
 
     fun undoLast() {
         val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch { cpModeRepository.undoMostRecent(raceId) }
+        val undoneBib = uiState.value.entries.firstOrNull()?.bibNumber
+        viewModelScope.launch {
+            cpModeRepository.undoMostRecent(raceId)
+            digitsFlow.value = undoneBib?.let { it.toString().padStart(MAX_BIB_DIGITS, '0') }.orEmpty()
+            digitsFrozenFlow.value = undoneBib != null
+            canRetagFlow.value = false
+        }
     }
 
     fun stopCpMode() {

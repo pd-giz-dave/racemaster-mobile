@@ -274,6 +274,18 @@ fun RaceDetailsScreen(
                             if (state.isFocused) scope.launch { startFieldRequester.bringIntoView() }
                         },
                 )
+                // A non-blocking reminder, not a validation error — start is already a legal
+                // bib number here, but Bibs/CP Mode's own entry keypad always assumes exactly 3
+                // digits per bib (see BibsModeViewModel/CpModeViewModel.onDigit's auto-save on
+                // the 3rd digit), so anything under 100 must be typed with leading zeros there
+                // or it'll never reach that 3rd digit.
+                if (start != null && start in MIN_BIB_NUMBER until 100) {
+                    Text(
+                        "Bibs below 100 must be entered with leading zeros (e.g. 007) in Bibs Mode and CP Mode, to keep every bib exactly 3 digits.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 val countFieldRequester = remember { BringIntoViewRequester() }
                 OutlinedTextField(
                     value = countText,

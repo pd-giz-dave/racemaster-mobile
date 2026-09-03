@@ -1,5 +1,6 @@
 package mobile.racemaster.ui.bibsmode
 
+import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
 import mobile.racemaster.data.db.entity.HistoryAction
 
 fun HistoryAction.displayName(): String = when (this) {
@@ -45,3 +46,9 @@ val EVENT_PICKER_OPTIONS: List<HistoryAction> = listOf(
 // CP Mode's own, much smaller picker — offered only when editing an existing entry (its main
 // entry flow has PASS/RETIRE as fixed buttons, no picker at all — see CpModeScreen).
 val CP_ACTION_OPTIONS: List<HistoryAction> = listOf(HistoryAction.PASS, HistoryAction.RETIRE)
+
+// Bibs Mode's Event button offers this narrower list instead of the full EVENT_PICKER_OPTIONS
+// whenever there's no just-auto-saved entry to retag (see BibsModeViewModel.canRetagFlow) —
+// none of these carry a bib, so they're the only types that still make sense to log as a
+// standalone entry with nothing typed in the keypad.
+val BIBS_STANDALONE_OPTIONS: List<HistoryAction> = EVENT_PICKER_OPTIONS.filterNot { it in BIB_REQUIRED_ACTIONS }

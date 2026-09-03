@@ -62,11 +62,13 @@ data class BibsModeUiState(
     // from, even though Start still writes one.
     val started: Boolean = false,
     val currentDigits: String = "",
-    val pendingEventType: HistoryAction = HistoryAction.FINISH,
+    // Which options the Event button's picker should offer — EVENT_PICKER_OPTIONS while there's
+    // a just-auto-saved entry to retag, BIBS_STANDALONE_OPTIONS otherwise (see
+    // BibsModeViewModel.onEventTypeSelected's own doc).
+    val eventOptions: List<HistoryAction> = EVENT_PICKER_OPTIONS,
     val nextSplitNumber: Int = 1,
     val dupCount: Int = 0,
     val entries: List<EntryLogUi> = emptyList(),
-    val canSubmit: Boolean = false,
     val canUndo: Boolean = false,
     val stopped: Boolean = false,
     val raceInProgress: Boolean = false,
@@ -112,7 +114,16 @@ class BibsModeViewModel(
     ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BtPollingStatus())
 
     private val digitsFlow = MutableStateFlow("")
-    private val pendingTypeFlow = MutableStateFlow(HistoryAction.FINISH)
+    // True whenever the digits currently on screen are already committed (either just
+    // auto-saved, or redisplayed by undoLast) rather than mid-entry — the next onDigit call
+    // clears them first instead of appending. Kept separate from canRetagFlow below: an
+    // undo-repopulated bib is frozen for display purposes but isn't a live entry Event can
+    // retag.
+    private val digitsFrozenFlow = MutableStateFlow(false)
+    // True only immediately after this device's own auto-save (never after undoLast) — gates
+    // whether the Event button's selection retags that just-saved entry or logs a fresh
+    // standalone one (see onEventTypeSelected).
+    private val canRetagFlow = MutableStateFlow(false)
 
     private val raceAndEntriesFlow = raceIdFlow.flatMapLatest { raceId ->
         if (raceId == null) {
@@ -139,11 +150,10 @@ class BibsModeViewModel(
     val uiState: StateFlow<BibsModeUiState> = combine(
         raceAndEntriesFlow,
         digitsFlow,
-        pendingTypeFlow,
-    ) { context, digits, pendingType ->
+        canRetagFlow,
+    ) { context, digits, canRetag ->
         val (race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync, serverStatus) = context
         val dupRefs = findDuplicateSplitRefs(entries)
-        val needsBib = pendingType in BIB_REQUIRED_ACTIONS
         val outstanding = outstandingBibs(entries, race?.bibsRangeStart, race?.bibsRangeCount)
         BibsModeUiState(
             raceId = race?.id,
@@ -151,7 +161,7 @@ class BibsModeViewModel(
             raceLocation = race?.location.orEmpty(),
             started = race?.bibsModeStartedAtMillis != null,
             currentDigits = digits,
-            pendingEventType = pendingType,
+            eventOptions = if (canRetag) EVENT_PICKER_OPTIONS else BIBS_STANDALONE_OPTIONS,
             nextSplitNumber = race?.bibsModeNextSplit ?: 1,
             dupCount = countDuplicateExtras(entries),
             entries = entries.map {
@@ -166,7 +176,6 @@ class BibsModeViewModel(
                     rangeWarning = rangeWarningMessage(it.bibNumber, race?.bibsRangeStart, race?.bibsRangeCount),
                 )
             },
-            canSubmit = race != null && race.bibsModeStoppedAtMillis == null && (if (needsBib) digits.isNotEmpty() else true),
             canUndo = entries.hasRealEntries(),
             stopped = race?.bibsModeStoppedAtMillis != null,
             raceInProgress = isRaceInProgress(
@@ -193,40 +202,86 @@ class BibsModeViewModel(
         viewModelScope.launch { bibsModeRepository.startBibsMode(raceId) }
     }
 
+    // A fresh digit always starts a new entry — if the digits on screen are a frozen (already
+    // committed, or undo-repopulated) value, clear them first rather than appending onto a
+    // number that's already 3 digits long. Reaching the 3rd digit immediately auto-saves it as
+    // a FINISH (see this file's own doc / TODO.md's "Re-jig bibs mode" for why): the vast
+    // majority of entries are ordinary finishes, and a wrong guess is one Event tap away from
+    // being corrected via onEventTypeSelected rather than costing an extra keystroke on every
+    // single entry.
     fun onDigit(digit: Int) {
+        if (digitsFrozenFlow.value) {
+            digitsFlow.value = ""
+            digitsFrozenFlow.value = false
+            canRetagFlow.value = false
+        }
         if (digitsFlow.value.length >= MAX_BIB_DIGITS) return
         digitsFlow.value += digit.toString()
+        if (digitsFlow.value.length == MAX_BIB_DIGITS) {
+            val raceId = raceIdFlow.value ?: return
+            val bib = digitsFlow.value.toIntOrNull() ?: return
+            viewModelScope.launch {
+                bibsModeRepository.recordEntry(raceId, HistoryAction.FINISH, bib, note = null)
+                digitsFrozenFlow.value = true
+                canRetagFlow.value = true
+                beeper.beep()
+            }
+        }
     }
 
     fun onBackspace() {
+        // A frozen value has already been saved — there's nothing left to edit character by
+        // character, so treat Backspace the same as Clear rather than lopping a digit off an
+        // already-committed number.
+        if (digitsFrozenFlow.value) { onClear(); return }
         digitsFlow.value = digitsFlow.value.dropLast(1)
     }
 
     fun onClear() {
         digitsFlow.value = ""
+        digitsFrozenFlow.value = false
+        canRetagFlow.value = false
     }
 
-    fun setPendingEventType(type: HistoryAction) {
-        pendingTypeFlow.value = type
-        if (type !in BIB_REQUIRED_ACTIONS) digitsFlow.value = ""
-    }
-
-    fun submit() {
+    // Bibs' Event button is dual-purpose depending on whether there's a just-auto-saved entry
+    // on screen (see canRetagFlow): with one, the picked type retags that entry in place
+    // (keeping its bib if the new type still needs one, e.g. Finish -> Retire) — this is what
+    // makes a non-finish entry only 5 keystrokes (3 digits + Event + the picked type) instead of
+    // the old flow's 6. With no pending entry (nothing typed, or just cleared/undone), the
+    // picker instead only offers BIBS_STANDALONE_OPTIONS and logs a fresh, bib-less marker entry
+    // immediately — the same standalone marker logging the old pendingType-then-Submit flow gave
+    // Seniors/Juniors/Male/Female/Ignore.
+    fun onEventTypeSelected(type: HistoryAction) {
         val raceId = raceIdFlow.value ?: return
-        val type = pendingTypeFlow.value
-        val needsBib = type in BIB_REQUIRED_ACTIONS
-        val bib = if (needsBib) digitsFlow.value.toIntOrNull() ?: return else null
         viewModelScope.launch {
-            bibsModeRepository.recordEntry(raceId, type, bib, note = null)
+            if (canRetagFlow.value) {
+                val targetId = uiState.value.entries.firstOrNull()?.id ?: return@launch
+                val needsBib = type in BIB_REQUIRED_ACTIONS
+                val bib = if (needsBib) digitsFlow.value.toIntOrNull() else null
+                bibsModeRepository.updateEntry(targetId, bib, type, note = null)
+            } else {
+                bibsModeRepository.recordEntry(raceId, type, bibNumber = null, note = null)
+            }
             digitsFlow.value = ""
-            pendingTypeFlow.value = HistoryAction.FINISH
+            digitsFrozenFlow.value = false
+            canRetagFlow.value = false
             beeper.beep()
         }
     }
 
     fun undoLast() {
         val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch { bibsModeRepository.undoMostRecent(raceId) }
+        // Snapshotted before the undo call so the just-undone row's own bib (rather than
+        // whatever becomes newly topmost afterward) is what comes back into the entry field —
+        // "instant feedback of the last number accepted" per TODO.md. Never retag-able (there's
+        // nothing live left to retag once it's undone), so canRetagFlow stays false.
+        val undoneBib = uiState.value.entries.firstOrNull()?.bibNumber
+        viewModelScope.launch {
+            bibsModeRepository.undoMostRecent(raceId)
+            digitsFlow.value = undoneBib?.let { it.toString().padStart(MAX_BIB_DIGITS, '0') }.orEmpty()
+            digitsFrozenFlow.value = undoneBib != null
+            canRetagFlow.value = false
+        }
     }
 
     fun stopBibsMode() {

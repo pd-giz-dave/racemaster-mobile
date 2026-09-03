@@ -1,6 +1,5 @@
 package mobile.racemaster.ui.cpmode
 
-import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -22,16 +21,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import mobile.racemaster.MainActivity
-import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.ui.components.DigitKeypad
 import mobile.racemaster.ui.components.EntryLogList
@@ -45,17 +40,17 @@ import mobile.racemaster.util.withClickSound
 private const val BUTTON_HEIGHT_DP = 48
 
 // Default Material button horizontal padding (24dp/side) leaves almost no room for text once
-// four buttons share a row — cut it down instead of shrinking the font, matching Bibs Mode's
+// three buttons share a row — cut it down instead of shrinking the font, matching Bibs Mode's
 // own identical row.
 private val BUTTON_ROW_CONTENT_PADDING = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
 
 /** CP Mode's screen — structurally the same as Bibs Mode's (same header, keypad, entry list,
- *  all reused via the shared `ui/components` composables), differing only in its fixed
- *  Pass/Retire button pair in place of Bibs' dynamic Submit-plus-Event-picker: CP has exactly
- *  two possible actions, so each gets its own always-visible button that submits directly
- *  rather than staging a "pending type" first. Editing an already-recorded entry navigates to
- *  the shared [mobile.racemaster.ui.editentry.EditEntryScreen] rather than composing an editor
- *  inline (see that screen's own doc for why). */
+ *  all reused via the shared `ui/components` composables) and the same auto-save-on-3-digits
+ *  entry flow (see CpModeViewModel.onDigit), differing only in its single fixed Retire button
+ *  in place of Bibs' Event picker: CP has exactly one alternative to its auto-saved Pass, so it
+ *  gets its own always-visible button rather than a picker dialog. Editing an already-recorded
+ *  entry navigates to the shared [mobile.racemaster.ui.editentry.EditEntryScreen] rather than
+ *  composing an editor inline (see that screen's own doc for why). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CpModeScreen(
@@ -69,16 +64,8 @@ fun CpModeScreen(
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     val btPollingStatus by viewModel.btPollingStatus.collectAsStateWithLifecycle()
 
-    // Same external HID trigger mechanism Time/Bibs Mode use (MainActivity.onExternalSplitTrigger)
-    // — a volume button (or any other recognized HID key) logs a Pass, CP's primary action,
-    // exactly like tapping the Pass button.
-    val activity = LocalActivity.current as MainActivity
-    val currentOnPass by rememberUpdatedState { viewModel.submit(HistoryAction.PASS) }
-    val canExternalTrigger by rememberUpdatedState(uiState.canSubmit)
-    DisposableEffect(activity) {
-        activity.onExternalSplitTrigger = { if (canExternalTrigger) currentOnPass() }
-        onDispose { activity.onExternalSplitTrigger = null }
-    }
+    // No external HID trigger here (unlike Time Mode) — entry is now bib-driven/auto-saving
+    // rather than a single "log a Pass" action a volume button could stand in for.
 
     Scaffold(
         topBar = {
@@ -104,8 +91,7 @@ fun CpModeScreen(
             onDigit = viewModel::onDigit,
             onBackspace = viewModel::onBackspace,
             onClear = viewModel::onClear,
-            onPass = { viewModel.submit(HistoryAction.PASS) },
-            onRetire = { viewModel.submit(HistoryAction.RETIRE) },
+            onRetire = viewModel::retagLastToRetire,
             onStop = viewModel::stopCpMode,
             onReset = viewModel::resetCpMode,
             onUndo = viewModel::undoLast,
@@ -128,7 +114,6 @@ private fun CpModeContent(
     onDigit: (Int) -> Unit,
     onBackspace: () -> Unit,
     onClear: () -> Unit,
-    onPass: () -> Unit,
     onRetire: () -> Unit,
     onStop: () -> Unit,
     onReset: () -> Unit,
@@ -191,24 +176,27 @@ private fun CpModeContent(
                     )
 
                     DigitKeypad(
-                        onDigit = onDigit,
+                        // A digit tap may be the 3rd one, which auto-saves as a Pass — trigger
+                        // the list's click guard here, before that async save (see
+                        // ListClickGuard's own doc for why it must be this early).
+                        onDigit = { digit -> listClickGuard.trigger(); onDigit(digit) },
                         onBackspace = onBackspace,
                         onClear = onClear,
-                        enabled = uiState.raceId != null,
+                        // Stopped disables entry entirely — see BibsModeScreen's own doc for why
+                        // the keypad itself, not a separate Submit button, is what must gate this
+                        // now that a 3rd digit auto-saves.
+                        enabled = uiState.raceId != null && !uiState.stopped,
                         buttonHeight = 52.dp,
                         spacing = 4.dp,
                     )
 
+                    // No Pass button — every bib auto-saves as a Pass the moment its 3rd digit
+                    // is typed (see CpModeViewModel.onDigit). Retire retags that just-saved Pass
+                    // in place, so it's only enabled once there's one to retag.
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(
-                            onClick = withClickSound { listClickGuard.trigger(); onPass() },
-                            enabled = uiState.canSubmit,
-                            contentPadding = BUTTON_ROW_CONTENT_PADDING,
-                            modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
-                        ) { Text("Pass") }
-                        Button(
                             onClick = withClickSound { listClickGuard.trigger(); onRetire() },
-                            enabled = uiState.canSubmit,
+                            enabled = uiState.canRetag && !uiState.stopped,
                             contentPadding = BUTTON_ROW_CONTENT_PADDING,
                             modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
                         ) { Text("Retire") }

@@ -95,8 +95,9 @@ fun HelpScreen(onBack: () -> Unit) {
                     "Every race also records a location (e.g. \"Finish\", \"CP1\") so logs from " +
                     "different stations can be told apart, and matched up by position afterwards to " +
                     "produce finishing times per runner. The screen is kept on for the whole race, " +
-                    "and an external clicker can be used instead of tapping the screen so the " +
-                    "operator can keep their eyes on the finish line.",
+                    "and in Time Mode an external clicker can be used instead of tapping SPLIT so " +
+                    "the operator can keep their eyes on the finish line — see \"External triggers\" " +
+                    "below.",
             )
             HelpSection(
                 title = "Time Mode",
@@ -115,18 +116,25 @@ fun HelpScreen(onBack: () -> Unit) {
                     "there are — together these define the legal bib range for the race. A bib " +
                     "outside that range is allowed but flagged (see \"Bibs Mode — duplicates\" below) " +
                     "rather than rejected, the same way a duplicate is. A fixed \"Clock\" marker is " +
-                    "automatically recorded as split S0.",
+                    "automatically recorded as split S0. If the first bib number is below 100, bibs " +
+                    "in Bibs/CP Mode must still be typed as 3 digits with leading zeros (e.g. \"007\") " +
+                    "— see \"Bibs Mode — logging\" below for why.",
             )
             HelpSection(
                 title = "Bibs Mode — logging",
-                body = "Type a bib number on the keypad and tap the button below it to record it — the " +
-                    "button's own label always shows which event it's about to log, \"Finish\" by " +
-                    "default. Tap Event to change what the next tap will log: Finish, Start, Retire " +
-                    "(each needs a bib number), or Ignore/Seniors/Juniors/Male/Female (group-wide " +
-                    "markers that don't need a bib number — the keypad digits are cleared " +
-                    "automatically when one of these is chosen). After each log, the Event choice " +
-                    "resets back to Finish. The \"Next:\" line always shows the split number (as S1, " +
-                    "S2, and so on) the next entry will get.",
+                body = "Type a bib number on the keypad — as soon as its 3rd digit is entered it's " +
+                    "recorded automatically as a Finish, no separate button tap needed. That's why a " +
+                    "bib below 100 must still be typed with leading zeros (e.g. \"007\", not \"7\") — " +
+                    "nothing is recorded until 3 digits have been typed. The number stays showing on " +
+                    "screen afterwards so you can double-check it before moving on; typing the next " +
+                    "bib's first digit clears it automatically. If that entry wasn't actually a " +
+                    "Finish, tap Event straight after and pick the right one instead — Start, Retire " +
+                    "(both keep the bib just typed), or Ignore/Seniors/Juniors/Male/Female " +
+                    "(group-wide markers that don't need a bib number) — this corrects the entry you " +
+                    "just made rather than starting a new one. Tapping Event before typing any digits " +
+                    "instead logs one of those group-wide markers on its own, with no bib attached. " +
+                    "The \"Next:\" line always shows the split number (as S1, S2, and so on) the next " +
+                    "entry will get.",
             )
             HelpSection(
                 title = "Bibs Mode — duplicates and out-of-range bibs",
@@ -149,7 +157,7 @@ fun HelpScreen(onBack: () -> Unit) {
             )
             HelpSection(
                 title = "Bibs Mode — stop and reset",
-                body = "STOP freezes logging (the log button and Event are disabled) and frees up New " +
+                body = "STOP freezes logging (the keypad and Event are disabled) and frees up New " +
                     "Race — this records a \"Stop\" marker (shown as S–, not a numbered split) that can " +
                     "be undone to resume logging. Once stopped, the same button becomes RESET, which " +
                     "wipes every bib entry and returns to the same Start-button screen a freshly " +
@@ -160,14 +168,17 @@ fun HelpScreen(onBack: () -> Unit) {
                 body = "CP Mode is a lighter checkpoint variant of Bibs Mode, for a station out on " +
                     "the course rather than at the finish line — same keypad, entry list, duplicate " +
                     "flagging, out-of-range flagging, row editing, and Clock-marker Start (split S0), " +
-                    "but with a fixed Pass/Retire button pair in place of Bibs' Event picker. Each Pass " +
-                    "gets a running split number too, counting how many have passed since Start/Reset " +
-                    "— Retire doesn't (shown as S–), since it never actually crosses the checkpoint. " +
-                    "Type a bib number and tap Pass (the normal case) or Retire, tap any row to correct " +
-                    "it, and STOP/RESET/Undo last all work exactly as in Bibs Mode. The race's Location " +
-                    "on the race details screen must be \"CP\" followed by a number from 1 upwards, " +
-                    "with an optional \"-name\" suffix (e.g. \"CP1\", \"CP2-Bridge\") " +
-                    "so its entries can be told apart from other stations recording the same race.",
+                    "and the same auto-save-on-3-digits entry: typing a bib's 3rd digit records it " +
+                    "automatically as a Pass, so bibs below 100 still need leading zeros (e.g. " +
+                    "\"007\"). Each Pass gets a running split number too, counting how many have " +
+                    "passed since Start/Reset — Retire doesn't (shown as S–), since it never actually " +
+                    "crosses the checkpoint. If that entry was actually a retirement, tap Retire " +
+                    "straight after typing the bib to correct it in place — CP has no Event picker " +
+                    "since Retire is its only alternative to Pass. Tap any row to correct it, and " +
+                    "STOP/RESET/Undo last all work exactly as in Bibs Mode. The race's Location on " +
+                    "the race details screen must be \"CP\" followed by a number from 1 upwards, with " +
+                    "an optional \"-name\" suffix (e.g. \"CP1\", \"CP2-Bridge\") so its entries can be " +
+                    "told apart from other stations recording the same race.",
             )
             HelpSection(
                 title = "Mule Mode",
@@ -232,9 +243,11 @@ fun HelpScreen(onBack: () -> Unit) {
                 title = "External triggers",
                 body = "A USB (via OTG) or Bluetooth clicker, presenter remote, camera shutter remote, " +
                     "or foot pedal that enumerates as a HID keyboard can be used in place of tapping " +
-                    "the main button — this works for Time Mode's SPLIT and Bibs Mode's log button, " +
-                    "whichever screen is currently showing. No pairing code is needed on our end, " +
-                    "just pair the device with the phone as normal in Android's Bluetooth settings.",
+                    "SPLIT while Time Mode is on screen. Bibs and CP Mode have no external trigger of " +
+                    "their own — entry there is bib-driven (typing 3 digits is what logs it), with no " +
+                    "single \"log the next event\" action left for a clicker to stand in for. No " +
+                    "pairing code is needed on our end, just pair the device with the phone as normal " +
+                    "in Android's Bluetooth settings.",
             )
             HelpSection(
                 title = "General",

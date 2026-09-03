@@ -49,4 +49,17 @@ class HistoryActionLabelsTest {
     fun cpActionOptionsAreExactlyPassAndRetire() {
         assertEquals(listOf(HistoryAction.PASS, HistoryAction.RETIRE), CP_ACTION_OPTIONS)
     }
+
+    @Test
+    fun standaloneOptionsAreEventPickerOptionsMinusBibRequiredActions() {
+        assertEquals(
+            setOf(HistoryAction.IGNORE, HistoryAction.SENIORS, HistoryAction.JUNIORS, HistoryAction.MALE, HistoryAction.FEMALE),
+            BIBS_STANDALONE_OPTIONS.toSet(),
+        )
+        // Finish/Start/Retire always carry a bib, so they're never offered when there's nothing
+        // typed to log a standalone entry against.
+        assertEquals(false, HistoryAction.FINISH in BIBS_STANDALONE_OPTIONS)
+        assertEquals(false, HistoryAction.START in BIBS_STANDALONE_OPTIONS)
+        assertEquals(false, HistoryAction.RETIRE in BIBS_STANDALONE_OPTIONS)
+    }
 }
