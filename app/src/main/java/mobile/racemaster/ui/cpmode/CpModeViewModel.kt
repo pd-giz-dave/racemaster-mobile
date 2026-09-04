@@ -233,8 +233,10 @@ class CpModeViewModel(
             val targetId = uiState.value.entries.firstOrNull()?.id ?: return@launch
             val bib = digitsFlow.value.toIntOrNull()
             cpModeRepository.updateEntry(targetId, bib, HistoryAction.RETIRE, note = null)
-            digitsFlow.value = ""
-            digitsFrozenFlow.value = false
+            // Leave the field showing that same bib rather than blanking it — it's still the
+            // top of the list, just now shown as Retire instead of Pass (see
+            // BibsModeViewModel.onEventTypeSelected's own doc for the general rule).
+            digitsFrozenFlow.value = true
             canRetagFlow.value = false
             beeper.beep()
         }

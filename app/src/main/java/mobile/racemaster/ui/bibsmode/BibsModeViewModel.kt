@@ -254,16 +254,24 @@ class BibsModeViewModel(
     fun onEventTypeSelected(type: HistoryAction) {
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch {
+            // The entry field keeps reflecting the top of the list after this, same as
+            // undoLast — never blanked outright, since the operator still needs to see what
+            // they can act on next. A retag that keeps a bib (e.g. Finish -> Retire) leaves
+            // that bib on screen rather than clearing it away; one that drops the bib (a
+            // marker type) or a standalone marker log both leave the top entry bib-less, which
+            // is already what an empty field represents.
             if (canRetagFlow.value) {
                 val targetId = uiState.value.entries.firstOrNull()?.id ?: return@launch
                 val needsBib = type in BIB_REQUIRED_ACTIONS
                 val bib = if (needsBib) digitsFlow.value.toIntOrNull() else null
                 bibsModeRepository.updateEntry(targetId, bib, type, note = null)
+                digitsFlow.value = bib?.let { it.toString().padStart(MAX_BIB_DIGITS, '0') }.orEmpty()
+                digitsFrozenFlow.value = bib != null
             } else {
                 bibsModeRepository.recordEntry(raceId, type, bibNumber = null, note = null)
+                digitsFlow.value = ""
+                digitsFrozenFlow.value = false
             }
-            digitsFlow.value = ""
-            digitsFrozenFlow.value = false
             canRetagFlow.value = false
             beeper.beep()
         }
