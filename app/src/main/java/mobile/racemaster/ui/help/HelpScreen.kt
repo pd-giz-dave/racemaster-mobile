@@ -95,9 +95,9 @@ fun HelpScreen(onBack: () -> Unit) {
                     "Every race also records a location (e.g. \"Finish\", \"CP1\") so logs from " +
                     "different stations can be told apart, and matched up by position afterwards to " +
                     "produce finishing times per runner. The screen is kept on for the whole race, " +
-                    "and in Time Mode an external clicker can be used instead of tapping SPLIT so " +
-                    "the operator can keep their eyes on the finish line — see \"External triggers\" " +
-                    "below.",
+                    "and in Time Mode an external clicker, or the volume up/down buttons, can be used " +
+                    "instead of tapping SPLIT so the operator can keep their eyes on the finish line " +
+                    "— see \"External triggers\" below.",
             )
             HelpSection(
                 title = "Time Mode",
@@ -128,13 +128,17 @@ fun HelpScreen(onBack: () -> Unit) {
                     "nothing is recorded until 3 digits have been typed. The number stays showing on " +
                     "screen afterwards so you can double-check it before moving on; typing the next " +
                     "bib's first digit clears it automatically. If that entry wasn't actually a " +
-                    "Finish, tap Event straight after and pick the right one instead — Start, Retire " +
-                    "(both keep the bib just typed), or Ignore/Seniors/Juniors/Male/Female " +
-                    "(group-wide markers that don't need a bib number) — this corrects the entry you " +
-                    "just made rather than starting a new one. Tapping Event before typing any digits " +
-                    "instead logs one of those group-wide markers on its own, with no bib attached. " +
-                    "The \"Next:\" line always shows the split number (as S1, S2, and so on) the next " +
-                    "entry will get.",
+                    "Finish, tap Event straight after and pick Start or Retire instead — both correct " +
+                    "the entry you just made in place, keeping the same bib, and the field keeps " +
+                    "showing that bib afterwards instead of clearing; they're only offered when the " +
+                    "entry on top actually has a bib to correct. Picking Ignore/Seniors/Juniors/Male/" +
+                    "Female instead never touches that entry — a marker is a flag about the moment, " +
+                    "not a correction, so it always logs as its own fresh, bib-less row on top, " +
+                    "whether or not a bib entry is showing. Tapping Event before typing any digits " +
+                    "logs a marker the same way, on its own. Undo last removes the most recent entry " +
+                    "and brings whatever's now on top back into the field, ready to correct via Event " +
+                    "if needed. The \"Next:\" line always shows the split number (as S1, S2, and so " +
+                    "on) the next entry will get.",
             )
             HelpSection(
                 title = "Bibs Mode — duplicates and out-of-range bibs",
@@ -172,11 +176,14 @@ fun HelpScreen(onBack: () -> Unit) {
                     "automatically as a Pass, so bibs below 100 still need leading zeros (e.g. " +
                     "\"007\"). Each Pass gets a running split number too, counting how many have " +
                     "passed since Start/Reset — Retire doesn't (shown as S–), since it never actually " +
-                    "crosses the checkpoint. If that entry was actually a retirement, tap Retire " +
-                    "straight after typing the bib to correct it in place — CP has no Event picker " +
-                    "since Retire is its only alternative to Pass. Tap any row to correct it, and " +
-                    "STOP/RESET/Undo last all work exactly as in Bibs Mode. The race's Location on " +
-                    "the race details screen must be \"CP\" followed by a number from 1 upwards, with " +
+                    "crosses the checkpoint. CP has no Event picker — instead there's a single " +
+                    "Pass/Retire toggle button that always shows the opposite of whatever the top " +
+                    "entry currently is, so it retags that entry in place (keeping the same bib) and " +
+                    "can flip it back and forth as many times as needed; the field keeps showing that " +
+                    "bib rather than clearing. Tap any row to correct it, and STOP/RESET/Undo last " +
+                    "all work exactly as in Bibs Mode — Undo last brings whatever's now on top back " +
+                    "into the field the same way. The race's Location on the race details screen must " +
+                    "be \"CP\" followed by a number from 1 upwards, with " +
                     "an optional \"-name\" suffix (e.g. \"CP1\", \"CP2-Bridge\") so its entries can be " +
                     "told apart from other stations recording the same race.",
             )
