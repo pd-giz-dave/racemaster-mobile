@@ -139,7 +139,7 @@ be calculated.
             
 ## Reliability issue
 
-When the Sony phone is used as a mule it reliably reports to the web-app, discovers nearby phones 
+ - [x] When the Sony phone is used as a mule it reliably reports to the web-app, discovers nearby phones 
 and the nearby bibs (Mi 9 phone), cp (Fx_tec phone) and and time (Cubot) relaibly report they are 
 being polled, but the Sony phone claims they are unreachable - why? It implies the phones are 
 responding but the mule is not seeing it, is this a timing issue? Should mode phones delay their

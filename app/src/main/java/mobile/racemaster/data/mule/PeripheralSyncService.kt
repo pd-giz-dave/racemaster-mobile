@@ -200,6 +200,22 @@ class PeripheralSyncService : Service() {
     // negotiates (or hasn't yet when computeRecordsPayload() runs).
     private val deviceMtus = mutableMapOf<String, Int>()
 
+    // One chunk of a central's "prepared write" (long write) — Android delivers a write whose
+    // payload exceeds this connection's single ATT-PDU budget (negotiated MTU − 3 bytes) as a
+    // sequence of these instead of one onCharacteristicWriteRequest call, terminated by
+    // onExecuteWrite telling us whether to commit or discard the queue. The OS does NOT
+    // reassemble these for the app; see onExecuteWrite's own doc for why this queue exists at
+    // all — TODO.md's Sony-Mule investigation found ACK writes over ~244 bytes (this
+    // connection's own single-PDU ceiling at REQUESTED_MTU=247) silently arriving this way, with
+    // nothing here ever handling it: onCharacteristicWriteRequest tried to decode whatever single
+    // partial chunk happened to land, failed, and the write's own GATT response never went out —
+    // the central's write() call then sat until its own ACK_WRITE_TIMEOUT.
+    private data class PendingWrite(val characteristicUuid: UUID, val offset: Int, val value: ByteArray)
+
+    // Keyed by MAC address, same plain-map posture as deviceMtus (only ever touched from the
+    // GATT callback thread, never from a serviceScope coroutine — unlike outboundChunks).
+    private val pendingPreparedWrites = mutableMapOf<String, MutableList<PendingWrite>>()
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -704,7 +720,25 @@ class PeripheralSyncService : Service() {
             offset: Int,
             value: ByteArray,
         ) {
-            when (characteristic.uuid) {
+            if (preparedWrite) {
+                // Queue this chunk — don't decode or act on anything until onExecuteWrite says
+                // whether to commit or discard the whole prepared-write transaction. See
+                // PendingWrite's own doc for why a write can arrive this way at all.
+                pendingPreparedWrites.getOrPut(device.address) { mutableListOf() }.add(PendingWrite(characteristic.uuid, offset, value))
+                if (responseNeeded) {
+                    // Echoes back offset+value, per the ATT "prepare write" response
+                    // requirement — deliberately NOT the plain GATT_SUCCESS/null response an
+                    // immediate (or executed) write gets from handleWrite below.
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
+                }
+                return
+            }
+            handleWrite(device, requestId, characteristic.uuid, responseNeeded, value)
+        }
+
+        @SuppressLint("MissingPermission")
+        private fun handleWrite(device: BluetoothDevice, requestId: Int, characteristicUuid: UUID, responseNeeded: Boolean, value: ByteArray) {
+            when (characteristicUuid) {
                 MuleGattProfile.CONTROL_CHARACTERISTIC_UUID -> {
                     val request = runCatching { json.decodeFromString<PullRequest>(String(value, Charsets.UTF_8)) }.getOrNull()
                     // Temporary/diagnostic — chasing a live report of "web app last seen" staying
@@ -765,11 +799,25 @@ class PeripheralSyncService : Service() {
                         }
                     }
                     if (responseNeeded) {
-                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
+                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
                     }
                 }
                 MuleGattProfile.ACK_CHARACTERISTIC_UUID -> {
                     val ack = runCatching { json.decodeFromString<AckPayload>(String(value, Charsets.UTF_8)) }.getOrNull()
+                    // Temporary/diagnostic — mirrors the CONTROL branch's own logging above,
+                    // added for the same reason: TODO.md's Sony-Mule investigation found the
+                    // central side reliably timing out waiting for this write's own response
+                    // (ACK_WRITE_TIMEOUT, 10s) with zero application-level visibility from this
+                    // side into whether the write even arrived, decoded, or whether markSynced
+                    // below ever actually ran to completion. Logs the receipt unconditionally so
+                    // a write that never reaches here at all is distinguishable from one that
+                    // reaches here but decodes wrong or stalls in markSynced.
+                    val ackReceivedAtMillis = System.currentTimeMillis()
+                    Log.d(
+                        TAG,
+                        "ACK write: address=${device.address} decodedOk=${ack != null} rawLen=${value.size} " +
+                            "recordUuids=${ack?.recordUuids?.size} sinkConfirmed=${ack?.sinkConfirmedRecordUuids?.size} isSink=${ack?.isSink}",
+                    )
                     // Recorded synchronously, ahead of markSynced's own (deferred, timeout-guarded)
                     // DB work below — an ack write reaching this far already proves this
                     // device's own data just reached a genuine sink (see AckPayload.isSink's own
@@ -801,21 +849,61 @@ class PeripheralSyncService : Service() {
                             // Bluetooth was manually toggled off and on.
                             try {
                                 withTimeout(MARK_SYNCED_TIMEOUT) { markSynced(ack) }
+                                Log.d(TAG, "ACK write: markSynced finished for address=${device.address} in ${System.currentTimeMillis() - ackReceivedAtMillis}ms")
+                            } catch (e: Throwable) {
+                                // Temporary/diagnostic, same reasoning as the receipt log above —
+                                // this is exactly the "simply hangs" case the surrounding
+                                // try/finally's own doc anticipates; logging it is what turns
+                                // that from a guess into a confirmed timeline entry.
+                                Log.w(TAG, "ACK write: markSynced failed/timed out for address=${device.address} after ${System.currentTimeMillis() - ackReceivedAtMillis}ms", e)
+                                throw e
                             } finally {
                                 if (responseNeeded) {
-                                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
+                                    Log.d(TAG, "ACK write: sending response for address=${device.address} ${System.currentTimeMillis() - ackReceivedAtMillis}ms after receipt")
+                                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
                                 }
                             }
                         }
                     } else if (responseNeeded) {
-                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
+                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
                     }
                 }
                 else -> {
                     if (responseNeeded) {
-                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
+                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
                     }
                 }
+            }
+        }
+
+        // Reassembles a completed "prepared write" (long write) once the central tells us to
+        // commit it — see PendingWrite's own doc for why this exists, and
+        // onCharacteristicWriteRequest's preparedWrite branch for where chunks are queued.
+        // Removed from pendingPreparedWrites unconditionally (commit or cancel) so a device that
+        // never follows through with onExecuteWrite at all (a dropped connection mid-transaction)
+        // doesn't leak a queue entry forever — onConnectionStateChange's own disconnect cleanup
+        // is the backstop for that same case, this covers the ordinary completed-transaction path.
+        // Groups queued chunks by characteristic before reassembling rather than assuming a
+        // single characteristic per transaction — this protocol's own client only ever queues one
+        // per prepare/execute cycle in practice, but grouping defensively costs nothing and stays
+        // correct if that ever changes. [responseNeeded] is always true for handleWrite's own
+        // sake here (there's no equivalent parameter on onExecuteWrite itself — the ATT spec
+        // always expects a response to an execute-write request) so the ACK branch's own
+        // wait-for-markSynced-before-responding contract (see its own doc) is honored exactly the
+        // same way for a reassembled ack as for an immediate one, using this call's own requestId.
+        @SuppressLint("MissingPermission")
+        override fun onExecuteWrite(device: BluetoothDevice, requestId: Int, execute: Boolean) {
+            val queued = pendingPreparedWrites.remove(device.address).orEmpty()
+            if (!execute || queued.isEmpty()) {
+                if (queued.isNotEmpty()) Log.d(TAG, "long write cancelled: address=${device.address} discardedChunks=${queued.size}")
+                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+                return
+            }
+            val byCharacteristic = queued.groupBy { it.characteristicUuid }
+            Log.d(TAG, "long write executed: address=${device.address} characteristics=${byCharacteristic.keys} totalChunks=${queued.size}")
+            for ((characteristicUuid, chunks) in byCharacteristic) {
+                val reassembled = chunks.sortedBy { it.offset }.fold(ByteArray(0)) { acc, chunk -> acc + chunk.value }
+                handleWrite(device, requestId, characteristicUuid, responseNeeded = true, reassembled)
             }
         }
 
@@ -845,6 +933,10 @@ class PeripheralSyncService : Service() {
             if (newState == android.bluetooth.BluetoothProfile.STATE_DISCONNECTED) {
                 outboundChunks.remove(device.address)
                 deviceMtus.remove(device.address)
+                // Backstop for a device that drops mid prepare/execute-write transaction —
+                // onExecuteWrite's own removal covers the ordinary completed-transaction path,
+                // this is what stops a queue entry leaking forever if that callback never fires.
+                pendingPreparedWrites.remove(device.address)
             }
         }
 

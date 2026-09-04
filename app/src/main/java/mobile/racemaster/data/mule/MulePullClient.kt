@@ -10,6 +10,9 @@ import com.juul.kable.Scanner
 import com.juul.kable.State
 import com.juul.kable.WriteType
 import com.juul.kable.characteristicOf
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -20,6 +23,7 @@ import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import java.util.Collections
@@ -115,7 +119,42 @@ class MulePullClient {
     // was exhausted.
     private suspend fun evictAfterFailedConnect(advertisement: Advertisement, peripheral: Peripheral) {
         peripherals.remove(advertisement.identifier)
-        runCatching { peripheral.disconnect() }
+        // NonCancellable — see endConnection's own doc below for why a bare suspend disconnect()
+        // call here can't be trusted to actually run when the coroutine calling this is itself
+        // already being cancelled (e.g. connect() failed *because* an ambient timeout cancelled
+        // it), which is one of the two paths that lead here.
+        withContext(NonCancellable) { runCatching { peripheral.disconnect() } }
+    }
+
+    // Generalizes evictAfterFailedConnect's own reasoning (see its doc) from "the initial
+    // connect failed" to "anything at all went wrong after a successful connect, cancellation
+    // included" — confirmed in the field (TODO.md's Sony-Mule investigation) as a real,
+    // previously-latent gap: readDeviceInfoOnce/pull/pullRelayManifest's own
+    // try { ... } finally { peripheral.disconnect() } blocks disconnected on ANY exit, but only
+    // ever evicted the cached Peripheral on a *connect* failure — a read/write/settle-delay
+    // instead getting cancelled by MuleSyncEngine's own OVERALL_TICK_TIMEOUT (more likely once
+    // this file's own settle delays lengthened how long a connection stays open, giving more of
+    // them a chance to still be in flight when that 90s ceiling fires) left the *cached* instance
+    // exactly as poisoned as an interrupted connect() does, surfacing later as "Auto-pull failed:
+    // Cannot connect peripheral that has been cancelled" against a phone that was working
+    // perfectly moments earlier — and, per Kable's own documented behavior, on *every* subsequent
+    // attempt against that address until the whole app restarts, since peripheralFor() keeps
+    // reusing the same (now-permanently-broken) instance forever otherwise.
+    //
+    // [succeeded] distinguishes a clean return (only disconnect — the common case, no reason to
+    // discard a perfectly good cached instance) from any other exit, including cancellation
+    // (evict, exactly like evictAfterFailedConnect). The disconnect call itself always runs
+    // inside NonCancellable regardless of which branch: a coroutine already in the process of
+    // being cancelled skips any further *unprotected* suspension point immediately rather than
+    // actually running it, so a bare `peripheral.disconnect()` inside a `finally` block reached
+    // via cancellation could silently no-op — never actually telling Kable/the OS to tear down
+    // the link — unless explicitly shielded from that. Evicting our own cache entry still helps
+    // even then (the next attempt gets a genuinely fresh Peripheral instead of reusing whatever
+    // Kable now considers this one to be), but a real disconnect attempt is strictly better when
+    // it can actually happen.
+    private suspend fun endConnection(advertisement: Advertisement, peripheral: Peripheral, succeeded: Boolean) {
+        if (!succeeded) peripherals.remove(advertisement.identifier)
+        withContext(NonCancellable) { runCatching { peripheral.disconnect() } }
     }
 
     // Shared by readDeviceInfo/pull()/pullRelayManifest() — their identical
@@ -150,6 +189,21 @@ class MulePullClient {
             evictAfterFailedConnect(advertisement, peripheral)
             throw e
         }
+        // Mirrors js/mule-ble.js's GATT_CONNECT_SETTLE_MS — see that constant's own doc for the
+        // field evidence: a newly-established link resolving connect() quickly but then dying
+        // again within 1-3s, before service/characteristic discovery (which this app's own first
+        // read/write on a fresh connection triggers implicitly) could finish, traced there to
+        // the peripheral's BLE stack still settling its initial, often-conservative connection
+        // interval down to a stable one. This app had no equivalent at all before TODO.md's
+        // Sony-Mule investigation: every call here went straight from a successful connect() into
+        // its first real GATT operation. Doesn't, on its own, cover the *separate* issue
+        // readDeviceInfoOnce's own INTER_OPERATION_SETTLE_DELAY exists for (a second operation on
+        // an already-settled connection failing) — this settles the link once, right after
+        // connect; that one settles between two later operations on the same, already-settled
+        // link. Both are kept since neither one's own theory has been ruled out, and there's no
+        // evidence either is harmful on its own (unlike the reconnect-cooldown experiment tried
+        // and reverted alongside this — see INTER_OPERATION_SETTLE_DELAY's own doc).
+        delay(CONNECT_SETTLE_DELAY)
     }
 
     // One Mutex per address, guarding the connect→operate→disconnect sequence in
@@ -234,19 +288,86 @@ class MulePullClient {
     // into sidesteps that regardless of its exact cause. [pullerDeviceId] is required whenever
     // [sinkConfirmedRecordUuids] is non-empty (asserted, not silently ignored, so a caller
     // wiring this up wrong fails loudly rather than the confirmation silently never going out).
+    // Retries the whole connect+read(+ack) sequence a couple of times, in-line, before this
+    // call gives up — this is the read MuleSyncEngine's markUnreachable reacts to, and without
+    // any retry a single transient failure (one dropped ATT response, one busy radio moment)
+    // costs a full MuleSyncEngine.VERIFY_INTERVAL (60s) wait for the next attempt, and three
+    // such single-shot misses in a row (~3 minutes) before the device is even flagged
+    // unreachable. Mirrors the racemaster web app's own MulePullClient equivalent
+    // (js/mule-ble.js's DEVICE_INFO_ATTEMPTS/GATT_RECONNECT_TIMEOUT_MS) — added there after
+    // exactly this shape of field issue ("gatt.connect() ... reads timing out on attempt after
+    // attempt") on that platform's own BLE central. READ_DEVICE_INFO_ATTEMPTS is deliberately
+    // small and READ_DEVICE_INFO_RETRY_DELAY short: each attempt already carries its own
+    // CONNECT_TIMEOUT+READ_TIMEOUT budget, and this whole call runs inside
+    // MuleSyncEngine.pullAllVisibleDevices' connectSemaphore permit — a long retry loop here
+    // would starve every other device queued behind that same tick's OVERALL_TICK_TIMEOUT.
+    // Retries the connect too (not just the read) since connectOrEvict already leaves the
+    // Peripheral cleanly Disconnected on failure — a fresh connect attempt is exactly as valid
+    // a retry unit as a bare re-read would be, and covers a failure at either phase.
     suspend fun readDeviceInfo(
         advertisement: Advertisement,
         pullerDeviceId: String? = null,
         pullerDeviceName: String = "",
         sinkConfirmedRecordUuids: List<String> = emptyList(),
         onConfirmationsRelayed: suspend (List<String>) -> Unit = {},
-    ): DeviceInfo = mutexFor(advertisement).withLock {
+        // Fires (with a short, [describeConnectFailure]-style reason) whenever the best-effort
+        // ack write below fails/times out — see that call site's own doc for why this can't just
+        // be a Log.w the way every other best-effort fallback in this file already is: unlike
+        // those, a still-broken confirmation relay is a real, ongoing field problem (TODO.md's
+        // Sony-Mule report) that an operator needs some way to actually see.
+        onAckFailure: suspend (String) -> Unit = {},
+    ): DeviceInfo {
         require(sinkConfirmedRecordUuids.isEmpty() || pullerDeviceId != null) {
             "pullerDeviceId is required when sinkConfirmedRecordUuids is non-empty"
         }
-        coroutineScope {
-            val peripheral = peripheralFor(advertisement)
+        return mutexFor(advertisement).withLock {
+            var lastError: Throwable? = null
+            for (attempt in 1..READ_DEVICE_INFO_ATTEMPTS) {
+                try {
+                    return@withLock readDeviceInfoOnce(advertisement, pullerDeviceId, pullerDeviceName, sinkConfirmedRecordUuids, onConfirmationsRelayed, onAckFailure)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    lastError = e
+                    if (attempt < READ_DEVICE_INFO_ATTEMPTS) {
+                        Log.w(TAG, "readDeviceInfo attempt $attempt/$READ_DEVICE_INFO_ATTEMPTS failed for address=${advertisement.identifier} — retrying", e)
+                        delay(READ_DEVICE_INFO_RETRY_DELAY)
+                    }
+                }
+            }
+            throw lastError!!
+        }
+    }
+
+    private suspend fun readDeviceInfoOnce(
+        advertisement: Advertisement,
+        pullerDeviceId: String?,
+        pullerDeviceName: String,
+        sinkConfirmedRecordUuids: List<String>,
+        onConfirmationsRelayed: suspend (List<String>) -> Unit,
+        onAckFailure: suspend (String) -> Unit,
+    ): DeviceInfo = coroutineScope {
+        val peripheral = peripheralFor(advertisement)
+        // Tagged by phase (connect vs MTU negotiation vs the actual read) rather than left as a
+        // bare TimeoutCancellationException — see MulePhaseTimeoutException's own doc
+        // for why: TODO.md's "Sony Mule reports every peer unreachable" investigation found the
+        // peripheral side proves the read request itself arrived (bumps its own
+        // lastPolledAtMillis), yet the central still calls this a plain "timeout" — which phase
+        // is actually stuck materially changes the diagnosis (a connect that never completes vs
+        // a read whose response never resolves this coroutine, e.g. a missed/misrouted Kable
+        // GATT callback), so the previously-undifferentiated label wasn't precise enough to tell
+        // those apart from the device's own Nearby-devices row.
+        try {
             connectOrEvict(advertisement, peripheral)
+        } catch (e: TimeoutCancellationException) {
+            throw MulePhaseTimeoutException("connecting", e)
+        }
+        // See endConnection's own doc for why this is tracked (rather than a bare
+        // finally { peripheral.disconnect() }) — anything past this point that doesn't complete
+        // normally, cancellation included, must evict the cached Peripheral, not just disconnect
+        // it, or a later attempt against this address inherits Kable's "cancelled" instance.
+        var succeeded = false
+        try {
             try {
                 withTimeout(READ_TIMEOUT) {
                     // Missing before, unlike collectChunkedResponse's identical call (used by
@@ -264,30 +385,102 @@ class MulePullClient {
                     // read-blob path as before, no worse than today.
                     runCatching { (peripheral as? AndroidPeripheral)?.requestMtu(MuleGattProfile.REQUESTED_MTU) }
                 }
-                val characteristic = characteristicOf(
+            } catch (e: TimeoutCancellationException) {
+                throw MulePhaseTimeoutException("negotiating MTU", e)
+            }
+            // Read first, same order as originally — see below for why this was briefly tried in
+            // the other order and reverted. The critical operation (this read drives reachability
+            // and every device's own data-sync state) gets the safest slot; the non-critical,
+            // already-best-effort ack below absorbs whatever residual risk this connection's
+            // *second* operation still carries.
+            val characteristic = characteristicOf(
+                service = MuleGattProfile.SERVICE_UUID.toKotlinUuid(),
+                characteristic = MuleGattProfile.DEVICE_INFO_CHARACTERISTIC_UUID.toKotlinUuid(),
+            )
+            val bytes = try {
+                withTimeout(READ_TIMEOUT) { peripheral.read(characteristic) }
+            } catch (e: TimeoutCancellationException) {
+                throw MulePhaseTimeoutException("reading", e)
+            }
+            val info = json.decodeFromString<DeviceInfo>(String(bytes, Charsets.UTF_8))
+            if (sinkConfirmedRecordUuids.isNotEmpty()) {
+                val ackCharacteristic = characteristicOf(
                     service = MuleGattProfile.SERVICE_UUID.toKotlinUuid(),
-                    characteristic = MuleGattProfile.DEVICE_INFO_CHARACTERISTIC_UUID.toKotlinUuid(),
+                    characteristic = MuleGattProfile.ACK_CHARACTERISTIC_UUID.toKotlinUuid(),
                 )
-                val bytes = withTimeout(READ_TIMEOUT) { peripheral.read(characteristic) }
-                val info = json.decodeFromString<DeviceInfo>(String(bytes, Charsets.UTF_8))
-                if (sinkConfirmedRecordUuids.isNotEmpty()) {
-                    val ackCharacteristic = characteristicOf(
-                        service = MuleGattProfile.SERVICE_UUID.toKotlinUuid(),
-                        characteristic = MuleGattProfile.ACK_CHARACTERISTIC_UUID.toKotlinUuid(),
-                    )
-                    for (batch in ackBatches(pullerDeviceId!!, pullerDeviceName, emptyList(), sinkConfirmedRecordUuids) { json.encodeToString(it) }) {
+                // A settle gap between the read above and this write — TODO.md's Sony-Mule
+                // investigation went through three rounds before landing here: (1) no delay at
+                // all — write reliably timed out; (2) a general post-connect settle
+                // (CONNECT_SETTLE_DELAY) plus a per-address reconnect cooldown, mirroring the
+                // racemaster web app's own GATT_CONNECT_SETTLE_MS/RECONNECT_COOLDOWN_MS —
+                // neither budged this write, and the cooldown in particular was a real
+                // regression: this app reconnects to the *same* peer several times within one
+                // MuleSyncEngine tick (a readDeviceInfo, a pullFrom, a refresh readDeviceInfo),
+                // unlike the web app's human-paced single-connection use case, so a 10s-per
+                // -reconnect cooldown compounded across devices until whole ticks blew past
+                // OVERALL_TICK_TIMEOUT and otherwise-healthy devices started reporting
+                // unreachable — reverted, along with the settle delay's own connect-timing
+                // theory, once the next experiment pointed elsewhere; (3) reordering this write
+                // ahead of the read instead of adding a delay — the write itself then reliably
+                // *succeeded*, but the read (now second) started failing instead, with
+                // GattRequestRejectedException ("device is busy — a previous request is still
+                // in-progress", per Kable's own doc), not a timeout. That result is the reason
+                // this delay exists at all: it confirms the real issue was never about elapsed
+                // time since connect or since a prior disconnect, but about issuing a *second*
+                // GATT operation on this connection too soon after the *first one's own
+                // completion*, regardless of which operation goes first or which one is a read
+                // vs a write. Kept at the same generous value as CONNECT_SETTLE_DELAY rather
+                // than re-guessing a smaller one, on the same reasoning the web app's own
+                // GATT_CONNECT_SETTLE_MS doc gives: the cost of settling longer than strictly
+                // necessary is a barely-noticeable pause, versus landing back in the failure
+                // this whole investigation is chasing.
+                delay(INTER_OPERATION_SETTLE_DELAY)
+                // Best-effort, unlike every other phase here: this ack is piggybacking an
+                // already-owed sink confirmation onto a connection that's already delivered its
+                // real payload (the DeviceInfo just decoded into [info]) — see this function's
+                // caller-facing doc for why it's bundled in here at all. Since a device is never
+                // dropped from PulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource's
+                // own owed set until its ack genuinely lands, failing to relay one here is always
+                // safely retried on a later reconnect (exactly like pull()'s own ack failure is
+                // already treated) — there's no correctness reason a stuck ack write should cost
+                // this call the read it already has in hand. Stops trying further batches the
+                // moment one fails, rather than attempting each independently: a write hanging on
+                // this connection is why the *first* one failed, so there's no reason to expect a
+                // second write on the same connection to fare any better. [onAckFailure] tells
+                // the caller what happened (not just Log.w) — swallowing a failure here must not
+                // also swallow the *fact* it happened, or a still-broken confirmation relay
+                // becomes invisible instead of merely non-fatal (confirmed live: exactly this gap
+                // is why the confirmation stopped reaching leaf devices with no visible sign once
+                // the failure here was first made best-effort).
+                for (batch in ackBatches(pullerDeviceId!!, pullerDeviceName, emptyList(), sinkConfirmedRecordUuids) { json.encodeToString(it) }) {
+                    try {
                         withTimeout(ACK_WRITE_TIMEOUT) {
                             peripheral.write(ackCharacteristic, json.encodeToString(batch).toByteArray(Charsets.UTF_8), WriteType.WithResponse)
                         }
-                        if (batch.sinkConfirmedRecordUuids.isNotEmpty()) {
-                            onConfirmationsRelayed(batch.sinkConfirmedRecordUuids)
-                        }
+                    } catch (e: CancellationException) {
+                        // A genuine outer cancellation (this coroutineScope itself torn down,
+                        // e.g. the whole app shutting down) must still propagate — only our own
+                        // ACK_WRITE_TIMEOUT firing is treated as best-effort.
+                        if (e !is TimeoutCancellationException) throw e
+                        val reason = describeConnectFailure(MulePhaseTimeoutException("acking", e))
+                        Log.w(TAG, "ack write timed out for address=${advertisement.identifier} — confirmation stays owed, DeviceInfo read above still counts", e)
+                        onAckFailure(reason)
+                        break
+                    } catch (e: Throwable) {
+                        val reason = describeConnectFailure(e)
+                        Log.w(TAG, "ack write failed for address=${advertisement.identifier} — confirmation stays owed, DeviceInfo read above still counts", e)
+                        onAckFailure(reason)
+                        break
+                    }
+                    if (batch.sinkConfirmedRecordUuids.isNotEmpty()) {
+                        onConfirmationsRelayed(batch.sinkConfirmedRecordUuids)
                     }
                 }
-                info
-            } finally {
-                peripheral.disconnect()
             }
+            succeeded = true
+            info
+        } finally {
+            endConnection(advertisement, peripheral, succeeded)
         }
     }
 
@@ -342,7 +535,14 @@ class MulePullClient {
             // Same reasoning as readDeviceInfo's own CONNECT_TIMEOUT — bounds just the connect
             // phase so a stuck handshake can't hang this call forever; PULL_TIMEOUT below already
             // separately bounds the actual data-collection phase once connected.
-            connectOrEvict(advertisement, peripheral)
+            try {
+                connectOrEvict(advertisement, peripheral)
+            } catch (e: TimeoutCancellationException) {
+                throw MulePhaseTimeoutException("connecting", e)
+            }
+            // See endConnection's own doc (and readDeviceInfoOnce's matching use) for why this
+            // is tracked rather than a bare finally { peripheral.disconnect() }.
+            var succeeded = false
             try {
                 val serviceUuid = MuleGattProfile.SERVICE_UUID.toKotlinUuid()
                 val ackCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.ACK_CHARACTERISTIC_UUID.toKotlinUuid())
@@ -358,22 +558,45 @@ class MulePullClient {
                 // Split across as many separate, independently-complete ack writes as needed —
                 // see ackBatches' own doc for why a single unchunked write can't safely carry
                 // this, especially sinkConfirmedRecordUuids, which could otherwise cover a large
-                // race's entire backlog at once (see AckPayload's own doc).
-                for (batch in ackBatches(pullerDeviceId, pullerDeviceName, records.map { it.recordUuid }, sinkConfirmedRecordUuids) { json.encodeToString(it) }) {
+                // race's entire backlog at once (see AckPayload's own doc). Unlike
+                // readDeviceInfo's own ack write, this one is deliberately NOT best-effort/
+                // swallowed on failure — this function's own doc already explains why a thrown
+                // failure here is safe (the peripheral just re-offers these records next pull),
+                // so there's no correctness reason to hide it from the caller the way
+                // readDeviceInfo's ack (which was masking an already-successful read) needed to
+                // be. Still phase-tagged for the same diagnostic value as everything else here.
+                val ackBatchesToSend = ackBatches(pullerDeviceId, pullerDeviceName, records.map { it.recordUuid }, sinkConfirmedRecordUuids) { json.encodeToString(it) }
+                // Same settle gap as readDeviceInfoOnce's own INTER_OPERATION_SETTLE_DELAY, and
+                // for the same reason — confirmed live (TODO.md's Sony-Mule investigation) as the
+                // same underlying issue, not something specific to a read preceding a write: this
+                // ack write follows collectChunkedResponse's own control write + notification
+                // wait with no gap at all, and it started timing out ("Auto-pull failed: timed
+                // out acking") the same way readDeviceInfoOnce's ack once did, once that one was
+                // fixed and traffic moved on to exercising this one. Guarded on there actually
+                // being a batch to send — ackBatches returns empty when both recordUuids and
+                // sinkConfirmedRecordUuids are empty, in which case this loop does nothing and
+                // the delay would be pure waste.
+                if (ackBatchesToSend.isNotEmpty()) delay(INTER_OPERATION_SETTLE_DELAY)
+                for (batch in ackBatchesToSend) {
                     // WithResponse means this suspends until the peripheral's GATT response
                     // arrives — PeripheralSyncService now always sends one (see its own doc), but
                     // this timeout is defense-in-depth against any peer (a different app version,
                     // or anything else speaking this protocol) that doesn't, so a stuck peer can't
                     // hang this whole pull forever.
-                    withTimeout(ACK_WRITE_TIMEOUT) {
-                        peripheral.write(ackCharacteristic, json.encodeToString(batch).toByteArray(Charsets.UTF_8), WriteType.WithResponse)
+                    try {
+                        withTimeout(ACK_WRITE_TIMEOUT) {
+                            peripheral.write(ackCharacteristic, json.encodeToString(batch).toByteArray(Charsets.UTF_8), WriteType.WithResponse)
+                        }
+                    } catch (e: TimeoutCancellationException) {
+                        throw MulePhaseTimeoutException("acking", e)
                     }
                     if (batch.sinkConfirmedRecordUuids.isNotEmpty()) {
                         onConfirmationsRelayed(batch.sinkConfirmedRecordUuids)
                     }
                 }
+                succeeded = true
             } finally {
-                peripheral.disconnect()
+                endConnection(advertisement, peripheral, succeeded)
             }
         }
     }
@@ -389,13 +612,22 @@ class MulePullClient {
     suspend fun pullRelayManifest(advertisement: Advertisement): List<RelayManifestEntry> = mutexFor(advertisement).withLock {
         coroutineScope {
             val peripheral = peripheralFor(advertisement)
-            connectOrEvict(advertisement, peripheral)
+            try {
+                connectOrEvict(advertisement, peripheral)
+            } catch (e: TimeoutCancellationException) {
+                throw MulePhaseTimeoutException("connecting", e)
+            }
+            // See endConnection's own doc (and readDeviceInfoOnce's matching use) for why this
+            // is tracked rather than a bare finally { peripheral.disconnect() }.
+            var succeeded = false
             try {
                 val pullRequest = json.encodeToString(PullRequest(sinceLineNumber = 0, requestRelayManifest = true))
                 val payload = collectChunkedResponse(peripheral, pullRequest)
-                if (payload.isBlank()) emptyList() else json.decodeFromString(payload)
+                val result: List<RelayManifestEntry> = if (payload.isBlank()) emptyList() else json.decodeFromString(payload)
+                succeeded = true
+                result
             } finally {
-                peripheral.disconnect()
+                endConnection(advertisement, peripheral, succeeded)
             }
         }
     }
@@ -437,11 +669,25 @@ class MulePullClient {
         // characteristic ("writeWithoutResponse property not found").
         // Same reasoning as the ack write's own ACK_WRITE_TIMEOUT — a WithResponse write
         // suspends until the peripheral responds, and PULL_TIMEOUT below only bounds the
-        // *data collection* phase that follows, not this write itself.
-        withTimeout(ACK_WRITE_TIMEOUT) {
-            peripheral.write(controlCharacteristic, requestJson.toByteArray(Charsets.UTF_8), WriteType.WithResponse)
+        // *data collection* phase that follows, not this write itself. Phase-tagged (see
+        // MulePhaseTimeoutException's own doc) — this is the same WriteType.WithResponse shape
+        // as readDeviceInfo's own ack write, which TODO.md's Sony-Mule investigation found
+        // hangs reliably on at least one real device; tagging this one the same way is what
+        // will tell us whether this *particular* write is the same failure, now that a device
+        // can show "has new data" (mergeDeviceInfo already succeeded) yet never actually catch
+        // up (this write, further downstream, silently failing every attempt).
+        try {
+            withTimeout(ACK_WRITE_TIMEOUT) {
+                peripheral.write(controlCharacteristic, requestJson.toByteArray(Charsets.UTF_8), WriteType.WithResponse)
+            }
+        } catch (e: TimeoutCancellationException) {
+            throw MulePhaseTimeoutException("requesting", e)
         }
-        withTimeout(PULL_TIMEOUT) { collectJob.join() }
+        try {
+            withTimeout(PULL_TIMEOUT) { collectJob.join() }
+        } catch (e: TimeoutCancellationException) {
+            throw MulePhaseTimeoutException("collecting the pulled data", e)
+        }
 
         chunks.fold(ByteArray(0)) { acc, chunk -> acc + chunk }.toString(Charsets.UTF_8)
     }
@@ -465,8 +711,52 @@ class MulePullClient {
         // Bounds a single WithResponse write's wait for the peripheral's GATT response —
         // see the two call sites' own docs for why this can't just fall under PULL_TIMEOUT.
         private val ACK_WRITE_TIMEOUT = 10_000.milliseconds
+
+        // See readDeviceInfo's own doc for why this retry exists and why both of these are kept
+        // small — 3 total attempts (matching the web app's own DEVICE_INFO_ATTEMPTS) with a
+        // short pause between them, not this app's much longer inter-device intervals.
+        private const val READ_DEVICE_INFO_ATTEMPTS = 3
+        private val READ_DEVICE_INFO_RETRY_DELAY = 1_500.milliseconds
+
+        // Mirrors js/mule-ble.js's GATT_CONNECT_SETTLE_MS exactly (same value, same
+        // field-tested reasoning) — see connectOrEvict's own doc at its call site. Kept even
+        // though it didn't fix the ack-write failure on its own (see
+        // INTER_OPERATION_SETTLE_DELAY's own doc for what did) — nothing suggests it's harmful,
+        // and its own independent theory (a fresh link needing real time to settle before *any*
+        // GATT traffic) stands on its own regardless of the separate issue that turned out to
+        // need INTER_OPERATION_SETTLE_DELAY.
+        private val CONNECT_SETTLE_DELAY = 2_000.milliseconds
+
+        // See readDeviceInfoOnce's own doc at its call site — the fix that actually worked, after
+        // a per-address reconnect cooldown mirroring the web app's own RECONNECT_COOLDOWN_MS was
+        // tried and reverted here (see the same doc) as a real regression: this app's own
+        // multiple-reconnects-to-the-same-peer-per-tick pattern doesn't tolerate a human-paced
+        // web-app cooldown value. Also used by pull()'s own ack write, right after
+        // collectChunkedResponse's own control write + notification wait — confirmed live as the
+        // exact same underlying issue (a write immediately following prior GATT activity on the
+        // connection, not something specific to a read preceding a write), once readDeviceInfo's
+        // own case was fixed and real traffic exercised this second, previously-unprotected spot.
+        private val INTER_OPERATION_SETTLE_DELAY = 2_000.milliseconds
     }
 }
+
+/**
+ * Wraps a [TimeoutCancellationException] caught immediately at its own call site inside
+ * [MulePullClient]'s connect/pull functions, tagged with which [phase] was still pending when
+ * the timeout fired — see each call site's own doc for its exact phase names ("connecting",
+ * "negotiating MTU", "reading", "requesting", "collecting the pulled data", "acking", ...).
+ * Shared across [MulePullClient.readDeviceInfoOnce], [MulePullClient.pull], and
+ * [MulePullClient.pullRelayManifest]/[MulePullClient.collectChunkedResponse] rather than each
+ * inventing its own tagging scheme, since they're all diagnosing the exact same underlying
+ * question — which specific GATT operation against a real device isn't completing. Deliberately
+ * never thrown for [MulePullClient.readDeviceInfoOnce]'s own trailing ack-write phase — see that
+ * phase's own doc for why a stuck ack is caught and swallowed there instead of failing the whole
+ * call the way every other phase does. `internal`, not `private`, so [describeConnectFailure] in
+ * MuleSyncEngine.kt (same package) can pattern-match on it to give a more specific label than
+ * the bare "timeout" it falls back to for anything else that throws a plain, untagged
+ * [TimeoutCancellationException].
+ */
+internal class MulePhaseTimeoutException(val phase: String, cause: TimeoutCancellationException) : Exception("timed out $phase", cause)
 
 /**
  * Deterministically identifies one "give me your data since X" ask so a responder that's
@@ -486,10 +776,7 @@ internal fun computeRequestKey(pullerDeviceId: String, originDeviceId: String?, 
 
 /**
  * Splits [recordUuids] and [sinkConfirmedRecordUuids] across as many separate [AckPayload]s as
- * needed to keep every one of them under [maxEncodedBytes] once JSON-encoded — Android hard-caps
- * a single GATT characteristic write at 512 bytes (`GATT_MAX_ATTR_LEN`; confirmed in the field:
- * a write past that throws `IllegalArgumentException("value should not be longer than max
- * length of an attribute value")`, silently failing every subsequent pull from that device). An
+ * needed to keep every one of them under [maxEncodedBytes] once JSON-encoded. An
  * ack has no chunking of its own the way the (notify-based) DATA stream does, so an unbounded
  * uuid list has nowhere else to go. [sinkConfirmedRecordUuids] is kept bounded to a genuine delta
  * (see `PulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource`'s own doc), but a source
@@ -502,6 +789,26 @@ internal fun computeRequestKey(pullerDeviceId: String, originDeviceId: String?, 
  * actually encoding each candidate (via [encode]) rather than guessing a safe fixed
  * uuids-per-batch count, since device names have no enforced length limit (see
  * NameDeviceScreen) and are part of every batch's fixed overhead.
+ *
+ * [maxEncodedBytes] defaults to [MuleGattProfile.MAX_SAFE_CHUNK_SIZE_BYTES] (509) — Android
+ * hard-caps a single GATT characteristic write at 512 bytes (`GATT_MAX_ATTR_LEN`; confirmed in
+ * the field: a write past that throws `IllegalArgumentException`), so this is the one true
+ * correctness ceiling for how big a single [AckPayload] batch is *allowed* to be. It says
+ * nothing about how many over-the-air ATT packets a write of that size costs, though — that's
+ * governed by whatever MTU the connection actually negotiated (REQUESTED_MTU=247 is a request,
+ * "Android doesn't guarantee it matches"), and a write whose encoded size exceeds (negotiated MTU
+ * − 3) doesn't fail — it silently becomes a multi-PDU "prepared write" transaction instead
+ * (`BluetoothGattServerCallback.onExecuteWrite`). TODO.md's Sony-Mule investigation traced a
+ * real, 100%-reproducible "timed out acking" failure to exactly that path: an oversized ack (242
+ * bytes — comfortably under this 509-byte ceiling, but over what a 247-MTU connection's single
+ * PDU can carry) arrived at `PeripheralSyncService.onCharacteristicWriteRequest` as a partial
+ * chunk it had no reassembly logic for, decoded as garbage, and the write's own GATT response
+ * then simply never came — the central's `write()` call sat until its own ACK_WRITE_TIMEOUT
+ * (10s). The real fix was implementing proper prepared-write/onExecuteWrite reassembly on the
+ * peripheral side (see that class's own `PendingWrite`/`onExecuteWrite` doc), not shrinking this
+ * ceiling — a batch below the fixed per-payload JSON overhead (deviceId, deviceName, field names)
+ * isn't achievable anyway, so artificially lowering this just fragments a large confirmation
+ * backlog into needlessly many separate writes without preventing the multi-PDU path at all.
  */
 internal fun ackBatches(
     deviceId: String,

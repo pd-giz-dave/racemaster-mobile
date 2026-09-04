@@ -1,5 +1,10 @@
 package mobile.racemaster.data.mule
 
+import com.juul.kable.GattStatusException
+import com.juul.kable.NotConnectedException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import mobile.racemaster.data.db.dao.PulledSourceSummary
 import mobile.racemaster.data.db.entity.KnownDeviceEntity
 import org.junit.Assert.assertEquals
@@ -310,5 +315,50 @@ class MuleSyncEngineTest {
                 pendingConfirmation = true, confirmationRelayIntervalMillis = 15_000L,
             ),
         )
+    }
+
+    // describeConnectFailure — classifies a failed readDeviceInfo attempt into a short,
+    // operator-facing label shown on the device's own Nearby-devices row (see
+    // DiscoveredDevice.lastFailureReason), so a repeat field occurrence (TODO.md's "Sony phone
+    // claims they are unreachable" report) is diagnosable from the phone itself.
+
+    @Test
+    fun aPhaseTaggedTimeoutNamesItsPhase() {
+        val phaseCause = try {
+            runBlocking { withTimeout(0) { } }
+            error("expected a TimeoutCancellationException")
+        } catch (e: TimeoutCancellationException) {
+            e
+        }
+
+        assertEquals("timeout (connecting)", describeConnectFailure(MulePhaseTimeoutException("connecting", phaseCause)))
+        assertEquals("timeout (reading)", describeConnectFailure(MulePhaseTimeoutException("reading", phaseCause)))
+    }
+
+    @Test
+    fun aTimeoutIsDescribedAsTimeout() {
+        val cause = try {
+            runBlocking { withTimeout(0) { } }
+            error("expected a TimeoutCancellationException")
+        } catch (e: TimeoutCancellationException) {
+            e
+        }
+
+        assertEquals("timeout", describeConnectFailure(cause))
+    }
+
+    @Test
+    fun aGattStatusExceptionIncludesItsNumericStatusCode() {
+        assertEquals("GATT error 133", describeConnectFailure(GattStatusException(status = 133)))
+    }
+
+    @Test
+    fun aNotConnectedExceptionIsDescribedAsDisconnected() {
+        assertEquals("disconnected", describeConnectFailure(NotConnectedException()))
+    }
+
+    @Test
+    fun anUnrecognisedFailureFallsBackToItsClassName() {
+        assertEquals("IllegalStateException", describeConnectFailure(IllegalStateException("boom")))
     }
 }

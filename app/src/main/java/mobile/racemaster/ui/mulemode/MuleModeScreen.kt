@@ -99,6 +99,15 @@ fun MuleModeScreen(
                     modifier = Modifier.clickable(onClick = withClickSound(viewModel::dismissStatusMessage)),
                 )
             }
+            // Was computed (MuleSyncEngine.autoWarningFlow) but never actually rendered anywhere
+            // — found while chasing TODO.md's Sony-Mule report: a device can show "has new
+            // data" (a successful DeviceInfo read) yet never catch up because its own
+            // background pullFrom keeps failing, and that failure message existed only in this
+            // state, invisible on screen. Self-clearing (see its own doc), so no dismiss action
+            // needed here the way statusMessage's manual-action result has.
+            uiState.autoWarning?.let { warning ->
+                Text(warning, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+            }
 
             NearbyDevicesSection(uiState, onForget = viewModel::forgetDevice)
         }
@@ -344,8 +353,12 @@ private fun NearbyDevicesSection(uiState: MuleModeUiState, onForget: (String) ->
                             // reads on — those track this phone's own connection to a peer, meaningless
                             // for an origin only ever known transitively (see DiscoveredDevice's own doc).
                             device.relayedViaDeviceName != null -> " (via ${device.relayedViaDeviceName})"
-                            device.unreachable -> " (unreachable)"
-                            device.consecutiveFailures > 0 -> " (missed ${device.consecutiveFailures})"
+                            // lastFailureReason (see its own doc) names *why* the last attempt
+                            // failed — e.g. "timeout" vs "GATT error 133" — so a repeat field
+                            // occurrence like TODO.md's Sony-Mule report is diagnosable from the
+                            // phone itself.
+                            device.unreachable -> " (unreachable" + (device.lastFailureReason?.let { " — $it" }.orEmpty()) + ")"
+                            device.consecutiveFailures > 0 -> " (missed ${device.consecutiveFailures}" + (device.lastFailureReason?.let { " — $it" }.orEmpty()) + ")"
                             else -> ""
                         }
                         Column(modifier = Modifier.weight(1f)) {

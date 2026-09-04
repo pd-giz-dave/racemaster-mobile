@@ -121,7 +121,15 @@ class MuleRepository(
     // 100%-reproducible failure against a real device. Harmless, self-correcting redundancy on
     // a tick where pullFrom also ends up running afterward and delivers the same confirmation
     // again via its own ack — nothing is left to redeliver by the next tick either way.
-    suspend fun readDeviceInfo(advertisement: Advertisement, sourceDeviceId: String? = null, sourceRaceLabel: String? = null): DeviceInfo {
+    suspend fun readDeviceInfo(
+        advertisement: Advertisement,
+        sourceDeviceId: String? = null,
+        sourceRaceLabel: String? = null,
+        // Forwarded straight through to MulePullClient.readDeviceInfo's own param of the same
+        // name — see its own doc. A no-op default, same as that one, for the common case (no
+        // caller cares, or sinkConfirmedRecordUuids ends up empty so it never fires anyway).
+        onAckFailure: suspend (String) -> Unit = {},
+    ): DeviceInfo {
         val sinkConfirmedRecordUuids = if (sourceDeviceId != null && sourceRaceLabel != null) {
             pulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource(sourceDeviceId, sourceRaceLabel)
         } else {
@@ -138,6 +146,7 @@ class MuleRepository(
             onConfirmationsRelayed = { relayedUuids ->
                 pulledRecordDao.markConfirmationRelayed(relayedUuids, System.currentTimeMillis())
             },
+            onAckFailure = onAckFailure,
         )
     }
 

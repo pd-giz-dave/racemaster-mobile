@@ -2,6 +2,9 @@ package mobile.racemaster.data.mule
 
 import android.util.Log
 import com.juul.kable.Advertisement
+import com.juul.kable.GattRequestRejectedException
+import com.juul.kable.GattStatusException
+import com.juul.kable.NotConnectedException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -138,6 +141,13 @@ data class DiscoveredDevice(
     // site for every pull, direct or relayed alike, and PulledSourceSummary already reports
     // this per origin from there with no extra bookkeeping needed in this class.
     val lastPulledAtMillis: Long? = null,
+    // The most recent connect-attempt failure against this device, classified by
+    // [describeConnectFailure] — "timeout", "GATT error 133", etc. — shown alongside the
+    // "(missed N)"/"(unreachable)" suffix on its own row (see MuleModeScreen) so a repeat field
+    // occurrence is diagnosable from the phone itself rather than needing a laptop+logcat.
+    // Cleared (null) the moment a read actually succeeds — see [mergeDeviceInfo] — so it never
+    // shows a stale reason once the device is genuinely reachable again.
+    val lastFailureReason: String? = null,
 )
 
 // discoveredFlow (see below) only ever holds devices that came from a live BLE scan result
@@ -225,6 +235,17 @@ class MuleSyncEngine(
     private val bluetoothWarningFlow = MutableStateFlow<String?>(null)
     private val busyFlow = MutableStateFlow(false)
     private var scanJob: Job? = null
+    // When the currently-running scanJob actually started — see startBluetoothStateLoop's own
+    // doc for why this exists: one continuous Kable scan session is left running unbounded for
+    // as long as this phone stays in Mule mode with Bluetooth on, and a single real Mule session
+    // was confirmed in the field (TODO.md's Sony-Mule reliability investigation, via
+    // `adb shell dumpsys bluetooth_manager`) to still be running the *same* scan session 22
+    // minutes in, having delivered 23,328 raw scan callbacks — every BLE advertisement in range
+    // the whole time, unfiltered at the OS level (see MulePullClient.scanForDevices' own doc for
+    // why it can't be filtered there instead). That timeline lines up with repeated
+    // discoverServices() hangs (10s+ with zero callback) logged over the same window. 0L (never
+    // started) until the first startScan() actually launches one.
+    private var scanStartedAtMillis: Long = 0L
 
     // Caps how many GATT connects (first-sighting resolves and pullAllVisibleDevices' own
     // periodic re-checks alike) this engine has in flight at once, app-wide. Before this
@@ -386,6 +407,18 @@ class MuleSyncEngine(
                     discoveredFlow.value = emptyMap()
                     bluetoothWarningFlow.value = null
                 } else if (bluetoothStateRepository.isEnabled()) {
+                    // A scan already running past SCAN_REFRESH_INTERVAL is deliberately torn
+                    // down and immediately restarted, not left alone — see scanStartedAtMillis'
+                    // own doc for the field evidence behind this (a single unbroken scan session
+                    // observed 22 minutes in, 23K+ callbacks, correlated with repeated
+                    // discoverServices() hangs). discoveredFlow itself is left untouched across
+                    // the restart (unlike the mode-exit branch above) — every already-resolved
+                    // device keeps its accumulated state; only the underlying OS/Kable scan
+                    // session itself is replaced with a fresh one.
+                    if (scanJob?.isActive == true && System.currentTimeMillis() - scanStartedAtMillis >= SCAN_REFRESH_INTERVAL.inWholeMilliseconds) {
+                        Log.d(TAG, "restarting scan after ${SCAN_REFRESH_INTERVAL.inWholeSeconds}s to avoid one unbounded scan session for the whole Mule session")
+                        stopScan()
+                    }
                     startScan()
                 } else {
                     stopScan()
@@ -410,6 +443,7 @@ class MuleSyncEngine(
         // which never happens (leaving a false "Bluetooth is off" stuck on screen) when
         // scanning is perfectly healthy but simply no peer device happens to be nearby.
         bluetoothWarningFlow.value = null
+        scanStartedAtMillis = System.currentTimeMillis()
         scanJob = engineScope.launch {
             try {
                 muleRepository.scanForDevices().collect { advertisement ->
@@ -528,14 +562,14 @@ class MuleSyncEngine(
         // silently-swallowed runCatching failure (previously invisible from outside the app)
         // distinguishable from a device that never scans in at all.
         Log.d(TAG, "first-sighting connect attempt: key=$key")
-        val info = connectSemaphore.withPermit {
+        val result = connectSemaphore.withPermit {
             runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }
                 .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
                 .onFailure { Log.w(TAG, "first-sighting connect failed: key=$key", it) }
-                .getOrNull()
         }
+        val info = result.getOrNull()
         if (info == null) {
-            markUnreachable(key, device)
+            markUnreachable(key, device, result.exceptionOrNull())
             return
         }
         Log.d(TAG, "first-sighting connect succeeded: key=$key deviceId=${info.deviceId} deviceName=${info.deviceName}")
@@ -594,6 +628,7 @@ class MuleSyncEngine(
             lastReachableAtMillis = now,
             consecutiveFailures = 0,
             unreachable = false,
+            lastFailureReason = null,
             confirmedLineNumber = info.lastLineNumber,
             lastRealReadAtMillis = now,
         )
@@ -622,8 +657,11 @@ class MuleSyncEngine(
      *  ##:##:## — Discovering… lines" that only cleared by leaving and re-entering Mule
      *  Mode (which just recreates discoveredFlow from empty). A device that *has* resolved
      *  at least once keeps the full hour, so it isn't lost from the list just because the
-     *  operator stepped out of range briefly. */
-    private fun markUnreachable(key: String, device: DiscoveredDevice) {
+     *  operator stepped out of range briefly. [cause] is whatever [MulePullClient.readDeviceInfo]
+     *  actually threw this time — classified via [describeConnectFailure] and stored on the
+     *  surviving entry so its row can show *why*, not just that it failed (see
+     *  [DiscoveredDevice.lastFailureReason]'s own doc). */
+    private fun markUnreachable(key: String, device: DiscoveredDevice, cause: Throwable? = null) {
         val now = System.currentTimeMillis()
         val dropThreshold = if (device.deviceId == null) UNRESOLVED_DROP_THRESHOLD else UNREACHABLE_DROP_THRESHOLD
         if (now - device.lastReachableAtMillis >= dropThreshold.inWholeMilliseconds) {
@@ -639,7 +677,11 @@ class MuleSyncEngine(
         }
         val failures = device.consecutiveFailures + 1
         discoveredFlow.value = discoveredFlow.value + (
-            key to device.copy(consecutiveFailures = failures, unreachable = failures >= UNREACHABLE_FAILURE_THRESHOLD)
+            key to device.copy(
+                consecutiveFailures = failures,
+                unreachable = failures >= UNREACHABLE_FAILURE_THRESHOLD,
+                lastFailureReason = cause?.let(::describeConnectFailure) ?: device.lastFailureReason,
+            )
         )
     }
 
@@ -791,14 +833,27 @@ class MuleSyncEngine(
                 // CONNECT_TIMEOUT), even though this read's own connect kept succeeding fast and
                 // reliably moments earlier. A genuine sink confirmation must reach the operator
                 // watching that source regardless of which specific connection carried it.
-                val freshInfo = runCatching {
-                    muleRepository.readDeviceInfo(device.requiredAdvertisement, device.deviceId, device.raceLabel)
+                val periodicResult = runCatching {
+                    muleRepository.readDeviceInfo(
+                        device.requiredAdvertisement, device.deviceId, device.raceLabel,
+                        // The read itself can succeed (this device stays green/reachable) even
+                        // while its piggybacked sink-confirmation ack keeps failing underneath —
+                        // see MulePullClient.readDeviceInfoOnce's own doc for why that's
+                        // deliberately non-fatal. Routed into this function's own tickFailure
+                        // (same channel as a failed pull below, not autoWarningFlow directly —
+                        // autoPullAndPushIfArmed unconditionally overwrites autoWarningFlow with
+                        // this function's return value right after it returns, so setting the
+                        // flow itself from in here would just get clobbered) so a still-broken
+                        // confirmation relay — TODO.md's Sony-Mule report — isn't silently
+                        // invisible on screen the way it was before this existed.
+                        onAckFailure = { reason -> tickFailure = "Confirmation relay to $peerLabel failed: $reason" },
+                    )
                 }
                     .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
                     .onFailure { Log.w(TAG, "periodic connect failed: key=$key deviceId=${device.deviceId}", it) }
-                    .getOrNull()
+                val freshInfo = periodicResult.getOrNull()
                 if (freshInfo == null) {
-                    markUnreachable(key, device)
+                    markUnreachable(key, device, periodicResult.exceptionOrNull())
                     return@withPermit
                 }
                 val since = muleRepository.lastPulledLineNumber(freshInfo.deviceId, freshInfo.raceLabel)
@@ -983,14 +1038,30 @@ class MuleSyncEngine(
         private val CONFIRMATION_RELAY_INTERVAL = 15.seconds
         private val BLUETOOTH_CHECK_INTERVAL = 3_000.milliseconds
 
-        // Deliberately small and conservative rather than tuned up toward the platform's real
-        // per-chipset ceiling (~4-7) — this engine isn't the only thing on the radio budget:
-        // this phone's own concurrent scanning, advertising, and GATT-server roles (serving
-        // other phones' pulls) all compete for the same controller, and the whole reason this
-        // gate exists is the OS Bluetooth daemon crash a prior, even-heavier connect load
-        // already caused in the field (see connectSemaphore's own doc). Only raise this after
-        // testing shows real headroom, not just because discovery still feels slow.
-        private const val MAX_CONCURRENT_CONNECTS = 2
+        // See scanStartedAtMillis' own doc for the field evidence this responds to. Picked as a
+        // first experiment, not a tuned final value — short enough that an unbounded scan session
+        // (and whatever it's doing to this phone's radio/controller over time) never gets anywhere
+        // near the 22-minute/23K-callback state that correlated with repeated discoverServices()
+        // hangs, long enough that restarting the scan itself (a brief gap where nothing is heard)
+        // isn't a significant fraction of normal operation. Revisit with real data once this
+        // either clears the hangs or doesn't.
+        private val SCAN_REFRESH_INTERVAL = 90.seconds
+
+        // Dropped from 2 to 1 (fully serializing every central-role connect) as a direct test —
+        // TODO.md's Sony-Mule investigation traced Kable's own internal disconnect() (see
+        // Connection.kt: it waits up to disconnectTimeout, 5s, for taskScope's own in-flight
+        // tasks — including a discoverServices() call — to finish before it ever calls
+        // gatt.disconnect()) logging "Timed out after 5s waiting for disconnect" back to the
+        // exact same phenomenon behind the original diagnosis: discoverServices() occasionally
+        // getting no OS callback at all, this time surfacing at the *disconnect* end of a
+        // connection's life instead of the connect end (and, when it does, skipping the clean
+        // disconnect handshake for a forceful close instead — plausibly compounding whatever
+        // makes the next attempt's odds worse). This phone's own concurrent scanning,
+        // advertising, and GATT-server roles (serving other phones' pulls) already compete for
+        // one controller even at 2; fully serializing central-role connects is the cheapest,
+        // most reversible way to test whether reduced contention is what lets discoverServices()
+        // complete reliably. Revisit upward only once real data shows this actually helped.
+        private const val MAX_CONCURRENT_CONNECTS = 1
 
         // See refreshDeviceInfo's own doc for why first-sighting connects need to be spread
         // out even with connectSemaphore already bounding how many run at once.
@@ -1029,6 +1100,42 @@ internal fun pushResultMessage(auto: Boolean, result: Result<Int>): String? = re
     },
     onFailure = { e -> "Push failed: ${e.message}" },
 )
+
+/**
+ * Classifies a failed [MulePullClient.readDeviceInfo] attempt into a short, operator-facing
+ * label — shown alongside the "(missed N)"/"(unreachable)" suffix on a device's own row (see
+ * [DiscoveredDevice.lastFailureReason]) so a repeat field occurrence (e.g. TODO.md's "Sony phone
+ * claims they are unreachable" report) is diagnosable straight from the phone, without needing
+ * `adb logcat`. Distinguishes the handful of causes this app's own BLE stack actually throws
+ * (see MulePullClient.connectOrEvict/readDeviceInfoOnce and Kable's own exception hierarchy) —
+ * most usefully [GattStatusException]'s numeric [GattStatusException.status], which is the one
+ * piece of information that could actually tell "the peripheral's response never arrived" apart
+ * from "the central's own GATT stack rejected something" the next time this happens. Pulled out
+ * as a pure top-level function, matching this file's own [shouldConnect]/[relevantRelayEntries]
+ * precedent, so it's directly testable without any real BLE plumbing.
+ *
+ * [MulePhaseTimeoutException] is checked ahead of the bare [TimeoutCancellationException] case —
+ * it's the phase-tagged wrapper [MulePullClient.readDeviceInfoOnce] throws for exactly this kind
+ * of failure (see that class's own doc), so a device whose reads keep timing out shows *which*
+ * phase (connecting vs reading, most usefully) rather than just "timeout" — confirmed live as
+ * the actual next question once "timeout" alone was already field-tested (TODO.md's Sony-Mule
+ * report): every attempt reported plain "timeout", never a GATT status/rejection, which alone
+ * doesn't say whether the connect handshake or the read response itself is what's not
+ * completing. That phase tag is what then found the actual answer live: the Sony reported
+ * "timeout (acking)" specifically — connect, MTU negotiation, and the real DeviceInfo read all
+ * completed, only the trailing best-effort sink-confirmation ack write was hanging, which (before
+ * MulePullClient.readDeviceInfoOnce's ack loop was made best-effort) was sinking the whole
+ * already-successful read and re-marking a genuinely reachable device unreachable, every single
+ * reconnect for as long as anything stayed owed to it.
+ */
+internal fun describeConnectFailure(cause: Throwable): String = when (cause) {
+    is MulePhaseTimeoutException -> "timeout (${cause.phase})"
+    is TimeoutCancellationException -> "timeout"
+    is GattStatusException -> "GATT error ${cause.status}"
+    is NotConnectedException -> "disconnected"
+    is GattRequestRejectedException -> "rejected"
+    else -> cause::class.simpleName ?: "unknown error"
+}
 
 /**
  * Decides whether [device] is worth a real, expensive GATT connect+[DeviceInfo] read this
