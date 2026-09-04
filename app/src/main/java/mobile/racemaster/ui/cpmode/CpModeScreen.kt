@@ -91,7 +91,7 @@ fun CpModeScreen(
             onDigit = viewModel::onDigit,
             onBackspace = viewModel::onBackspace,
             onClear = viewModel::onClear,
-            onRetire = viewModel::retagLastToRetire,
+            onRetire = viewModel::toggleLastRetag,
             onStop = viewModel::stopCpMode,
             onReset = viewModel::resetCpMode,
             onUndo = viewModel::undoLast,
@@ -190,16 +190,19 @@ private fun CpModeContent(
                         spacing = 4.dp,
                     )
 
-                    // No Pass button — every bib auto-saves as a Pass the moment its 3rd digit
-                    // is typed (see CpModeViewModel.onDigit). Retire retags that just-saved Pass
-                    // in place, so it's only enabled once there's one to retag.
+                    // No separate Pass button — every bib auto-saves as a Pass the moment its
+                    // 3rd digit is typed (see CpModeViewModel.onDigit). This one button retags
+                    // that entry in place, toggling label/direction to match whatever it isn't
+                    // currently — "Retire" for a Pass, "Pass" for a Retire (see
+                    // CpModeUiState.retagButtonLabel) — so it's only enabled once there's an
+                    // entry to retag, but never disabled just because a retag already happened.
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(
                             onClick = withClickSound { listClickGuard.trigger(); onRetire() },
                             enabled = uiState.canRetag && !uiState.stopped,
                             contentPadding = BUTTON_ROW_CONTENT_PADDING,
                             modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
-                        ) { Text("Retire") }
+                        ) { Text(uiState.retagButtonLabel) }
                         StopOrResetButton(
                             isStopped = uiState.stopped,
                             resetDescription = "This clears every checkpoint entry and resets ready to start again from scratch.",

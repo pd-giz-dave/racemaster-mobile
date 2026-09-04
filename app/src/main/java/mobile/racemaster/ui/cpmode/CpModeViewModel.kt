@@ -34,7 +34,11 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -63,9 +67,13 @@ data class CpModeUiState(
     val dupCount: Int = 0,
     val entries: List<EntryLogUi> = emptyList(),
     // True only immediately after this device auto-saved the currently-displayed bib as a Pass
-    // (see CpModeViewModel.canRetagFlow) — gates the Retire button, which now retags that entry
+    // (see CpModeViewModel.canRetagFlow) — gates the retag button, which now retags that entry
     // in place rather than submitting a fresh one.
     val canRetag: Boolean = false,
+    // "Pass" once the top entry is already a Retire — so an accidental Retire can be
+    // re-instated as a Pass — "Retire" otherwise, the normal correction direction. See
+    // CpModeViewModel.toggleLastRetag's own doc.
+    val retagButtonLabel: String = "Retire",
     val canUndo: Boolean = false,
     val stopped: Boolean = false,
     val raceInProgress: Boolean = false,
@@ -110,6 +118,23 @@ class CpModeViewModel(
     // RETIRE in place of FINISH/the Event picker.
     private val digitsFrozenFlow = MutableStateFlow(false)
     private val canRetagFlow = MutableStateFlow(false)
+
+    init {
+        // See BibsModeViewModel's own init doc for why this hydration exists: without it,
+        // canRetagFlow/digitsFrozenFlow default to false/blank on every fresh ViewModel (a
+        // screen navigation away and back, the app backgrounded and killed under memory
+        // pressure, a plain restart) even when a real Pass or Retire is still sitting on top of
+        // the list — leaving the toggle button visibly relabelled correctly (that part reads
+        // straight from the persisted entries) but disabled, so it can't actually be tapped.
+        viewModelScope.launch {
+            raceIdFlow.filterNotNull().distinctUntilChanged().collectLatest { raceId ->
+                val topEntry = cpModeRepository.observeCurrentSegmentEntries(raceId).first().firstOrNull()
+                digitsFlow.value = topEntry?.bibNumber?.let { it.toString().padStart(MAX_BIB_DIGITS, '0') }.orEmpty()
+                digitsFrozenFlow.value = topEntry?.bibNumber != null
+                canRetagFlow.value = topEntry?.bibNumber != null
+            }
+        }
+    }
 
     private val raceAndEntriesFlow = raceIdFlow.flatMapLatest { raceId ->
         if (raceId == null) {
@@ -162,6 +187,7 @@ class CpModeViewModel(
                 )
             },
             canRetag = canRetag,
+            retagButtonLabel = if (entries.firstOrNull()?.action == HistoryAction.RETIRE) "Pass" else "Retire",
             canUndo = entries.hasRealEntries(),
             stopped = race?.cpModeStoppedAtMillis != null,
             raceInProgress = isRaceInProgress(
@@ -191,7 +217,7 @@ class CpModeViewModel(
     // Auto-saves as a PASS the moment the 3rd digit is typed — see BibsModeViewModel.onDigit's
     // own doc for the identical reasoning/state machine (digitsFrozenFlow/canRetagFlow), applied
     // here with PASS in place of FINISH and no Event picker (CP only ever needs the one
-    // alternative, RETIRE — see retagLastToRetire).
+    // alternative, RETIRE — see toggleLastRetag).
     fun onDigit(digit: Int) {
         if (digitsFrozenFlow.value) {
             digitsFlow.value = ""
@@ -223,21 +249,26 @@ class CpModeViewModel(
         canRetagFlow.value = false
     }
 
-    // Retags the just-auto-saved Pass into a Retire, keeping its bib — only callable while
-    // canRetagFlow is true (the Retire button is disabled otherwise, see CpModeScreen). Makes a
-    // Retire 4 keystrokes total (3 digits + this tap) instead of the old flow's 4 typed digits
-    // plus a separate Retire tap that re-read the keypad.
-    fun retagLastToRetire() {
+    // Retags the top entry between Pass and Retire, keeping its bib — only callable while
+    // canRetagFlow is true (the button is disabled otherwise, see CpModeScreen). The direction
+    // is whatever the button doesn't currently say the entry is (see
+    // CpModeUiState.retagButtonLabel): normally Pass -> Retire, making a Retire 4 keystrokes
+    // total (3 digits + this tap) instead of the old flow's 4 typed digits plus a separate
+    // Retire tap that re-read the keypad — but also Retire -> Pass, so an accidental Retire tap
+    // can be undone by tapping the same (now relabelled) button again rather than needing Undo
+    // last, which would also throw away the bib itself.
+    fun toggleLastRetag() {
         if (!canRetagFlow.value) return
         viewModelScope.launch {
-            val targetId = uiState.value.entries.firstOrNull()?.id ?: return@launch
+            val target = uiState.value.entries.firstOrNull() ?: return@launch
+            val newType = if (target.type == HistoryAction.RETIRE) HistoryAction.PASS else HistoryAction.RETIRE
             val bib = digitsFlow.value.toIntOrNull()
-            cpModeRepository.updateEntry(targetId, bib, HistoryAction.RETIRE, note = null)
+            cpModeRepository.updateEntry(target.id, bib, newType, note = null)
             // Leave the field showing that same bib rather than blanking it — it's still the
-            // top of the list, just now shown as Retire instead of Pass (see
-            // BibsModeViewModel.onEventTypeSelected's own doc for the general rule).
+            // top of the list, just now shown as the other type. canRetagFlow is left true too
+            // (see BibsModeViewModel.onEventTypeSelected's own doc for the general rule) rather
+            // than reset to false, so a second tap can flip it right back again.
             digitsFrozenFlow.value = true
-            canRetagFlow.value = false
             beeper.beep()
         }
     }

@@ -35,7 +35,11 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -125,6 +129,28 @@ class BibsModeViewModel(
     // standalone one (see onEventTypeSelected).
     private val canRetagFlow = MutableStateFlow(false)
 
+    init {
+        // Hydrate the above three from whatever is actually on top of this race's history the
+        // moment it's selected — not just what THIS ViewModel instance has personally
+        // auto-saved. Without this, they default to blank/false on every fresh ViewModel (a
+        // screen navigation away and back, the app backgrounded and killed under memory
+        // pressure, a plain restart), even though the operator can still see a real entry
+        // sitting on top of the list — e.g. a Retire from a prior session — and has no way to
+        // tell Event "fix that one" once eventOptions has silently fallen back to
+        // BIBS_STANDALONE_OPTIONS (which excludes Finish/Start/Retire, since none of them mean
+        // anything without a live bib to retag). Runs once per race selection (distinct raceId),
+        // never on every entries update, so it can't clobber the operator's own later typing,
+        // undo, or retag calls.
+        viewModelScope.launch {
+            raceIdFlow.filterNotNull().distinctUntilChanged().collectLatest { raceId ->
+                val topEntry = bibsModeRepository.observeCurrentSegmentEntries(raceId).first().firstOrNull()
+                digitsFlow.value = topEntry?.bibNumber?.let { it.toString().padStart(MAX_BIB_DIGITS, '0') }.orEmpty()
+                digitsFrozenFlow.value = topEntry?.bibNumber != null
+                canRetagFlow.value = topEntry?.bibNumber != null
+            }
+        }
+    }
+
     private val raceAndEntriesFlow = raceIdFlow.flatMapLatest { raceId ->
         if (raceId == null) {
             flowOf(RaceContext(null, emptyList(), 0, null, emptySet(), ServerStatusState(ServerStatus.UNKNOWN, null)))
@@ -161,7 +187,14 @@ class BibsModeViewModel(
             raceLocation = race?.location.orEmpty(),
             started = race?.bibsModeStartedAtMillis != null,
             currentDigits = digits,
-            eventOptions = if (canRetag) EVENT_PICKER_OPTIONS else BIBS_STANDALONE_OPTIONS,
+            // Bib-required types (Finish/Start/Retire) only ever make sense against a real bib,
+            // so they're withheld even while canRetag is otherwise true if the top entry itself
+            // has none — a bib-less marker (Seniors/Juniors/...) can still be sitting on top
+            // after undoLast exposes one, or after canRetag defaults false on a fresh ViewModel
+            // (see this class's own init doc), with nothing here Event could retag into one of
+            // them. Undo last is the only way back from there: it removes the marker outright
+            // and exposes whatever bib-carrying entry was under it.
+            eventOptions = if (canRetag && entries.firstOrNull()?.bibNumber != null) EVENT_PICKER_OPTIONS else BIBS_STANDALONE_OPTIONS,
             nextSplitNumber = race?.bibsModeNextSplit ?: 1,
             dupCount = countDuplicateExtras(entries),
             entries = entries.map {
@@ -243,36 +276,42 @@ class BibsModeViewModel(
         canRetagFlow.value = false
     }
 
-    // Bibs' Event button is dual-purpose depending on whether there's a just-auto-saved entry
-    // on screen (see canRetagFlow): with one, the picked type retags that entry in place
-    // (keeping its bib if the new type still needs one, e.g. Finish -> Retire) — this is what
-    // makes a non-finish entry only 5 keystrokes (3 digits + Event + the picked type) instead of
-    // the old flow's 6. With no pending entry (nothing typed, or just cleared/undone), the
-    // picker instead only offers BIBS_STANDALONE_OPTIONS and logs a fresh, bib-less marker entry
-    // immediately — the same standalone marker logging the old pendingType-then-Submit flow gave
-    // Seniors/Juniors/Male/Female/Ignore.
+    // Bibs' Event button is dual-purpose depending on whether the picked type needs a bib (see
+    // BIB_REQUIRED_ACTIONS) and whether there's a just-auto-saved entry on screen to apply it to
+    // (see canRetagFlow). Picking a bib-required type (Finish/Start/Retire) with one retags that
+    // entry in place, keeping its bib — this is what makes a non-finish entry only 5 keystrokes
+    // (3 digits + Event + the picked type) instead of the old flow's 6. Picking a marker type
+    // (Seniors/Juniors/Male/Female/Ignore) never retags, even with a bib entry on screen: it
+    // always logs a fresh, bib-less standalone entry ON TOP of whatever's there, leaving that
+    // bib entry untouched underneath — e.g. "001 [auto-saves Finish] Event Ignore 002 [auto-saves
+    // Finish]" ends up as three separate rows (001/Finish, Ignore, 002/Finish), not a
+    // 001/Finish overwritten into Ignore. A marker is a flag about the moment ("the next runner
+    // through was ignored"), not a correction to the last bib, so it should never cost that bib
+    // its own entry.
     fun onEventTypeSelected(type: HistoryAction) {
         val raceId = raceIdFlow.value ?: return
+        val needsBib = type in BIB_REQUIRED_ACTIONS
         viewModelScope.launch {
-            // The entry field keeps reflecting the top of the list after this, same as
-            // undoLast — never blanked outright, since the operator still needs to see what
-            // they can act on next. A retag that keeps a bib (e.g. Finish -> Retire) leaves
-            // that bib on screen rather than clearing it away; one that drops the bib (a
-            // marker type) or a standalone marker log both leave the top entry bib-less, which
-            // is already what an empty field represents.
-            if (canRetagFlow.value) {
+            if (canRetagFlow.value && needsBib) {
+                // The entry field keeps reflecting the top of the list after this, same as
+                // undoLast — never blanked outright, since the operator still needs to see what
+                // they can act on next.
                 val targetId = uiState.value.entries.firstOrNull()?.id ?: return@launch
-                val needsBib = type in BIB_REQUIRED_ACTIONS
-                val bib = if (needsBib) digitsFlow.value.toIntOrNull() else null
+                val bib = digitsFlow.value.toIntOrNull()
                 bibsModeRepository.updateEntry(targetId, bib, type, note = null)
                 digitsFlow.value = bib?.let { it.toString().padStart(MAX_BIB_DIGITS, '0') }.orEmpty()
                 digitsFrozenFlow.value = bib != null
+                // canRetagFlow stays true (not reset to false): a picked type is only a best
+                // guess until the operator sees it land, e.g. meaning to tap Start but hitting
+                // Retire — leaving Event still targeting this same entry (by id, so it keeps
+                // working whether or not a bib is currently showing) is what makes "event retire
+                // event start" a correction rather than a second, wrong entry to undo.
             } else {
                 bibsModeRepository.recordEntry(raceId, type, bibNumber = null, note = null)
                 digitsFlow.value = ""
                 digitsFrozenFlow.value = false
+                canRetagFlow.value = false
             }
-            canRetagFlow.value = false
             beeper.beep()
         }
     }
