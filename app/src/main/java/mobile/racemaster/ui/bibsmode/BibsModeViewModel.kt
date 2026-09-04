@@ -271,16 +271,23 @@ class BibsModeViewModel(
 
     fun undoLast() {
         val raceId = raceIdFlow.value ?: return
-        // Snapshotted before the undo call so the just-undone row's own bib (rather than
-        // whatever becomes newly topmost afterward) is what comes back into the entry field —
-        // "instant feedback of the last number accepted" per TODO.md. Never retag-able (there's
-        // nothing live left to retag once it's undone), so canRetagFlow stays false.
-        val undoneBib = uiState.value.entries.firstOrNull()?.bibNumber
+        // The entry field should show whatever the operator can now SEE on top of the list —
+        // the newly-exposed entry (index 1 of the pre-undo list, since undo always hides
+        // index 0 — see EntryLogModeEngine.undoMostRecent's own doc), not the one that was just
+        // undone and is no longer visible at all. Snapshotted from the pre-undo list rather than
+        // read back from uiState after the repository call returns: the entries Flow updates
+        // asynchronously off Room's own invalidation, so it isn't guaranteed to already reflect
+        // the undo by the time this suspend call resumes, whereas "index 1 becomes the new
+        // index 0" is already known from the list as it stands right now. canRetagFlow follows
+        // it (true, not false) so Event applies to that same newly-exposed entry, matching what
+        // the operator sees — undoing a bad Finish and then wanting to immediately mark the
+        // real last one as Retire is exactly this two-step correction.
+        val newlyExposedBib = uiState.value.entries.getOrNull(1)?.bibNumber
         viewModelScope.launch {
             bibsModeRepository.undoMostRecent(raceId)
-            digitsFlow.value = undoneBib?.let { it.toString().padStart(MAX_BIB_DIGITS, '0') }.orEmpty()
-            digitsFrozenFlow.value = undoneBib != null
-            canRetagFlow.value = false
+            digitsFlow.value = newlyExposedBib?.let { it.toString().padStart(MAX_BIB_DIGITS, '0') }.orEmpty()
+            digitsFrozenFlow.value = newlyExposedBib != null
+            canRetagFlow.value = newlyExposedBib != null
         }
     }
 

@@ -240,14 +240,18 @@ class CpModeViewModel(
         }
     }
 
+    // See BibsModeViewModel.undoLast's own doc for why this reads index 1 of the pre-undo list
+    // (the entry that becomes newly exposed on top once undo hides index 0) rather than index 0
+    // itself, and why canRetagFlow follows it as true — Retire should apply to whatever the
+    // operator can now see there, not to the row that just disappeared.
     fun undoLast() {
         val raceId = raceIdFlow.value ?: return
-        val undoneBib = uiState.value.entries.firstOrNull()?.bibNumber
+        val newlyExposedBib = uiState.value.entries.getOrNull(1)?.bibNumber
         viewModelScope.launch {
             cpModeRepository.undoMostRecent(raceId)
-            digitsFlow.value = undoneBib?.let { it.toString().padStart(MAX_BIB_DIGITS, '0') }.orEmpty()
-            digitsFrozenFlow.value = undoneBib != null
-            canRetagFlow.value = false
+            digitsFlow.value = newlyExposedBib?.let { it.toString().padStart(MAX_BIB_DIGITS, '0') }.orEmpty()
+            digitsFrozenFlow.value = newlyExposedBib != null
+            canRetagFlow.value = newlyExposedBib != null
         }
     }
 
