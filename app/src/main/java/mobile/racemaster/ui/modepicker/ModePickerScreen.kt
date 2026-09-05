@@ -36,6 +36,8 @@ import mobile.racemaster.util.withClickSound
 fun ModePickerScreen(
     onModeSelected: (AppMode) -> Unit,
     onNewRaceNeeded: (AppMode) -> Unit,
+    onMuleModeSelected: () -> Unit,
+    onMuleSetupNeeded: () -> Unit,
     onReviewPastRaces: () -> Unit,
     onHelp: () -> Unit,
     onSetupDevice: () -> Unit,
@@ -44,14 +46,11 @@ fun ModePickerScreen(
     val hasActiveRace by viewModel.hasActiveRace.collectAsStateWithLifecycle()
     val activeRaceStatus by viewModel.activeRaceStatus.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
+    val muleSyncEnabled by viewModel.muleSyncEnabled.collectAsStateWithLifecycle()
     val modeSwitchError by viewModel.modeSwitchError.collectAsStateWithLifecycle()
 
     fun handleModeTap(mode: AppMode) {
-        // Mule Mode never creates a race of its own (it pulls/pushes other devices' race
-        // data) — routing it through the New Race form on a fresh install was leftover
-        // behavior from before Mule Mode was simplified, and asked for fields (race
-        // name/course) it has no use for.
-        if (mode == AppMode.MULE || hasActiveRace) {
+        if (hasActiveRace) {
             viewModel.selectModeForExistingRace(mode) { onModeSelected(mode) }
         } else {
             onNewRaceNeeded(mode)
@@ -91,10 +90,28 @@ fun ModePickerScreen(
             Text(deviceName?.let { "Setup: $it" } ?: "Setup Device", style = MaterialTheme.typography.titleMedium)
         }
         Text("Select device mode", style = MaterialTheme.typography.titleMedium)
-        ModeButton("Time Mode") { handleModeTap(AppMode.TIME) }
-        ModeButton("Bibs Mode") { handleModeTap(AppMode.BIBS) }
-        ModeButton("CP Mode") { handleModeTap(AppMode.CP) }
-        ModeButton("Mule Mode") { handleModeTap(AppMode.MULE) }
+        // "-active" mirrors the race-in-progress card just below (same activeModes set, see
+        // ActiveRaceStatus's own doc) right on the button itself — a race can be active in a
+        // mode other than whichever screen the operator currently has open (switching modes
+        // doesn't start a new race), so this is what actually tells them where without reading
+        // the card's own prose.
+        val activeModes = activeRaceStatus?.activeModes ?: emptySet()
+        ModeButton(activeLabel("Time Mode", AppMode.TIME in activeModes)) { handleModeTap(AppMode.TIME) }
+        ModeButton(activeLabel("Bibs Mode", AppMode.BIBS in activeModes)) { handleModeTap(AppMode.BIBS) }
+        ModeButton(activeLabel("CP Mode", AppMode.CP in activeModes)) { handleModeTap(AppMode.CP) }
+        // Mule syncing is its own independent on/off flag now (see
+        // SettingsRepository.muleSyncEnabled's own doc), not a 4th mode mutually exclusive with
+        // the three above, echoed right in the button label so it reads correctly whether or not
+        // a race is in progress. Mirrors the New-Race-first flow the three buttons above use
+        // when there's nothing to show yet: off routes through Options (there's nothing on
+        // Mule Mode's own dashboard worth seeing until it's actually on — same as Time/Bibs/CP
+        // routing through New Race first when no race exists), landing on the dashboard once
+        // Options' own Enable action fires (see SetupOptionsScreen's onMuleModeEnabled); already
+        // on goes straight to the dashboard, same as tapping a mode with an active race already
+        // skips New Race.
+        ModeButton(if (muleSyncEnabled) "Mule Mode — ON" else "Mule Mode — OFF") {
+            if (muleSyncEnabled) onMuleModeSelected() else onMuleSetupNeeded()
+        }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = withClickSound(onReviewPastRaces),
@@ -196,6 +213,8 @@ private fun ActiveRaceStatusCard(status: ActiveRaceStatus, modifier: Modifier = 
         Text(continueText, style = MaterialTheme.typography.bodySmall)
     }
 }
+
+private fun activeLabel(label: String, isActive: Boolean): String = if (isActive) "$label - active" else label
 
 @Composable
 private fun ModeButton(label: String, onClick: () -> Unit) {

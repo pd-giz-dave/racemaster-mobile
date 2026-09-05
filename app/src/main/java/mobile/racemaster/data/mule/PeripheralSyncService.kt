@@ -134,6 +134,12 @@ class PeripheralSyncService : Service() {
     @Volatile
     private var currentMode: AppMode? = null
 
+    // Kept live the same way currentMode is above, by observeMuleSyncEnabled() below — independent
+    // of currentMode (see SettingsRepository.muleSyncEnabled's own doc): this is what gates
+    // advertisedInMule/MULE_MODE_MARKER_SERVICE_UUID in startAdvertising, not currentMode.
+    @Volatile
+    private var muleSyncEnabled: Boolean = false
+
     @Volatile
     private var servingState = ServingState()
 
@@ -224,6 +230,7 @@ class PeripheralSyncService : Service() {
         observeServingState()
         observeDeviceName()
         observeAppMode()
+        observeMuleSyncEnabled()
         observeRelayManifest()
         observeRaceStaleAfterDays()
         observeAdvertisingWarning()
@@ -248,16 +255,32 @@ class PeripheralSyncService : Service() {
         }
     }
 
-    // A mode switch (e.g. Time -> Mule via ModePickerScreen) must be reflected in the advertised
-    // scan-response payload promptly — see the racemaster web app's mule-ble.js `connectToPhone`,
-    // whose requestDevice() picker filter relies on this to only show phones currently in Mule
-    // Mode. scheduleAdvertisedIdentityRefresh() below is the same debounced refresh
+    // A mode switch (e.g. Time -> Bibs via ModePickerScreen) must be reflected in the advertised
+    // scan-response payload promptly, purely for the informational mode byte it carries (see
+    // MuleGattProfile.AdvertisedIdentity.mode's own doc — no picker filter relies on this
+    // anymore, see MULE_MODE_MARKER_SERVICE_UUID's own doc for what does).
+    // scheduleAdvertisedIdentityRefresh() below is the same debounced refresh
     // observeServingState already drives for lastLineNumber changes.
     private fun observeAppMode() {
         serviceScope.launch {
             container.settingsRepository.appMode.collect { mode ->
                 Log.i(TAG, "App mode observed: $mode (was $currentMode)")
                 currentMode = mode
+                scheduleAdvertisedIdentityRefresh()
+            }
+        }
+    }
+
+    // Independent of observeAppMode above (see SettingsRepository.muleSyncEnabled's own doc) —
+    // this is what the racemaster web app's requestDevice() picker filter actually relies on
+    // (via MULE_MODE_MARKER_SERVICE_UUID in the primary advertisement, see advertisedInMule in
+    // startAdvertising below), so a toggle on SetupOptionsScreen must reach it just as promptly
+    // as a ModePickerScreen mode switch reaches observeAppMode above.
+    private fun observeMuleSyncEnabled() {
+        serviceScope.launch {
+            container.settingsRepository.muleSyncEnabled.collect { enabled ->
+                Log.i(TAG, "Mule sync enabled observed: $enabled (was $muleSyncEnabled)")
+                muleSyncEnabled = enabled
                 scheduleAdvertisedIdentityRefresh()
             }
         }
@@ -579,7 +602,7 @@ class PeripheralSyncService : Service() {
         // manufacturer data, is what the web app's picker actually relies on now, and why this
         // fits the legacy 31-byte primary-advertisement budget (SERVICE_UUID alone already costs
         // 18 of those; a short-form 16-bit UUID costs only 4 more).
-        val advertisedInMule = currentMode == AppMode.MULE
+        val advertisedInMule = muleSyncEnabled
         val dataBuilder = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
             .addServiceUuid(ParcelUuid(MuleGattProfile.SERVICE_UUID))
@@ -587,7 +610,12 @@ class PeripheralSyncService : Service() {
             dataBuilder.addServiceUuid(ParcelUuid(MuleGattProfile.MULE_MODE_MARKER_SERVICE_UUID))
         }
         val data = dataBuilder.build()
-        Log.i(TAG, "Primary advertisement service UUIDs: SERVICE_UUID${if (advertisedInMule) " + MULE_MODE_MARKER_SERVICE_UUID (mode=$currentMode)" else " only (mode=$currentMode)"}")
+        Log.i(
+            TAG,
+            "Primary advertisement service UUIDs: SERVICE_UUID" +
+                (if (advertisedInMule) " + MULE_MODE_MARKER_SERVICE_UUID" else "") +
+                " (mode=$currentMode, muleSyncEnabled=$muleSyncEnabled)",
+        )
         advertiserLocal.startAdvertising(settings, data, buildScanResponseData(), advertiseCallback)
     }
 

@@ -11,6 +11,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -41,6 +42,22 @@ import mobile.racemaster.util.withClickSound
 @Composable
 fun SetupOptionsScreen(
     onDone: () -> Unit,
+    // Fires right after a successful Enable (not Disable) — see ModePickerScreen's own
+    // onMuleSetupNeeded/onMuleModeSelected doc for why: tapping "Mule Mode" on the picker while
+    // it's off routes here first (there's nothing to show on Mule Mode's own dashboard until
+    // it's actually on), the same way tapping Time/Bibs/CP with no active race routes through
+    // New Race first — turning it on here is this flow's own "Create", so it lands on Mule
+    // Mode's dashboard next, same as Create lands on that mode's own screen.
+    onMuleModeEnabled: () -> Unit = {},
+    // Fires right after a successful Disable, but only meaningfully wired when this screen was
+    // reached via Mule Mode's own "Options" button (see Routes.setupOptions/RacemasterNavHost) —
+    // that's the one path guaranteed to have muling on when arriving, and the dashboard
+    // underneath has nothing left to show once it's off, so this pops back past both Options and
+    // it to the Mode Picker, mirroring onMuleModeEnabled's own forward trip. Left a no-op
+    // (default) everywhere else Options is reached (Setup Device's own button, the Mode Picker's
+    // Mule-off routing) — an operator who detoured here from Time/Bibs/CP to disable muling
+    // should land back where they were, not get bounced to the picker.
+    onMuleModeDisabled: () -> Unit = {},
     viewModel: MuleModeViewModel = viewModel(factory = MuleModeViewModel.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -59,11 +76,67 @@ fun SetupOptionsScreen(
             modifier = Modifier.padding(padding).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            MuleSyncControl(
+                uiState = uiState,
+                viewModel = viewModel,
+                onEnabled = onMuleModeEnabled,
+                onDisabled = onMuleModeDisabled,
+            )
+            HorizontalDivider()
             BluetoothAndServerSyncToggles(uiState = uiState, viewModel = viewModel)
             HorizontalDivider()
             AutoSyncControls(uiState = uiState, viewModel = viewModel)
             HorizontalDivider()
             RaceStalenessControl(viewModel = viewModel)
+        }
+    }
+}
+
+// The explicit on/off control for SettingsRepository.muleSyncEnabled — see its own doc for what
+// it actually gates (scanning for and pulling from nearby devices), and why it's independent of
+// whichever recording mode (Time/Bibs/CP/none) this phone is itself in: this control lives here,
+// on the Options screen every mode reaches via Setup Device, specifically so a phone already
+// recording a race doesn't have to detour through Mule Mode's own screen just to also start
+// relaying a second, internet-less phone's data on to the server.
+@Composable
+internal fun MuleSyncControl(
+    uiState: MuleModeUiState,
+    viewModel: MuleModeViewModel,
+    onEnabled: () -> Unit = {},
+    onDisabled: () -> Unit = {},
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            if (uiState.muleSyncEnabled) {
+                "Mule syncing: ON — also scanning for and pulling data from nearby devices"
+            } else {
+                "Mule syncing: OFF — not scanning for other devices"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (uiState.muleSyncEnabled) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+        if (uiState.muleSyncEnabled) {
+            OutlinedButton(
+                onClick = withClickSound {
+                    viewModel.setMuleSyncEnabled(false)
+                    onDisabled()
+                },
+            ) {
+                Text("Disable Mule Mode")
+            }
+        } else {
+            Button(
+                onClick = withClickSound {
+                    viewModel.setMuleSyncEnabled(true)
+                    onEnabled()
+                },
+            ) {
+                Text("Enable Mule Mode")
+            }
         }
     }
 }
@@ -149,7 +222,7 @@ internal fun AutoSyncControls(uiState: MuleModeUiState, viewModel: MuleModeViewM
                 color = MaterialTheme.colorScheme.error,
             )
             uiState.autoSyncArmed -> Text(
-                if (uiState.isMuleMode) {
+                if (uiState.muleSyncEnabled) {
                     "Auto-sync: ON — pulling and pushing every few seconds"
                 } else {
                     "Auto-sync: ON — pushing every few seconds"

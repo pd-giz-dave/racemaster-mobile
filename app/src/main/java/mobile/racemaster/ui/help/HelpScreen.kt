@@ -189,9 +189,23 @@ fun HelpScreen(onBack: () -> Unit) {
             )
             HelpSection(
                 title = "Mule Mode",
-                body = "Mule Mode continuously syncs with every other RaceMaster Mobile device it can " +
-                    "see over Bluetooth — no pairing step needed, any nearby device running the app " +
-                    "is discovered and synced automatically. A phone can also be connected to directly " +
+                body = "Mule Mode is an on/off toggle (Setup Device > Options > Enable/Disable Mule " +
+                    "Mode), not a mode a phone is limited to instead of Time/Bibs/CP — a phone can " +
+                    "record its own race in any of those and also mule at the same time. This is " +
+                    "for a phone with no internet access at its station: a second, internet-connected " +
+                    "phone nearby (in any mode, muling turned on) picks up and forwards its data to " +
+                    "the server alongside its own. Tapping \"Mule Mode\" on the Mode Picker (which " +
+                    "always shows current ON/OFF state right in its own label) opens this dashboard " +
+                    "directly when muling is already on; when it's off, it opens Options instead (see " +
+                    "Setup Device below), since there's nothing to show here until it's turned on — " +
+                    "Enable Mule Mode there lands straight back here, and Disable Mule Mode from here " +
+                    "(via this screen's own Options button) returns to the Mode Picker the same way, " +
+                    "since there's nothing left to show once it's off again. This dashboard is " +
+                    "muling's own status view regardless of which mode this phone is itself " +
+                    "recording — it continuously syncs with every other RaceMaster Mobile device it " +
+                    "can see over Bluetooth once muling is on, no pairing step needed, any nearby " +
+                    "device running the app is discovered and synced automatically. A phone can also " +
+                    "be connected to directly " +
                     "over Bluetooth by the RaceMaster web app, which counts as a second, independent " +
                     "destination — a race can reach race control via the server, a Bluetooth-connected " +
                     "laptop, or both. Timestamps on this screen are the quickest way to tell " +
@@ -206,28 +220,30 @@ fun HelpScreen(onBack: () -> Unit) {
                     "while a device still has unsynced data and green once it's fully pulled. None of " +
                     "these timestamps carries a separate warning of its own; judge each the same way " +
                     "— if it looks old, something's stopped. Options (top right, next to Mode) covers " +
-                    "Bluetooth on/off, server sync on/off, force-syncing, and " +
+                    "muling on/off, Bluetooth on/off, server sync on/off, force-syncing, and " +
                     "pausing auto-sync — see Setup Device below.",
             )
             HelpSection(
                 title = "Setup Device",
                 body = "Setup Device — reached from every mode via the \"Setup: <device name>\" " +
                     "button on the Mode Picker — is where a phone's own identity and connectivity are " +
-                    "configured, independently of which mode (Time/Bibs/CP/Mule) it's currently " +
-                    "running. Setup Name renames this device, the label every other phone sees it by. " +
-                    "Setup Server configures the RaceMaster server URL and login — needed only if this " +
-                    "phone should push its own data to the server directly, or (for a Mule phone) also " +
-                    "pull and re-push data collected from other nearby phones; skip it entirely to " +
-                    "stay purely device-to-device over Bluetooth. Options covers everything else: " +
-                    "Bluetooth on/off (turning it off makes this phone invisible to every nearby device " +
-                    "— no scanning, no advertising, no GATT reads — until turned back on), server sync " +
-                    "on/off (independent of Bluetooth — turns pushing to/checking the server on or off " +
-                    "without affecting device-to-device sync), Force sync now (triggers an immediate " +
-                    "pull-and-push cycle instead of waiting for the automatic few-second tick), and " +
-                    "Stop auto-sync/Resume auto-sync (pauses or resumes that background cycle). All " +
-                    "four apply the same way regardless of mode: a Time/Bibs/CP phone still pushes its " +
-                    "own recorded data to the server on the same schedule, it just never pulls from " +
-                    "other phones the way a Mule phone does. Once a server is configured, every mode's " +
+                    "configured, independently of which mode (Time/Bibs/CP, or none) it's currently " +
+                    "recording and of whether muling is on. Setup Name renames this device, the label " +
+                    "every other phone sees it by. Setup Server configures the RaceMaster server URL " +
+                    "and login — needed only if this phone should push its own data to the server " +
+                    "directly, or (with muling turned on) also pull and re-push data collected from " +
+                    "other nearby phones; skip it entirely to stay purely device-to-device over " +
+                    "Bluetooth. Options covers everything else: Enable/Disable Mule Mode (see Mule " +
+                    "Mode above), Bluetooth on/off (turning it off makes this phone invisible to " +
+                    "every nearby device — no scanning, no advertising, no GATT reads — until turned " +
+                    "back on), server sync on/off (independent of Bluetooth — turns pushing to/" +
+                    "checking the server on or off without affecting device-to-device sync), Force " +
+                    "sync now (triggers an immediate pull-and-push cycle instead of waiting for the " +
+                    "automatic few-second tick), and Stop auto-sync/Resume auto-sync (pauses or " +
+                    "resumes that background cycle). These apply the same way regardless of " +
+                    "recording mode: a phone still pushes its own recorded data to the server on the " +
+                    "same schedule either way, it just never pulls from other phones unless muling " +
+                    "is turned on for it too. Once a server is configured, every mode's " +
                     "own screen shows a \"Server: \" line for it (in Mule Mode, directly above \"Last " +
                     "push to server\") — Online, Offline, Invalid server (wrong URL — a real server " +
                     "just isn't answering there), or Paused (server sync turned off in Options), " +
@@ -259,8 +275,13 @@ fun HelpScreen(onBack: () -> Unit) {
             HelpSection(
                 title = "General",
                 body = "New Race starts a fresh race under the current mode (disabled while a race is " +
-                    "in progress, to avoid losing it). Mode switches between Time/Bibs/Mule for the " +
-                    "same active race. History on the mode picker shows every previously recorded " +
+                    "in progress, to avoid losing it). Time/Bibs/CP are mutually exclusive for a race " +
+                    "— only one can be active at once, and picking a different one while another is " +
+                    "still active (Started but not yet Stopped and Reset) is blocked with a \"Can't " +
+                    "switch mode\" dialog rather than performed. The Mode Picker marks whichever one " +
+                    "is holding it \"- active\" right on its own button, alongside the race-in-progress " +
+                    "card lower down. Muling on/off is separate (see Mule Mode above) and unaffected " +
+                    "by any of this. History on the mode picker shows every previously recorded " +
                     "race, read-only. Button presses play a short click sound at full volume, " +
                     "regardless of the phone's own volume/Touch sounds setting, so it's audible at " +
                     "a noisy finish line.",

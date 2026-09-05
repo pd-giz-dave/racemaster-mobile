@@ -151,16 +151,17 @@ class RaceRepository(
     // Returns null when the switch is fine, or a message to show the operator when it isn't.
     // Called from ModePickerViewModel.selectModeForExistingRace, the one place a mode switch
     // for an already-active race actually happens.
+    // Time/Bibs/CP are mutually exclusive for a given race's current segment — only one of the
+    // three may be started at once, the same interlock this originally only enforced between
+    // Bibs and CP. Checks every other mode generically (via isModeStarted) rather than a fixed
+    // pair of if-checks, so a 4th recording mode would only ever need adding to AppMode.entries
+    // for this to already cover it.
     suspend fun blockedModeSwitchReason(raceId: Long, targetMode: AppMode): String? {
-        if (targetMode != AppMode.BIBS && targetMode != AppMode.CP) return null
         val race = raceDao.getById(raceId) ?: return null
-        if (targetMode == AppMode.BIBS && race.cpModeStartedAtMillis != null) {
-            return "CP Mode still has an active race — Stop and Reset it before switching to Bibs Mode."
-        }
-        if (targetMode == AppMode.CP && race.bibsModeStartedAtMillis != null) {
-            return "Bibs Mode still has an active race — Stop and Reset it before switching to CP Mode."
-        }
-        return null
+        val conflicting = AppMode.entries.firstOrNull { it != targetMode && isModeStarted(it, race) }
+            ?: return null
+        return "${conflicting.displayName()} still has an active race — Stop and Reset it before " +
+            "switching to ${targetMode.displayName()}."
     }
 
     // Cross-mode facade: the only two places that need to see a race's Time AND Bibs rows

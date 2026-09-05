@@ -141,7 +141,7 @@ internal fun ConnectivityStatusText(uiState: MuleModeUiState) {
             // serves reads, it never scans or pulls anything itself, so this text must not
             // claim otherwise just because this composable is now shared across every mode.
             Text(
-                if (uiState.isMuleMode) {
+                if (uiState.muleSyncEnabled) {
                     "Bluetooth: ON — pulling data from nearby devices"
                 } else {
                     "Bluetooth: ON — visible to nearby Mule devices"
@@ -161,7 +161,7 @@ internal fun ConnectivityStatusText(uiState: MuleModeUiState) {
             // This phone's own recent BLE central connect success rate — see ConnectHealth's
             // own doc for why this matters: some phones' peripheral role (the "ON — visible to
             // nearby Mule devices" line just above, and every other branch here) works fine
-            // while their central role (this phone actively pulling, isMuleMode only) fails on
+            // while their central role (this phone actively pulling, muleSyncEnabled only) fails on
             // most connect attempts, purely a chipset/driver limitation confirmed in the field
             // — no code fix can improve it, but an operator who can see this can swap to a
             // different phone as Mule before a race rather than mid-event. Gated on

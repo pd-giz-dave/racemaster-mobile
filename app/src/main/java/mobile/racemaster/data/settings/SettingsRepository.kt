@@ -36,6 +36,7 @@ class SettingsRepository(
 ) {
     private object Keys {
         val APP_MODE = stringPreferencesKey("app_mode")
+        val MULE_SYNC_ENABLED = booleanPreferencesKey("mule_sync_enabled")
         val ACTIVE_RACE_ID = longPreferencesKey("active_race_id")
         val DEVICE_ID = stringPreferencesKey("device_id")
         val DEVICE_NAME = stringPreferencesKey("device_name")
@@ -59,14 +60,41 @@ class SettingsRepository(
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    // runCatching rather than a plain AppMode.valueOf(it) — this key used to also hold "MULE"
+    // (back when Mule was a 4th value of this same enum; see AppMode's own doc and
+    // muleSyncEnabled below), which is no longer a member and would otherwise throw
+    // IllegalArgumentException on every read for any device that still has it persisted,
+    // crashing the app on launch rather than just falling back to "no mode".
     val appMode: Flow<AppMode?> = dataStore.data.map { prefs ->
-        prefs[Keys.APP_MODE]?.let { AppMode.valueOf(it) }
+        prefs[Keys.APP_MODE]?.let { raw -> runCatching { AppMode.valueOf(raw) }.getOrNull() }
+    }
+
+    // Independent of, and freely combinable with, appMode above — whether this phone also
+    // scans for and pulls data from nearby devices, regardless of which (if any) of Time/Bibs/CP
+    // it's itself recording. Lets a single phone at the finish line both record its own race and
+    // relay a second, internet-less phone's data on to the server — the scenario Mule Mode used
+    // to require a dedicated phone for, back when it was one of four mutually-exclusive AppMode
+    // values instead of this separate flag. See MuleSyncEngine.startBluetoothStateLoop (the
+    // scanning/pulling gate) and PeripheralSyncService's advertisedInMule (the BLE advertisement
+    // marker) for where this actually takes effect.
+    //
+    // Falls back to the pre-migration signal (the legacy APP_MODE key literally holding the
+    // string "MULE") whenever this key has never been explicitly written — a device already
+    // sitting in the old exclusive Mule Mode keeps muling after upgrading, without needing a
+    // one-shot migration step of its own; the very first explicit setMuleSyncEnabled call (from
+    // either turning it on or off) permanently switches this flow onto the new key.
+    val muleSyncEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[Keys.MULE_SYNC_ENABLED] ?: (prefs[Keys.APP_MODE] == "MULE")
     }
 
     val activeRaceId: Flow<Long?> = dataStore.data.map { prefs -> prefs[Keys.ACTIVE_RACE_ID] }
 
     suspend fun setAppMode(mode: AppMode) {
         dataStore.edit { prefs -> prefs[Keys.APP_MODE] = mode.name }
+    }
+
+    suspend fun setMuleSyncEnabled(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.MULE_SYNC_ENABLED] = enabled }
     }
 
     suspend fun setActiveRaceId(id: Long) {

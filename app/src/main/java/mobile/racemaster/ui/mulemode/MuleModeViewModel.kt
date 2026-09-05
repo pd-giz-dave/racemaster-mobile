@@ -21,7 +21,6 @@ import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.data.mule.previouslySeenDevices
 import mobile.racemaster.data.mule.withLastPulledAtMillis
-import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 
@@ -44,10 +43,9 @@ data class MuleModeUiState(
     val serverSyncOff: Boolean = false,
     val advertisingWarning: String? = null,
     // Whether this phone is actually the active BT puller right now (see MuleSyncEngine's own
-    // doc on the source/sink role split) — a plain boolean, not the raw AppMode, since every
-    // render site here only ever needs this binary distinction; a not-yet-loaded appMode
-    // correctly falls out as false (not pulling), no third case to handle anywhere.
-    val isMuleMode: Boolean = false,
+    // doc on the source/sink role split) — SettingsRepository.muleSyncEnabled's live value,
+    // independent of (and combinable with) whichever recording mode this phone is itself in.
+    val muleSyncEnabled: Boolean = false,
     // The three "is everything actually working" timestamps Mule Mode shows: this one is when
     // this device's own data was last pushed to the server (see MuleRepository.lastPushAttemptAtMillis's
     // own doc for why it's a distinct signal from lastSyncedAtMillis above); per-device pull
@@ -107,6 +105,13 @@ class MuleModeViewModel(
         viewModelScope.launch { settingsRepository.setRaceStaleAfterDays(days) }
     }
 
+    // See SettingsRepository.muleSyncEnabled's own doc — the explicit "Enable/Disable Mule
+    // syncing" control on SetupOptionsScreen, independent of whichever recording mode (if any)
+    // this phone is itself in.
+    fun setMuleSyncEnabled(enabled: Boolean) {
+        viewModelScope.launch { settingsRepository.setMuleSyncEnabled(enabled) }
+    }
+
     @Suppress("UNCHECKED_CAST")
     val uiState: StateFlow<MuleModeUiState> = combine(
         muleSyncEngine.discoveredDevices,
@@ -124,7 +129,7 @@ class MuleModeViewModel(
         muleSyncEngine.relayDevices,
         muleRepository.knownDevices,
         muleSyncEngine.advertisingWarning,
-        settingsRepository.appMode,
+        settingsRepository.muleSyncEnabled,
         muleRepository.sourceSummaries,
         muleRepository.lastPushAttemptAtMillis,
         muleSyncEngine.lastWebAppSeenAtMillis,
@@ -140,7 +145,7 @@ class MuleModeViewModel(
         val relayDevices = values[12] as Map<String, DiscoveredDevice>
         val knownDevices = values[13] as List<KnownDeviceEntity>
         val advertisingWarning = values[14] as String?
-        val appMode = values[15] as AppMode?
+        val muleSyncEnabled = values[15] as Boolean
         val sourceSummaries = values[16] as List<PulledSourceSummary>
         val lastPushAttemptAtMillis = values[17] as Long?
         val lastWebAppSeenAtMillis = values[18] as Long?
@@ -187,7 +192,7 @@ class MuleModeViewModel(
             bluetoothOff = bluetoothOff,
             serverSyncOff = serverSyncOff,
             advertisingWarning = advertisingWarning,
-            isMuleMode = appMode == AppMode.MULE,
+            muleSyncEnabled = muleSyncEnabled,
             lastPushAttemptAtMillis = lastPushAttemptAtMillis,
             lastWebAppSeenAtMillis = lastWebAppSeenAtMillis,
             lastWebAppPushedAtMillis = lastWebAppPushedAtMillis,

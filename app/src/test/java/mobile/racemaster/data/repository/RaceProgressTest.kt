@@ -195,18 +195,6 @@ class RaceProgressTest {
     }
 
     @Test
-    fun isModeStartedIsAlwaysFalseForMule() {
-        val race = RaceEntity(
-            label = "Test Race",
-            createdAtMillis = 0L,
-            timeModeStartedAtMillis = 1_000L,
-            bibsModeStartedAtMillis = 2_000L,
-            cpModeStartedAtMillis = 3_000L,
-        )
-        assertFalse(isModeStarted(AppMode.MULE, race))
-    }
-
-    @Test
     fun isModeStartedIsFalseForANullRace() {
         assertFalse(isModeStarted(AppMode.BIBS, null))
     }

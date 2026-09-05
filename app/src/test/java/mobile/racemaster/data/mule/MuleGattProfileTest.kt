@@ -136,10 +136,10 @@ class MuleGattProfileTest {
         assertEquals(MuleGattProfile.shortDeviceId("some-real-uuid-looking-id"), decoded!!.shortDeviceId)
     }
 
-    // mode — the field the racemaster web app's requestDevice() picker filter relies on (see
-    // AdvertisedIdentity's own doc) to only surface phones currently in Mule Mode, without ever
-    // reading this payload itself: Chrome matches a manufacturer-data prefix browser-side before
-    // the chooser is shown, so this must sit at a fixed offset and round-trip exactly.
+    // mode — this device's own recording mode at advertise time, legacy/informational only (see
+    // AdvertisedIdentity's own doc for why no picker filter relies on it anymore) — still must
+    // round-trip exactly, since it sits at a fixed offset in the payload other fields are read
+    // relative to.
 
     @Test
     fun roundTripsEachModeAlongsideNameAndCounter() {
@@ -166,7 +166,7 @@ class MuleGattProfileTest {
 
     @Test
     fun decodeTreatsAnUnrecognizedModeByteAsNullRatherThanFailingTheWholePayload() {
-        val encoded = MuleGattProfile.encodeAdvertisedIdentity(1L, "device-a", "name", AppMode.MULE)
+        val encoded = MuleGattProfile.encodeAdvertisedIdentity(1L, "device-a", "name", AppMode.TIME)
         // Corrupt the mode byte (right after magic+version) to a value no build has ever used —
         // simulates a newer build's mode reaching an older decoder. Must still decode
         // everything else fine, not reject the whole payload the way an unrecognized

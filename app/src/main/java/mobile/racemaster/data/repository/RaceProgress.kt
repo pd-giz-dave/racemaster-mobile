@@ -84,12 +84,20 @@ suspend fun isRaceCurrentlyActive(raceId: Long, raceRepository: RaceRepository):
  * whichever of RaceEntity's own timeModeStartedAtMillis/bibsModeStartedAtMillis/
  * cpModeStartedAtMillis fields is the right one to read, pulled out as its own pure function so
  * a caller never has to hand-roll that mapping itself. [race] null (not yet loaded, or a
- * dangling id) is never "started". Mule has no started concept of its own — it never owns a
- * race's fields the way Time/Bibs/CP each do.
+ * dangling id) is never "started". Mule syncing has no started concept of its own — it isn't a
+ * recording mode and never owns a race's fields the way Time/Bibs/CP each do (see
+ * SettingsRepository.muleSyncEnabled's own doc).
  */
 fun isModeStarted(mode: AppMode, race: RaceEntity?): Boolean = when (mode) {
     AppMode.BIBS -> race?.bibsModeStartedAtMillis != null
     AppMode.CP -> race?.cpModeStartedAtMillis != null
     AppMode.TIME -> race?.timeModeStartedAtMillis != null
-    AppMode.MULE -> false
+}
+
+// Shared with RaceRepository.blockedModeSwitchReason's own user-facing message — the one place
+// an AppMode's recording-mode name is spelled out, so the wording can't drift between call sites.
+fun AppMode.displayName(): String = when (this) {
+    AppMode.TIME -> "Time Mode"
+    AppMode.BIBS -> "Bibs Mode"
+    AppMode.CP -> "CP Mode"
 }

@@ -10,6 +10,8 @@ import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
+import mobile.racemaster.data.repository.activeModeLabels
+import mobile.racemaster.data.repository.isModeStarted
 import mobile.racemaster.data.repository.isRaceActive
 import mobile.racemaster.data.repository.isRaceInProgress
 import mobile.racemaster.data.settings.AppMode
@@ -35,6 +37,10 @@ data class ActiveRaceStatus(
     val bibCount: Int,
     val cpCount: Int,
     val isStopped: Boolean,
+    // Which of Time/Bibs/CP this race is actually active in — lets the picker mark the
+    // matching mode button(s) "-active" alongside this same status, rather than the operator
+    // having to cross-reference currentModeLabel's own text against the button labels by eye.
+    val activeModes: Set<AppMode> = emptySet(),
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -53,6 +59,11 @@ class ModePickerViewModel(
     val deviceName: StateFlow<String?> = settingsRepository.deviceName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    // Echoed on the picker regardless of whether a race is active, alongside the Mule Mode
+    // button — see SettingsRepository.muleSyncEnabled's own doc for what this actually gates.
+    val muleSyncEnabled: StateFlow<Boolean> = settingsRepository.muleSyncEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     // Surfaces the active race (if any) so the picker can tell the operator what's still
     // open and which mode to return to, rather than letting them lose track of it. Stays
     // visible once Stopped — only Reset (see isRaceActive) clears it.
@@ -66,8 +77,7 @@ class ModePickerViewModel(
                     timeModeRepository.observeCurrentSegmentSplits(raceId),
                     bibsModeRepository.observeCurrentSegmentEntries(raceId),
                     cpModeRepository.observeCurrentSegmentEntries(raceId),
-                    settingsRepository.appMode,
-                ) { race, splits, bibEntries, cpEntries, mode ->
+                ) { race, splits, bibEntries, cpEntries ->
                     if (race == null) return@combine null
                     val active = isRaceActive(
                         race.timeModeStartedAtMillis,
@@ -85,11 +95,21 @@ class ModePickerViewModel(
                     )
                     ActiveRaceStatus(
                         raceLabel = race.label,
-                        currentModeLabel = mode.displayName(),
+                        // Which mode(s) actually still have this race active — not this device's
+                        // own last-selected AppMode (that used to read "Mule Mode" whenever the
+                        // operator had since switched screens away from whichever mode actually
+                        // started this race, pointing them at a screen with no way to Stop/Reset
+                        // it at all). See activeModeLabels' own doc.
+                        currentModeLabel = activeModeLabels(
+                            race.timeModeStartedAtMillis,
+                            race.bibsModeStartedAtMillis,
+                            race.cpModeStartedAtMillis,
+                        ).joinToString(" and "),
                         splitCount = splits.count { it.splitNumber != 0 },
                         bibCount = bibEntries.count { it.action != HistoryAction.CLOCK },
                         cpCount = cpEntries.count { it.action != HistoryAction.CLOCK },
                         isStopped = !inProgress,
+                        activeModes = AppMode.entries.filterTo(mutableSetOf()) { isModeStarted(it, race) },
                     )
                 }
             }
@@ -136,12 +156,4 @@ class ModePickerViewModel(
             }
         }
     }
-}
-
-private fun AppMode?.displayName(): String = when (this) {
-    AppMode.TIME -> "Time Mode"
-    AppMode.BIBS -> "Bibs Mode"
-    AppMode.CP -> "CP Mode"
-    AppMode.MULE -> "Mule Mode"
-    null -> ""
 }

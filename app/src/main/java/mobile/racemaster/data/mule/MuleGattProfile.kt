@@ -42,11 +42,13 @@ object MuleGattProfile {
      *  app's own `connectAndVerify` in mule-ble.js already treats it that way, confirming via a
      *  real post-connect DeviceInfo read rather than trusting the advertisement alone).
      *  [PeripheralSyncService] includes this UUID in its
-     *  primary advertisement only while the device is currently in [AppMode.MULE], on top of the
-     *  always-present [SERVICE_UUID] — so the racemaster web app's `requestDevice()` picker can
-     *  filter to `services: [SERVICE_UUID, MULE_MODE_MARKER_SERVICE_UUID]` (both required) and
-     *  see only phones currently in Mule Mode, without a trial-and-error picker full of every
-     *  nearby Time/Bibs/CP phone too.
+     *  primary advertisement only while Mule syncing is turned on for this device
+     *  ([mobile.racemaster.data.settings.SettingsRepository.muleSyncEnabled] — independent of,
+     *  and freely combinable with, whichever of Time/Bibs/CP/none this phone is itself
+     *  recording), on top of the always-present [SERVICE_UUID] — so the racemaster web app's
+     *  `requestDevice()` picker can filter to `services: [SERVICE_UUID,
+     *  MULE_MODE_MARKER_SERVICE_UUID]` (both required) and see only phones currently muling,
+     *  without a trial-and-error picker full of every nearby phone too.
      *
      *  This supersedes an earlier attempt at the same goal that encoded mode as a byte in the
      *  scan-response manufacturer data (still present — see [AdvertisedIdentity.mode] — kept as
@@ -155,13 +157,18 @@ object MuleGattProfile {
     // (e.g. a future mode from a newer build), identically: null, never a thrown/misread value.
     private const val MODE_WIRE_TIME: Byte = 1
     private const val MODE_WIRE_BIBS: Byte = 2
-    private const val MODE_WIRE_MULE: Byte = 3
+
+    // 3 was MODE_WIRE_MULE, back when Mule was a 4th value of the AppMode enum this byte
+    // encodes — retired, not reassigned, now that Mule syncing is its own independent flag (see
+    // SettingsRepository.muleSyncEnabled) rather than a recording mode. decodeMode's `else`
+    // branch already treats it — like any other unrecognized byte — as null, so an old build
+    // still advertising a 3 here degrades gracefully rather than being misread as some other
+    // mode.
     private const val MODE_WIRE_CP: Byte = 4
 
     private fun encodeMode(mode: AppMode?): Byte = when (mode) {
         AppMode.TIME -> MODE_WIRE_TIME
         AppMode.BIBS -> MODE_WIRE_BIBS
-        AppMode.MULE -> MODE_WIRE_MULE
         AppMode.CP -> MODE_WIRE_CP
         null -> 0
     }
@@ -169,7 +176,6 @@ object MuleGattProfile {
     private fun decodeMode(wire: Byte): AppMode? = when (wire) {
         MODE_WIRE_TIME -> AppMode.TIME
         MODE_WIRE_BIBS -> AppMode.BIBS
-        MODE_WIRE_MULE -> AppMode.MULE
         MODE_WIRE_CP -> AppMode.CP
         else -> null
     }
@@ -207,16 +213,13 @@ object MuleGattProfile {
      *  device's own race only — never a relayed origin's — since relay-manifest freshness still
      *  rides on a periodic real connect (see MuleSyncEngine's VERIFY_INTERVAL). [shortDeviceId]
      *  is [MuleGattProfile.shortDeviceId] of the advertiser's real [DeviceInfo.deviceId] — see
-     *  that function's own doc for why it exists and its collision math. [mode] is what
-     *  lets the racemaster web app's own `requestDevice()` picker filter (see mule-ble.js's
-     *  `connectToPhone`) show only phones currently in Mule Mode without ever reading this
-     *  payload itself — Chrome applies a manufacturer-data prefix match browser-side before the
-     *  chooser is even shown, so [mode] has to sit at a fixed byte offset early in the payload
-     *  (right after magic+version) for that prefix to reliably match regardless of what
-     *  lastLineNumber/deviceName happen to be for a given phone at a given moment. Every value
-     *  here must be re-confirmed by a real [DeviceInfo] read before being relied on for anything
-     *  correctness-sensitive; this is only ever used to decide *whether* to bother connecting (or,
-     *  on the web side, whether to even offer a phone in the picker at all). */
+     *  that function's own doc for why it exists and its collision math. [mode] is this device's
+     *  own recording mode (Time/Bibs/CP, or null for none) at the moment of advertising — legacy/
+     *  informational only, kept for diagnostics (see [MULE_MODE_MARKER_SERVICE_UUID]'s own doc
+     *  for why it's no longer what any picker filter actually relies on; nothing in this codebase
+     *  branches on it either — see [MuleSyncEngine]'s own doc). Every value here must be
+     *  re-confirmed by a real [DeviceInfo] read before being relied on for anything
+     *  correctness-sensitive; this is only ever used to decide *whether* to bother connecting. */
     data class AdvertisedIdentity(
         val lastLineNumber: Long,
         val shortDeviceId: Long,

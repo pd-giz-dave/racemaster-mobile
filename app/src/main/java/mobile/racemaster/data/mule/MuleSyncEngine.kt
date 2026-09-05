@@ -38,7 +38,6 @@ import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
-import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 
 /** A single physical phone Mule has seen — keyed by its stable [deviceId] once known (a
@@ -163,23 +162,27 @@ private val DiscoveredDevice.requiredAdvertisement: Advertisement
  * via [start] (called from [PeripheralSyncService.onCreate]), independent of whether the
  * operator is actually looking at the Mule Mode screen or even in Mule mode at all.
  *
- * Two roles live here, and only one of them is mode-gated (see [startBluetoothStateLoop]'s own
- * doc): *scanning* for nearby peers and actively pulling from them only runs while this phone's
- * own [SettingsRepository.appMode] is [AppMode.MULE] — a
- * Time/Bibs/CP phone is a pure BT source (advertising and serving GATT reads only, via
- * [PeripheralSyncService], unaffected by this class at all) rather than also actively pulling
- * from every other visible peer for no benefit, which used to mean every phone in the field
- * tripled total BLE connect volume for a typical one-Time/one-Bibs/one-Mule setup. This device's
- * own unsynced data still gets pushed straight to the server every tick regardless of mode (see
- * [pushIfNeeded]) — that path never depended on scanning or [discoveredFlow] at all.
+ * Two roles live here, and only one of them is gated (see [startBluetoothStateLoop]'s own doc):
+ * *scanning* for nearby peers and actively pulling from them only runs while
+ * [SettingsRepository.muleSyncEnabled] is true on this phone — independent of, and freely
+ * combinable with, whichever of Time/Bibs/CP/none this phone is itself recording (its
+ * [SettingsRepository.appMode]). A phone with Mule syncing off is a pure BT source (advertising
+ * and serving GATT reads only, via [PeripheralSyncService], unaffected by this class at all)
+ * rather than also actively pulling from every other visible peer for no benefit — which used to
+ * mean every phone in the field tripled total BLE connect volume for a typical one-Time/one-Bibs/
+ * one-Mule setup, back when scanning/pulling ran unconditionally on every phone regardless of
+ * mode. This device's own unsynced data still gets pushed straight to the server every tick
+ * regardless of either flag (see [pushIfNeeded]) — that path never depended on scanning or
+ * [discoveredFlow] at all.
  *
- * Earlier in this app's history, scanning/pulling ran unconditionally on every phone regardless
- * of mode, specifically so a single phone could record Time or Bibs *and* act as a Mule for
- * every other nearby device at the same time. That hybrid dual-duty capability is gone now —
- * confirmed with the app's owner as never actually used in practice (field setups always use a
- * separate dedicated phone per role), so it wasn't preserved. If that ever changes, the mode
- * gate in [startBluetoothStateLoop] is the one place to revisit — everything else here (pulling,
- * pushing, relay handling) is unaffected either way.
+ * Mule syncing being independent of recording mode (rather than a 4th, mutually-exclusive
+ * AppMode value the way it once was) is exactly what lets a single phone at, say, the finish
+ * line both record its own Bibs race and relay a second, internet-less phone's data on to the
+ * server — the field scenario a dedicated Mule-only phone couldn't itself also record. Earlier in
+ * this app's history that dual-duty capability was deliberately removed (as "never actually used
+ * in practice"), then reinstated once a real field setup needed exactly this. [muleSyncEnabled]
+ * in [startBluetoothStateLoop] below is the one gate that capability lives behind — everything
+ * else here (pulling, pushing, relay handling) is unaffected either way.
  *
  * [mobile.racemaster.ui.mulemode.MuleModeViewModel] is a thin presentation-layer wrapper
  * around this — it renders these flows and forwards button taps to [forceSyncNow] etc., but
@@ -375,16 +378,17 @@ class MuleSyncEngine(
     // tick, which is what actually recovers scanning once the operator turns Bluetooth back
     // on — nothing else here would otherwise notice and restart it.
     //
-    // Also the source/sink role gate: only a phone actually in Mule mode scans for and
-    // actively connects out to other devices at all — a Time/Bibs/CP phone stays purely a BT
+    // Also the source/sink role gate: only a phone with Mule syncing turned on scans for and
+    // actively connects out to other devices at all — a phone with it off stays purely a BT
     // *source* (advertising and serving GATT reads, via PeripheralSyncService, completely
-    // unaffected by this — only the scanning/central role lives here) rather than also
-    // running the full active-puller role for no benefit. In a full n-to-n mesh every phone
-    // independently scanned, connected out to, and pulled from every other visible peer —
-    // tripling total system-wide BLE connect volume for a typical 3-phone field setup (one
-    // Time, one Bibs, one Mule) versus only the Mule phone actively pulling, which is most of
-    // what made the connect stampede / contention issues chased earlier this session as bad
-    // as they were. A phone only ever needs to actively pull if it's the one responsible for
+    // unaffected by this — only the scanning/central role lives here), regardless of whether
+    // it's also recording Time/Bibs/CP, rather than also running the full active-puller role for
+    // no benefit. In a full n-to-n mesh every phone independently scanned, connected out to, and
+    // pulled from every other visible peer — tripling total system-wide BLE connect volume for a
+    // typical 3-phone field setup (one Time, one Bibs, one Mule) versus only the Mule phone
+    // actively pulling, which is most of what made the connect stampede / contention issues
+    // chased earlier this session as bad as they were. A phone only ever needs to actively pull
+    // if it's the one responsible for
     // relaying data onward (to other mules, a Web-Bluetooth-connected browser, or the HTTP
     // server) — a pure source has nothing to gain from also scanning. pushToServer()/
     // pushIfNeeded() (this device's own data straight to the HTTP server whenever it
@@ -393,14 +397,14 @@ class MuleSyncEngine(
     private fun startBluetoothStateLoop() {
         engineScope.launch {
             while (isActive) {
-                val isMule = settingsRepository.appMode.first() == AppMode.MULE
-                if (muleRepository.bluetoothOff.first() || !isMule) {
+                val muleSyncEnabled = settingsRepository.muleSyncEnabled.first()
+                if (muleRepository.bluetoothOff.first() || !muleSyncEnabled) {
                     // Either an explicit operator choice, or this phone simply isn't the
                     // active BT puller right now — tearing down the scan here (rather than
                     // leaving it running and just discarding results) is what stops this phone
                     // showing up as "still discovering" to itself and lets startScan() rebuild
                     // discoveredFlow from scratch the next time it becomes relevant again,
-                    // same as re-entering Mule Mode already does. No warning either way — ease
+                    // same as turning Mule syncing back on already does. No warning either way — ease
                     // out of scanning is the intended, ordinary state for a source phone, not
                     // a problem to flag.
                     stopScan()

@@ -89,6 +89,8 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                             }
                         },
                         onNewRaceNeeded = { mode -> navController.navigate(Routes.raceDetails(mode, raceId = null)) },
+                        onMuleModeSelected = { navController.navigate(Routes.MULE_MODE) },
+                        onMuleSetupNeeded = { navController.navigate(Routes.SETUP_OPTIONS) },
                         onReviewPastRaces = { navController.navigate(Routes.RACE_HISTORY) },
                         onHelp = { navController.navigate(Routes.HELP) },
                         onSetupDevice = { navController.navigate(Routes.SETUP_DEVICE) },
@@ -108,8 +110,30 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                 composable(Routes.NAME_DEVICE) {
                     NameDeviceScreen(onDone = { navController.popBackStack() })
                 }
-                composable(Routes.SETUP_OPTIONS) {
-                    SetupOptionsScreen(onDone = { navController.popBackStack() })
+                composable(
+                    route = Routes.SETUP_OPTIONS_PATTERN,
+                    arguments = listOf(navArgument("fromMule") { type = NavType.BoolType; defaultValue = false }),
+                ) { backStackEntry ->
+                    val fromMule = backStackEntry.arguments?.getBoolean("fromMule") ?: false
+                    SetupOptionsScreen(
+                        onDone = { navController.popBackStack() },
+                        // See SetupOptionsScreen's own onMuleModeEnabled doc — pops Options off
+                        // the back stack (same as Cancel/onDone would) on the way to the
+                        // dashboard, rather than leaving it sitting underneath, so Back from
+                        // there lands on the Mode Picker like every other mode's own screen does.
+                        onMuleModeEnabled = {
+                            navController.navigate(Routes.MULE_MODE) {
+                                popUpTo(Routes.MODE_PICKER) { inclusive = false }
+                            }
+                        },
+                        // Only wired when fromMule (see Routes.setupOptions/SetupOptionsScreen's
+                        // own onMuleModeDisabled doc) — pops both this screen and the now-idle
+                        // Mule Mode dashboard underneath it in one go, landing back on the
+                        // already-existing Mode Picker instance rather than pushing a fresh one.
+                        onMuleModeDisabled = {
+                            if (fromMule) navController.popBackStack(Routes.MODE_PICKER, false)
+                        },
+                    )
                 }
                 composable(Routes.TIME_MODE) {
                     TimeModeScreen(
@@ -165,7 +189,9 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                 composable(Routes.MULE_MODE) {
                     MuleModeScreen(
                         onChangeMode = { navController.navigateToModePicker() },
-                        onOptions = { navController.navigate(Routes.SETUP_OPTIONS) },
+                        // fromMule=true — see Routes.setupOptions/SetupOptionsScreen's own
+                        // onMuleModeDisabled doc for what this enables once there.
+                        onOptions = { navController.navigate(Routes.setupOptions(fromMule = true)) },
                     )
                 }
                 composable(Routes.MULE_SERVER_SETUP) {
@@ -227,11 +253,13 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
     }
 }
 
+// Mule syncing is no longer part of AppMode (see SettingsRepository.muleSyncEnabled's own doc),
+// so it has no route here — this only ever routes a *recording* mode, and Routes.MULE_MODE is
+// reached directly via ModePickerScreen's own onMuleModeSelected instead, independent of this.
 private fun AppMode?.toRoute(): String = when (this) {
     AppMode.TIME -> Routes.TIME_MODE
     AppMode.BIBS -> Routes.BIBS_MODE
     AppMode.CP -> Routes.CP_MODE
-    AppMode.MULE -> Routes.MULE_MODE
     null -> Routes.MODE_PICKER
 }
 
