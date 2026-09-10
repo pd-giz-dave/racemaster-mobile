@@ -23,6 +23,7 @@ data class MulePulledRecordUi(
     val splitNumber: Int?,
     val lineNumber: Long,
     val elapsedMillis: Long,
+    val timestampMillis: Long,
     val note: String?,
     // Deliberately never LineSyncState.RELAYED — a mule's own held copy of another device's
     // data has no "relayed onward to someone else" tracking of its own (unlike a local race's
@@ -95,6 +96,7 @@ class MuleSourceDetailViewModel(
                         splitNumber = it.record.splitNumber,
                         lineNumber = it.record.lineNumber,
                         elapsedMillis = parseElapsedClock(it.record.splitTime),
+                        timestampMillis = it.record.timestampMillis,
                         note = it.record.note,
                         syncState = if (it.syncedAtMillis != null) LineSyncState.SYNCED else LineSyncState.NOT_SYNCED,
                         syncedToLabel = it.syncedToLabel,

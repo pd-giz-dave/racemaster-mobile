@@ -282,7 +282,9 @@ fun HelpScreen(onBack: () -> Unit) {
                     "is holding it \"- active\" right on its own button, alongside the race-in-progress " +
                     "card lower down. Muling on/off is separate (see Mule Mode above) and unaffected " +
                     "by any of this. History on the mode picker shows every previously recorded " +
-                    "race, read-only. Button presses play a short click sound at full volume, " +
+                    "race, read-only — each row shows the wall-clock time (HH:MM) it was recorded, " +
+                    "alongside its line/split number, event, bib, and elapsed time. Button presses " +
+                    "play a short click sound at full volume, " +
                     "regardless of the phone's own volume/Touch sounds setting, so it's audible at " +
                     "a noisy finish line.",
             )

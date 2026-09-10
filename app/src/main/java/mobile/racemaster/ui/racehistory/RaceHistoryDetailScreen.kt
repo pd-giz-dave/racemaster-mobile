@@ -81,6 +81,7 @@ fun RaceHistoryDetailScreen(
                         actionLabel = it.action.displayName(),
                         bibNumber = it.bibNumber,
                         elapsedMillis = if (it.mode == HistoryMode.TIME) it.elapsedMillis else null,
+                        timestampMillis = it.timestampMillis,
                         note = it.note,
                         syncState = it.syncState,
                         syncedToLabel = syncedToLabel(it.syncedTo),

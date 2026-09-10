@@ -68,6 +68,7 @@ fun MuleSourceDetailScreen(
                         actionLabel = it.action.displayName(),
                         bibNumber = it.bibNumber,
                         elapsedMillis = if (it.isTimeRecord) it.elapsedMillis else null,
+                        timestampMillis = it.timestampMillis,
                         note = it.note,
                         syncState = it.syncState,
                         syncedToLabel = it.syncedToLabel,

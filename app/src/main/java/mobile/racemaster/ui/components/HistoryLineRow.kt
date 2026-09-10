@@ -12,6 +12,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import mobile.racemaster.data.db.entity.formatLineColumn
 import mobile.racemaster.data.db.entity.formatLineRef
@@ -22,6 +24,7 @@ import mobile.racemaster.ui.theme.RelayedOrange
 import mobile.racemaster.ui.theme.SyncedGreen
 import mobile.racemaster.ui.theme.UnsyncedRed
 import mobile.racemaster.util.formatElapsedSplitTime
+import mobile.racemaster.util.formatTimeOfDay
 import mobile.racemaster.util.withClickSound
 
 /**
@@ -34,12 +37,14 @@ import mobile.racemaster.util.withClickSound
  * longer a separate mode-prefixed "line label" (the old "B003"/"T012") — the bib/time columns
  * already say which mode a row belongs to just by which one is populated.
  *
- * The primary row's five columns are all a compact-phone-width can reliably fit side by side
- * — the note slot (whichever single piece of context is most relevant: a genuine operator
- * note, or — for an undo marker, which never has a real note of its own — a synthesized
- * "Undo L{n}" pointing at the line it hid) gets its own full-width line below instead of
- * competing with them, same as the other secondary lines (duplicate-bib flags, an edit-echo's
- * "Edited from", "Synced to").
+ * The primary row's six columns (line #, split #, action, bib, elapsed, wall-clock time) are
+ * all a compact-phone-width can reliably fit side by side — the time column is deliberately
+ * terse ("HH:mm", no seconds) and capped at a single line (maxLines = 1) so a long locale-
+ * specific rendering clips rather than wrapping the row onto a second visual line. The note
+ * slot (whichever single piece of context is most relevant: a genuine operator note, or — for
+ * an undo marker, which never has a real note of its own — a synthesized "Undo L{n}" pointing
+ * at the line it hid) gets its own full-width line below instead of competing with them, same
+ * as the other secondary lines (duplicate-bib flags, an edit-echo's "Edited from", "Synced to").
  */
 @Composable
 fun HistoryLineRow(
@@ -48,6 +53,7 @@ fun HistoryLineRow(
     actionLabel: String,
     bibNumber: Int?,
     elapsedMillis: Long?,
+    timestampMillis: Long,
     note: String?,
     syncState: LineSyncState,
     modifier: Modifier = Modifier,
@@ -72,19 +78,30 @@ fun HistoryLineRow(
             .let { if (onClick != null) it.clickable(onClick = withClickSound(onClick)) else it }
             .padding(vertical = 2.dp),
     ) {
+        // Read via LocalConfiguration rather than Locale.getDefault() directly — the latter
+        // isn't observable by Compose, so this row wouldn't recompose if the user changes their
+        // system locale mid-session (same pattern as ServerStatusLine/SyncStatusLine).
+        val locale = LocalConfiguration.current.locales[0]
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(formatLineColumn(lineNumber), style = MaterialTheme.typography.bodySmall, color = rowColor, modifier = Modifier.width(40.dp))
+            Text(formatLineColumn(lineNumber), style = MaterialTheme.typography.bodySmall, color = rowColor, modifier = Modifier.width(38.dp))
             Text(
                 splitLabelOverride ?: formatSplitColumn(splitNumber),
                 style = MaterialTheme.typography.bodySmall,
                 color = rowColor,
-                modifier = Modifier.width(40.dp),
+                modifier = Modifier.width(38.dp),
             )
-            Text(actionLabel, style = MaterialTheme.typography.bodyMedium, color = rowColor, modifier = Modifier.width(64.dp))
+            Text(
+                actionLabel,
+                style = MaterialTheme.typography.bodyMedium,
+                color = rowColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.width(60.dp),
+            )
             Text(
                 // elapsedMillis == null is exactly "this is a Bibs-family row" (both callers
                 // only ever pass a real elapsed time for a Time row) — "n/a" for a Bibs row with
@@ -94,13 +111,25 @@ fun HistoryLineRow(
                 bibNumber?.toString() ?: if (elapsedMillis == null) "n/a" else "–",
                 style = MaterialTheme.typography.bodyMedium,
                 color = rowColor,
-                modifier = Modifier.width(32.dp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.width(30.dp),
             )
             Text(
                 elapsedMillis?.let { formatElapsedSplitTime(it) } ?: "–",
                 style = MaterialTheme.typography.bodyMedium,
                 color = rowColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
+            )
+            Text(
+                formatTimeOfDay(timestampMillis, locale),
+                style = MaterialTheme.typography.bodySmall,
+                color = rowColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.width(38.dp),
             )
         }
         val noteText = if (isUndoMarker) "Undo ${formatLineRef(editedFromLineNumber ?: lineNumber)}" else note
@@ -133,6 +162,7 @@ data class HistoryLineDisplay(
     val actionLabel: String,
     val bibNumber: Int?,
     val elapsedMillis: Long?,
+    val timestampMillis: Long,
     val note: String?,
     val syncState: LineSyncState,
     val syncedToLabel: String? = null,
@@ -164,6 +194,7 @@ fun HistoryLinesList(
                     actionLabel = line.actionLabel,
                     bibNumber = line.bibNumber,
                     elapsedMillis = line.elapsedMillis,
+                    timestampMillis = line.timestampMillis,
                     note = line.note,
                     syncState = line.syncState,
                     syncedToLabel = line.syncedToLabel,
