@@ -63,6 +63,7 @@ fun TimeModeScreen(
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     val btPollingStatus by viewModel.btPollingStatus.collectAsStateWithLifecycle()
     val coursePickerOptions by viewModel.coursePickerOptions.collectAsStateWithLifecycle()
+    val coursePickerPreviousCourse by viewModel.coursePickerPreviousCourse.collectAsStateWithLifecycle()
 
     // Registers this screen's main action as the target for an external USB/Bluetooth trigger
     // (see MainActivity.onExternalSplitTrigger) while it's on screen — mirrors the big on-screen
@@ -119,7 +120,12 @@ fun TimeModeScreen(
     // Shown from viewModel.startStopwatch whenever the active race offers more than one course
     // — see CoursePickerDialog/RaceRepository.resolveCourseRace's own docs.
     coursePickerOptions?.let { options ->
-        CoursePickerDialog(options = options, onSelect = viewModel::onCoursePicked, onDismiss = viewModel::dismissCoursePicker)
+        CoursePickerDialog(
+            options = options,
+            previousCourse = coursePickerPreviousCourse,
+            onSelect = viewModel::onCoursePicked,
+            onDismiss = viewModel::dismissCoursePicker,
+        )
     }
 }
 

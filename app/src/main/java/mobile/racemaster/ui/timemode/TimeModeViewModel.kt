@@ -164,23 +164,42 @@ class TimeModeViewModel(
     private val _coursePickerOptions = MutableStateFlow<List<String>?>(null)
     val coursePickerOptions: StateFlow<List<String>?> = _coursePickerOptions
 
+    // The course to checkmark in the picker — see CoursePickerDialog.previousCourse's own doc.
+    // Set alongside _coursePickerOptions above, from whichever of the two sources actually has
+    // one: the active race's own course if it's already locked in (a Reset course kept the same
+    // row), or lastEndedCourse below if this is a fresh pending row spawned by End recording.
+    private val _coursePickerPreviousCourse = MutableStateFlow<String?>(null)
+    val coursePickerPreviousCourse: StateFlow<String?> = _coursePickerPreviousCourse
+
+    // Remembered by endRecording just before it switches to a fresh, course-less pending
+    // sibling — that new row's own course is blank, so this is the only place left that still
+    // knows what was just ended, for the picker's own benefit next time Start is pressed.
+    private var lastEndedCourse: String? = null
+
     fun startStopwatch() {
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch {
             val race = raceRepository.getRace(raceId) ?: return@launch
             val onlyCourse = race.courses.singleOrNull()
-            if (onlyCourse != null) beginCourse(raceId, onlyCourse) else _coursePickerOptions.value = race.courses
+            if (onlyCourse != null) {
+                beginCourse(raceId, onlyCourse)
+            } else {
+                _coursePickerPreviousCourse.value = race.course.ifBlank { null } ?: lastEndedCourse
+                _coursePickerOptions.value = race.courses
+            }
         }
     }
 
     fun onCoursePicked(course: String) {
         val raceId = raceIdFlow.value ?: return
         _coursePickerOptions.value = null
+        _coursePickerPreviousCourse.value = null
         viewModelScope.launch { beginCourse(raceId, course) }
     }
 
     fun dismissCoursePicker() {
         _coursePickerOptions.value = null
+        _coursePickerPreviousCourse.value = null
     }
 
     // Resolves which race row [course] actually records into (see
@@ -232,6 +251,7 @@ class TimeModeViewModel(
     fun endRecording() {
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch {
+            lastEndedCourse = raceRepository.getRace(raceId)?.course?.ifBlank { null }
             val newRaceId = raceRepository.endRecordingForCourse(raceId, AppMode.TIME.name)
             settingsRepository.setActiveRaceId(newRaceId)
         }

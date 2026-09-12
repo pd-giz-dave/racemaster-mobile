@@ -215,23 +215,35 @@ class CpModeViewModel(
     private val _coursePickerOptions = MutableStateFlow<List<String>?>(null)
     val coursePickerOptions: StateFlow<List<String>?> = _coursePickerOptions
 
+    // See TimeModeViewModel's own identical trio for the full doc.
+    private val _coursePickerPreviousCourse = MutableStateFlow<String?>(null)
+    val coursePickerPreviousCourse: StateFlow<String?> = _coursePickerPreviousCourse
+    private var lastEndedCourse: String? = null
+
     fun startCpMode() {
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch {
             val race = raceRepository.getRace(raceId) ?: return@launch
             val onlyCourse = race.courses.singleOrNull()
-            if (onlyCourse != null) beginCourse(raceId, onlyCourse) else _coursePickerOptions.value = race.courses
+            if (onlyCourse != null) {
+                beginCourse(raceId, onlyCourse)
+            } else {
+                _coursePickerPreviousCourse.value = race.course.ifBlank { null } ?: lastEndedCourse
+                _coursePickerOptions.value = race.courses
+            }
         }
     }
 
     fun onCoursePicked(course: String) {
         val raceId = raceIdFlow.value ?: return
         _coursePickerOptions.value = null
+        _coursePickerPreviousCourse.value = null
         viewModelScope.launch { beginCourse(raceId, course) }
     }
 
     fun dismissCoursePicker() {
         _coursePickerOptions.value = null
+        _coursePickerPreviousCourse.value = null
     }
 
     private suspend fun beginCourse(raceId: Long, course: String) {
@@ -338,6 +350,7 @@ class CpModeViewModel(
     fun endRecording() {
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch {
+            lastEndedCourse = raceRepository.getRace(raceId)?.course?.ifBlank { null }
             val newRaceId = raceRepository.endRecordingForCourse(raceId, AppMode.CP.name)
             settingsRepository.setActiveRaceId(newRaceId)
         }

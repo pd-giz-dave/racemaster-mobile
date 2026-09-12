@@ -64,6 +64,7 @@ fun BibsModeScreen(
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     val btPollingStatus by viewModel.btPollingStatus.collectAsStateWithLifecycle()
     val coursePickerOptions by viewModel.coursePickerOptions.collectAsStateWithLifecycle()
+    val coursePickerPreviousCourse by viewModel.coursePickerPreviousCourse.collectAsStateWithLifecycle()
 
     // No external HID trigger here (unlike Time Mode) — entry is now bib-driven/auto-saving
     // rather than a single "log the pending event" action a volume button could stand in for.
@@ -109,7 +110,12 @@ fun BibsModeScreen(
 
     // See TimeModeScreen's own identical block for the full doc.
     coursePickerOptions?.let { options ->
-        CoursePickerDialog(options = options, onSelect = viewModel::onCoursePicked, onDismiss = viewModel::dismissCoursePicker)
+        CoursePickerDialog(
+            options = options,
+            previousCourse = coursePickerPreviousCourse,
+            onSelect = viewModel::onCoursePicked,
+            onDismiss = viewModel::dismissCoursePicker,
+        )
     }
 }
 
