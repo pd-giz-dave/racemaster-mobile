@@ -20,9 +20,12 @@ data class ServerSetupDraft(val url: String, val username: String, val password:
 // unbounded JSON blob over a device's lifetime — most-recent-first, oldest entries drop off.
 private const val MAX_HISTORY_ENTRIES = 20
 
-// Offered in the Course field's history dropdown even before the operator has ever typed one —
-// common recurring categories, not tied to any particular race. See courseHistory's own doc.
-private val DEFAULT_COURSES = listOf("Seniors", "Juniors", "Pairs")
+// Offered in the Courses field's history dropdown even before the operator has ever typed one
+// — common recurring categories, not tied to any particular race. See courseHistory's own doc.
+// Public (not private, unlike DEFAULT_LOCATIONS below) — RaceDetailsScreen also pre-checks
+// exactly these three chips for a brand-new race, regardless of what's since accumulated in
+// courseHistory (which would otherwise drift as custom courses get added over time).
+val DEFAULT_COURSES = listOf("Seniors", "Juniors", "Mixed")
 
 // Offered in the Location field's history dropdown even before the operator has ever typed
 // one — the common finish/start/checkpoint stations. See locationHistory's own doc.

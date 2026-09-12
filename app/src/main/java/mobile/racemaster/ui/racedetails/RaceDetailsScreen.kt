@@ -2,6 +2,7 @@ package mobile.racemaster.ui.racedetails
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
@@ -16,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -43,9 +45,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import mobile.racemaster.data.repository.MAX_BIB_NUMBER
 import mobile.racemaster.data.repository.MIN_BIB_NUMBER
+import mobile.racemaster.data.repository.isValidCourseName
 import mobile.racemaster.data.repository.isValidCpLocation
 import mobile.racemaster.data.repository.isValidRaceName
 import mobile.racemaster.data.settings.AppMode
+import mobile.racemaster.data.settings.DEFAULT_COURSES
 import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.ui.components.HistoryTextField
 import mobile.racemaster.util.withClickSound
@@ -78,7 +82,11 @@ fun RaceDetailsScreen(
     val nextFieldAction = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) })
 
     var name by remember { mutableStateOf("") }
-    var course by remember { mutableStateOf("") }
+    // Which of the offered course names (see courseHistory below) this race will let a mode's
+    // own Start button choose between — not a single locked-in course any more (see
+    // RaceEntity.course's own doc: that's now picked later, at Start time).
+    var courses by remember { mutableStateOf<List<String>>(emptyList()) }
+    var newCourseText by remember { mutableStateOf("") }
     // "Finish" out of the box for a new race (most stations recording a race are at the
     // finish line) — an existing race's own saved value overrides this below, same as
     // name/course's own (blank) defaults get overridden once the real race loads.
@@ -94,27 +102,29 @@ fun RaceDetailsScreen(
         val race = existingRace ?: return@LaunchedEffect
         if (prefilled) return@LaunchedEffect
         name = race.name
-        course = race.course
+        courses = race.courses
         location = race.location
         race.bibsRangeStart?.let { startText = it.toString() }
         race.bibsRangeCount?.let { countText = it.toString() }
         prefilled = true
     }
 
-    // Auto-fills Course/Location with the most-recently-used value for a brand-new race only
-    // (editing an existing race already pre-fills from its own real saved values above) — each
-    // history list is already stored most-recent-first (see
-    // SettingsRepository.addToStringHistory), so the first entry is exactly that. Race name is
-    // deliberately left alone, unlike Course/Location which usually repeat across races at the
-    // same event — auto-filling it risks silently resubmitting an old race's name for what
-    // should be a genuinely new one. Each guarded by both a one-shot flag (so picking a
-    // different value afterward doesn't get stomped once the flow re-emits) and a "still at its
-    // untouched initial value" check (so a fast operator who starts typing before the history
-    // flow's first real emission arrives never gets overwritten).
+    // Auto-fills Courses/Location for a brand-new race only (editing an existing race already
+    // pre-fills from its own real saved values above). Race name is deliberately left alone,
+    // unlike Course/Location which usually repeat across races at the same event — auto-filling
+    // it risks silently resubmitting an old race's name for what should be a genuinely new one.
+    // Each guarded by both a one-shot flag (so picking a different value afterward doesn't get
+    // stomped once the flow re-emits) and a "still at its untouched initial value" check (so a
+    // fast operator who starts typing before the history flow's first real emission arrives
+    // never gets overwritten). Courses pre-checks all of DEFAULT_COURSES (Seniors/Juniors/
+    // Mixed) rather than just the single most-recently-used one — the common case is a race
+    // that genuinely offers all three, with an unwanted one a single tap away to uncheck; this
+    // stays fixed to DEFAULT_COURSES itself (not courseHistory.first()) so it doesn't drift
+    // once custom courses accumulate in history.
     var courseAutoFilled by remember { mutableStateOf(false) }
-    LaunchedEffect(courseHistory) {
-        if (existingRaceId == null && !courseAutoFilled && course.isBlank() && courseHistory.isNotEmpty()) {
-            course = courseHistory.first()
+    LaunchedEffect(Unit) {
+        if (existingRaceId == null && !courseAutoFilled && courses.isEmpty()) {
+            courses = DEFAULT_COURSES
             courseAutoFilled = true
         }
     }
@@ -151,7 +161,7 @@ fun RaceDetailsScreen(
         (start != null && start in MIN_BIB_NUMBER..MAX_BIB_NUMBER && count != null && count >= 1 && rangeEnd != null && rangeEnd <= MAX_BIB_NUMBER)
     val locationValid = mode != AppMode.CP || isValidCpLocation(location)
     val nameValid = isValidRaceName(name)
-    val canSave = prefilled && !isSaving && name.isNotBlank() && nameValid && course.isNotBlank() &&
+    val canSave = prefilled && !isSaving && name.isNotBlank() && nameValid && courses.isNotEmpty() &&
         location.isNotBlank() && countFieldsValid && locationValid
 
     Scaffold(
@@ -213,19 +223,67 @@ fun RaceDetailsScreen(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            HistoryTextField(
-                value = course,
-                onValueChange = { course = it },
-                label = "Course (e.g. Seniors, Juniors)",
-                // Same independent-field behavior as the Race name field above — picking a
-                // previous course only ever fills this field.
-                history = courseHistory,
-                enabled = identityFieldsEnabled,
-                // Always followed by Location, so always "Next" — see nextFieldAction's own doc.
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                keyboardActions = nextFieldAction,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            // Courses this race can be started under — a multi-pick menu rather than a single
+            // locked-in value (see RaceEntity.courses' own doc): the actual course a given
+            // Time/Bibs/CP session records is chosen later, at Start time, from whichever of
+            // these are checked here (see RaceRepository.resolveCourseRace). Offered chips are
+            // the union of courseHistory (every course ever used on this device, defaulting to
+            // Seniors/Juniors/Mixed — see SettingsRepository.courseHistory) and whatever's
+            // already checked for this race, so a saved race's own choices are never hidden
+            // even if history has since moved on.
+            Text("Courses", style = MaterialTheme.typography.labelMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                (courseHistory + courses).distinct().forEach { name ->
+                    FilterChip(
+                        selected = name in courses,
+                        onClick = { courses = if (name in courses) courses - name else courses + name },
+                        enabled = identityFieldsEnabled,
+                        label = { Text(name) },
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                val newCourseFieldRequester = remember { BringIntoViewRequester() }
+                val newCourseValid = isValidCourseName(newCourseText)
+                val addNewCourse = {
+                    val trimmed = newCourseText.trim()
+                    if (trimmed.isNotEmpty() && newCourseValid && trimmed !in courses) courses = courses + trimmed
+                    newCourseText = ""
+                }
+                OutlinedTextField(
+                    value = newCourseText,
+                    onValueChange = { newCourseText = it },
+                    enabled = identityFieldsEnabled,
+                    singleLine = true,
+                    label = { Text("Add a course") },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { addNewCourse() }),
+                    modifier = Modifier
+                        .weight(1f)
+                        .bringIntoViewRequester(newCourseFieldRequester)
+                        .onFocusEvent { state ->
+                            if (state.isFocused) scope.launch { newCourseFieldRequester.bringIntoView() }
+                        },
+                )
+                OutlinedButton(
+                    onClick = withClickSound(addNewCourse),
+                    enabled = identityFieldsEnabled && newCourseText.isNotBlank() && newCourseValid,
+                ) { Text("Add") }
+            }
+            if (newCourseText.isNotBlank() && !isValidCourseName(newCourseText)) {
+                Text(
+                    "Course names can only contain letters (a-z, A-Z), numbers (0-9), and hyphens (-).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            if (courses.isEmpty()) {
+                Text(
+                    "At least one course must be selected.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             HistoryTextField(
                 value = location,
                 onValueChange = { location = it },
@@ -249,9 +307,9 @@ fun RaceDetailsScreen(
             }
             if (existingRaceId != null && raceIsActive) {
                 Text(
-                    "Race name, course, and location are locked because this race has already " +
+                    "Race name, courses, and location are locked because this race has already " +
                         "started — only First bib number and Number of runners can still be " +
-                        "changed here. Start a New Race for a different name, course, or location.",
+                        "changed here. Start a New Race for a different name, courses, or location.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -316,7 +374,7 @@ fun RaceDetailsScreen(
                     onClick = withClickSound {
                         isSaving = true
                         scope.launch {
-                            val raceId = viewModel.save(name, course, location, start, count)
+                            val raceId = viewModel.save(name, courses, location, start, count)
                             onSaved(raceId)
                         }
                     },

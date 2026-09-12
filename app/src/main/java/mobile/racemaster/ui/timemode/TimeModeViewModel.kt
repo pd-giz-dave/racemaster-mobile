@@ -17,12 +17,14 @@ import mobile.racemaster.data.repository.LineSyncState
 import mobile.racemaster.data.repository.isRaceInProgress
 import mobile.racemaster.data.repository.lineSyncState
 import mobile.racemaster.data.repository.linesWithAnySync
+import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.di.applicationContext
 import mobile.racemaster.util.Beeper
 import mobile.racemaster.util.tickerFlow
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -71,7 +73,7 @@ data class TimeModeUiState(
 class TimeModeViewModel(
     private val timeModeRepository: TimeModeRepository,
     private val raceRepository: RaceRepository,
-    settingsRepository: SettingsRepository,
+    private val settingsRepository: SettingsRepository,
     private val serverStatusRepository: ServerStatusRepository,
     bluetoothStateRepository: BluetoothStateRepository,
     private val beeper: Beeper,
@@ -156,12 +158,51 @@ class TimeModeViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TimeModeUiState())
 
+    // Null while hidden — see CoursePickerDialog's own doc. Shown from startStopwatch below
+    // only when the active race actually offers more than one course; a single-course race
+    // just starts directly with no picker to bother the operator with.
+    private val _coursePickerOptions = MutableStateFlow<List<String>?>(null)
+    val coursePickerOptions: StateFlow<List<String>?> = _coursePickerOptions
+
     fun startStopwatch() {
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch {
-            timeModeRepository.startStopwatch(raceId)
-            beeper.beep()
+            val race = raceRepository.getRace(raceId) ?: return@launch
+            val onlyCourse = race.courses.singleOrNull()
+            if (onlyCourse != null) beginCourse(raceId, onlyCourse) else _coursePickerOptions.value = race.courses
         }
+    }
+
+    fun onCoursePicked(course: String) {
+        val raceId = raceIdFlow.value ?: return
+        _coursePickerOptions.value = null
+        viewModelScope.launch { beginCourse(raceId, course) }
+    }
+
+    fun dismissCoursePicker() {
+        _coursePickerOptions.value = null
+    }
+
+    // Resolves which race row [course] actually records into (see
+    // RaceRepository.resolveCourseRace's own doc — the currently active race itself, a
+    // previously-used sibling, or a freshly created one), promotes it to
+    // [SettingsRepository.activeRaceId] if it isn't already, gives it a fresh segment first if
+    // it's been started before (a course this device already ran and stopped, whether via Time
+    // Mode itself or another mode sharing the same race row), then actually starts the clock.
+    private suspend fun beginCourse(raceId: Long, course: String) {
+        val targetId = raceRepository.resolveCourseRace(raceId, course, AppMode.TIME.name)
+        if (targetId != raceId) settingsRepository.setActiveRaceId(targetId)
+        val target = requireNotNull(raceRepository.getRace(targetId)) { "Race $targetId not found" }
+        // Already started means this course was previously ended via "End recording" (never
+        // Reset — Reset already clears timeModeStartedAtMillis, so this branch is never taken
+        // right after one) — resume exactly where it left off rather than starting a fresh
+        // segment; see TimeModeRepository.resumeStopwatch's own doc.
+        if (target.timeModeStartedAtMillis != null) {
+            timeModeRepository.resumeStopwatch(targetId)
+        } else {
+            timeModeRepository.startStopwatch(targetId)
+        }
+        beeper.beep()
     }
 
     // No debounce here by design: two taps in quick succession (two finishers crossing close
@@ -182,6 +223,18 @@ class TimeModeViewModel(
     fun resetStopwatch() {
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch { timeModeRepository.resetStopwatch(raceId) }
+    }
+
+    // See RaceRepository.endRecordingForCourse's own doc — the StopOrResetButton confirm
+    // dialog's other choice alongside resetStopwatch above, once stopped: this course's splits
+    // are left exactly as recorded, and a fresh course-less sibling race becomes active so the
+    // screen shows its own pre-Start "START" button, ready for a new Start-time course pick.
+    fun endRecording() {
+        val raceId = raceIdFlow.value ?: return
+        viewModelScope.launch {
+            val newRaceId = raceRepository.endRecordingForCourse(raceId, AppMode.TIME.name)
+            settingsRepository.setActiveRaceId(newRaceId)
+        }
     }
 
     fun undoLast() {

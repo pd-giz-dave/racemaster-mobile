@@ -21,14 +21,17 @@ import kotlinx.coroutines.flow.stateIn
  * Backs the race details screen used both for creating a new race ([existingRaceId] null) and
  * editing an existing one ([existingRaceId] non-null) — same screen, same fields, for every mode
  * (Time Mode never actually uses the bib number for anything, but collects it anyway so both
- * forms stay identical). Name/course/location stay editable until the race has genuinely
+ * forms stay identical). Name/courses/location stay editable until the race has genuinely
  * started a mode — RaceDetailsScreen locks them read-only only once [raceIsActive] is true (see
  * that flow's own doc and RaceRepository.updateRaceDetails' own doc for why that's safe); a
- * race that's already recording history needs a different name/course/location to actually be a
- * new race instead, since they're baked into the label's sync identity. This ViewModel just
- * writes back whatever the screen passes in either way — it has no opinion of its own on which
- * fields a given call site left unchanged. Server URL is deliberately not part of this screen —
- * it'll live under Mule Mode setup eventually, device-wide rather than per-race.
+ * race that's already recording history needs a different name/location to actually be a new
+ * race instead, since they're baked into the label's sync identity — courses (the offered menu,
+ * not a single locked choice any more — see RaceEntity.courses' own doc) isn't itself part of
+ * the label, but stays locked alongside them for simplicity/consistency rather than getting its
+ * own separate rule. This ViewModel just writes back whatever the screen passes in either way —
+ * it has no opinion of its own on which fields a given call site left unchanged. Server URL is
+ * deliberately not part of this screen — it'll live under Mule Mode setup eventually,
+ * device-wide rather than per-race.
  */
 class RaceDetailsViewModel(
     val mode: AppMode,
@@ -83,27 +86,31 @@ class RaceDetailsViewModel(
      *  other mode's. bibsRangeStart/Count are required in practice for BIBS (the form itself
      *  won't enable Create without them — see RaceDetailsScreen's countFieldsValid), but
      *  stay nullable here since Time Mode collects the same fields purely for form/feedback
-     *  parity without ever needing them. */
-    suspend fun save(name: String, course: String, location: String, bibsRangeStart: Int?, bibsRangeCount: Int?): Long {
+     *  parity without ever needing them. [courses] is the offered course menu (RaceDetailsScreen's
+     *  "Courses" field) — a brand-new race is created course-less (see RaceEntity.course's own
+     *  doc); the actual course is only picked once a mode's own Start button is pressed (see
+     *  RaceRepository.resolveCourseRace). */
+    suspend fun save(name: String, courses: List<String>, location: String, bibsRangeStart: Int?, bibsRangeCount: Int?): Long {
         val trimmedName = name.trim()
-        val trimmedCourse = course.trim()
+        val trimmedCourses = courses.map { it.trim() }.distinct()
         val trimmedLocation = location.trim()
         settingsRepository.addRaceNameToHistory(trimmedName)
-        settingsRepository.addCourseToHistory(trimmedCourse)
+        trimmedCourses.forEach { settingsRepository.addCourseToHistory(it) }
         settingsRepository.addLocationToHistory(trimmedLocation)
 
         val raceId = existingRaceId
         return if (raceId != null) {
-            raceRepository.updateRaceDetails(raceId, trimmedName, trimmedCourse, trimmedLocation, bibsRangeStart, bibsRangeCount)
+            raceRepository.updateRaceDetails(raceId, trimmedName, trimmedCourses, trimmedLocation, bibsRangeStart, bibsRangeCount)
             raceId
         } else {
             val newRaceId = raceRepository.startNewRace(
                 trimmedName,
-                trimmedCourse,
+                course = "",
                 location = trimmedLocation,
                 deviceRole = mode.name,
                 bibsRangeStart = bibsRangeStart,
                 bibsRangeCount = bibsRangeCount,
+                courses = trimmedCourses,
             )
             settingsRepository.setAppMode(mode)
             settingsRepository.setActiveRaceId(newRaceId)

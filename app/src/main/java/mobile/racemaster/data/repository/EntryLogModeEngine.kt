@@ -257,6 +257,19 @@ internal class EntryLogModeEngine(
         }
     }
 
+    // Resumes logging in place after "End recording" picks this same course again (see
+    // RaceRepository.endRecordingForCourse/resolveCourseRace's own docs) — writes nothing to
+    // history and touches no counter, unlike stop()/reset(). Picking the same course again
+    // after ending it means "I'm not done after all" (there are still runners out, or it was
+    // ended by mistake), not "start a new segment": split numbers and the permanent line
+    // history should read exactly as if the Stop had never happened, the same place
+    // undoMostRecent's own STOP branch would leave things, just without the explicit
+    // "Undo L{n}" annotation a manual undo adds — the operator never touched Undo, they just
+    // picked the course again.
+    suspend fun resume(raceId: Long) {
+        columns.clearStoppedAt(raceId)
+    }
+
     // Inserts a Reset marker (consuming a permanent line number, same as every other row, but
     // — like Stop above — no splitNumber, since it's a boundary marker for the web app's own
     // later segmentation rather than a real logged entry) instead of deleting anything — every

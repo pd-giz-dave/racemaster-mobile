@@ -99,4 +99,6 @@ class BibsModeRepository(
     suspend fun stopBibsMode(raceId: Long, stoppedAtMillis: Long = System.currentTimeMillis()) = engine.stop(raceId, stoppedAtMillis)
 
     suspend fun resetBibsMode(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()) = engine.reset(raceId, resetAtMillis)
+
+    suspend fun resumeBibsMode(raceId: Long) = engine.resume(raceId)
 }

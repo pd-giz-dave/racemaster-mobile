@@ -3,7 +3,9 @@ package mobile.racemaster.data.repository
 import mobile.racemaster.data.db.dao.HistoryLineDao
 import mobile.racemaster.data.db.dao.LineSyncDao
 import mobile.racemaster.data.db.dao.RaceDao
+import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
+import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.LineSyncEntity
 import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.settings.AppMode
@@ -29,11 +31,17 @@ class RaceRepository(
         serverUrl: String? = null,
         bibsRangeStart: Int? = null,
         bibsRangeCount: Int? = null,
+        // The offered course menu (see RaceEntity.courses' own doc) — empty only for the
+        // pending, course-less row RaceDetailsScreen itself no longer creates without one
+        // (courses is required there), kept optional here purely so resolveCourseRace's own
+        // cloned-sibling call site reads naturally alongside every other cloned template field.
+        courses: List<String> = emptyList(),
     ): Long =
         raceDao.insert(
             RaceEntity(
                 name = name,
                 course = course,
+                courses = courses,
                 location = location,
                 label = buildRaceLabel(name, course, createdAtMillis),
                 createdAtMillis = createdAtMillis,
@@ -47,13 +55,16 @@ class RaceRepository(
 
     // The date portion of the label is rebuilt from the race's original createdAtMillis, not
     // the edit time — the date is always auto-derived and fixed once the race is created.
-    // name/course/location genuinely can change here now — RaceDetailsScreen only locks them
+    // name/courses/location genuinely can change here now — RaceDetailsScreen only locks them
     // once the race has actually started a mode (see its own identityFieldsEnabled doc); before
     // that, no history can possibly exist for this race yet (every mode's own startXxxMode is
     // what both sets its *ModeStartedAtMillis and inserts its first history row, in the same
-    // transaction), so nothing anywhere could already be referencing the old label. Only
-    // bibsRangeStart/bibsRangeCount are the sole fields a *started* race can still genuinely
-    // change here. serverUrl is untouched here — it's not on this screen (see
+    // transaction), so nothing anywhere could already be referencing the old label. `course`
+    // itself is deliberately NOT a parameter here any more — it's no longer something this
+    // screen edits (see RaceEntity.course's own doc: it's chosen at Start time instead), so the
+    // label is rebuilt from the race's own already-stored course, passed straight through
+    // unchanged. Only bibsRangeStart/bibsRangeCount are the sole fields a *started* race can
+    // still genuinely change here. serverUrl is untouched here — it's not on this screen (see
     // RaceDao.updateDetails). No Mule-inbox retagging needed on a rename (there used to be one
     // here) — MuleRepository.pushToServer now reads this race's own current label fresh from
     // RaceEntity on every attempt rather than tracking a separately-labeled mirrored copy, so a
@@ -63,14 +74,14 @@ class RaceRepository(
     suspend fun updateRaceDetails(
         raceId: Long,
         name: String,
-        course: String,
+        courses: List<String>,
         location: String,
         bibsRangeStart: Int?,
         bibsRangeCount: Int?,
     ) {
         val race = raceDao.getById(raceId) ?: return
-        val label = buildRaceLabel(name, course, race.createdAtMillis)
-        raceDao.updateDetails(raceId, name, course, location, label, bibsRangeStart, bibsRangeCount)
+        val label = buildRaceLabel(name, race.course, race.createdAtMillis)
+        raceDao.updateDetails(raceId, name, race.course, location, label, courses, bibsRangeStart, bibsRangeCount)
     }
 
     fun observeRace(id: Long): Flow<RaceEntity?> = raceDao.observeById(id)
@@ -124,22 +135,126 @@ class RaceRepository(
     // to a different race, leaving the old one's timeModeStartedAtMillis with no in-context way
     // to reach it.
     //
-    // Reuses the exact same DAO reset queries an in-context Reset already calls, unconditionally
-    // for all three modes rather than checking which one is actually active first — resetting an
-    // already-null field is a harmless no-op, the same idempotent-recheck-over-conditional
-    // tradeoff already used elsewhere in this codebase (e.g. PeripheralSyncService.markSynced).
-    // Deliberately does not delete the race itself, matching deleteRace's own two-step design:
-    // this only clears whatever's blocking isRaceActive, leaving the operator to explicitly
-    // delete afterward via the normal confirmation dialog.
+    // Must do exactly what an in-context Reset does for each mode that's actually active — a
+    // RESET marker row in that mode's own history (consuming a permanent line number), then the
+    // same DAO reset query clearing its display counter/started/stopped columns — not just the
+    // bare column clear this used to do. Force-resetting a race is otherwise indistinguishable,
+    // from Race History's later read of it, from that race simply never having been reset at
+    // all: no boundary marker ever separated "the unfinished segment" this was meant to clear
+    // from whatever came after, which is exactly the "was this genuinely redone, or is this
+    // stale leftover data" ambiguity a real Reset's own marker exists to resolve (see
+    // EntryLogModeEngine.reset's own doc). Scoped to only the modes actually started (unlike
+    // before, which reset all three unconditionally as a harmless no-op) specifically so this
+    // doesn't insert a spurious Reset line into a mode's history that was never even used for
+    // this race. Deliberately does not delete the race itself, matching deleteRace's own
+    // two-step design: this only clears whatever's blocking isRaceActive, leaving the operator
+    // to explicitly delete afterward via the normal confirmation dialog.
     suspend fun forceResetActiveModes(raceId: Long) {
-        raceDao.resetTimeMode(raceId)
-        raceDao.resetBibsMode(raceId)
-        raceDao.resetCpMode(raceId)
+        val race = raceDao.getById(raceId) ?: return
+        if (race.timeModeStartedAtMillis != null) insertResetMarkerAndReset(raceId, HistoryMode.TIME)
+        if (race.bibsModeStartedAtMillis != null) insertResetMarkerAndReset(raceId, HistoryMode.BIBS)
+        if (race.cpModeStartedAtMillis != null) insertResetMarkerAndReset(raceId, HistoryMode.CP)
+    }
+
+    private suspend fun insertResetMarkerAndReset(raceId: Long, mode: HistoryMode, resetAtMillis: Long = System.currentTimeMillis()) {
+        val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+        historyLineDao.insert(
+            HistoryLineEntity(
+                raceId = raceId,
+                mode = mode,
+                action = HistoryAction.RESET,
+                bibNumber = null,
+                splitNumber = null,
+                lineNumber = race.nextLineNumber,
+                note = null,
+                timestampMillis = resetAtMillis,
+            ),
+        )
+        raceDao.incrementLineNumber(raceId)
+        when (mode) {
+            HistoryMode.TIME -> raceDao.resetTimeMode(raceId)
+            HistoryMode.BIBS -> raceDao.resetBibsMode(raceId)
+            HistoryMode.CP -> raceDao.resetCpMode(raceId)
+        }
     }
 
     // Resolves a race label back to this device's own local race — see
     // MuleRepository.pushToServer's own self-push path.
     suspend fun getRaceByLabel(label: String): RaceEntity? = raceDao.getByLabel(label)
+
+    // Resolves which race row a Start press for [chosenCourse] should actually record into —
+    // see TODO.md's "Multi-mode Method" spec and RaceEntity.course/.courses' own docs. Course is
+    // now picked at Start time rather than fixed on the race details form, so [currentRaceId]
+    // (whichever race is already active for this mode/device — created course-less by
+    // RaceDetailsScreen, or a previously-started sibling) may or may not already be the right
+    // row for [chosenCourse]. Three outcomes, in order:
+    //  1. A race already has today's label for this name+course — reused as-is, whether this
+    //     device wrote it earlier today (a previous Bibs/Time/CP session for this same course,
+    //     including via this exact [currentRaceId]) or another mode on THIS device wrote it
+    //     first (RaceEntity already lets Time/Bibs/CP share one row's history — see
+    //     RaceHistoryDetailViewModel's own doc). If [currentRaceId] is a still course-less
+    //     pending row distinct from the one found, it's deleted (deleteRace is a no-op-safe
+    //     backstop on anything active, but a pending row is by definition never active) rather
+    //     than left behind as permanent clutter in Race History.
+    //  2. [currentRaceId]'s own course is still unset (the very first Start on a freshly
+    //     created race, and no sibling already claimed this label) — that row is claimed in
+    //     place via RaceDao.setCourseAndLabel: no new row, nothing to clean up.
+    //  3. Otherwise a new sibling row is created (via [startNewRace]), cloning
+    //     [currentRaceId]'s own template fields (name, offered courses, location, bib range,
+    //     server URL) — the operator never has to re-enter them just to swap course.
+    // Returns the resolved race's id. The caller is responsible for promoting it to
+    // [SettingsRepository.setActiveRaceId] and for either resuming (via its own resumeXMode)
+    // when the resolved row has already recorded that mode before — this course was ended, not
+    // reset, so logging should carry on exactly where it left off, no fresh segment — or
+    // starting fresh (via startXMode) otherwise; this function only ever resolves WHICH row,
+    // never mutates a mode's own started/stopped state.
+    suspend fun resolveCourseRace(currentRaceId: Long, chosenCourse: String, deviceRole: String?): Long {
+        val current = requireNotNull(raceDao.getById(currentRaceId)) { "Race $currentRaceId not found" }
+        val label = buildRaceLabel(current.name, chosenCourse, System.currentTimeMillis())
+        val existing = raceDao.getByLabel(label)
+        if (existing != null) {
+            if (current.course.isBlank() && current.id != existing.id) deleteRace(current.id)
+            return existing.id
+        }
+        if (current.course.isBlank()) {
+            raceDao.setCourseAndLabel(current.id, chosenCourse, label)
+            return current.id
+        }
+        return cloneTemplate(current, chosenCourse, deviceRole)
+    }
+
+    // Creates a fresh, still course-less sibling row cloned from [raceId]'s own template
+    // fields — see cloneTemplate's own doc — WITHOUT touching [raceId]'s own started/stopped/
+    // counters or history at all. Backs the Reset confirmation's "End recording" choice
+    // (StopOrResetButton/*ModeViewModel.endRecording): unlike Reset (which is for a new
+    // operator's own practice attempt — wipes the current course's segment right now so it can
+    // be redone from scratch), End recording is the normal way a course finishes — its data
+    // stays exactly as recorded, permanently. Returns the new pending race's id; the caller
+    // promotes it to [SettingsRepository.activeRaceId] so the mode screen naturally shows its
+    // own pre-Start "START" button again, ready for a fresh Start-time course pick via
+    // resolveCourseRace — a different course starts a genuine new segment, while the SAME
+    // course (there are still runners out, or it was ended by mistake) resumes exactly where it
+    // left off via *ModeRepository.resumeXMode (see resolveCourseRace's own doc) — no new
+    // Start/Clock marker, no counter reset, Undo last still reaches back before the Stop.
+    suspend fun endRecordingForCourse(raceId: Long, deviceRole: String?): Long {
+        val current = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+        return cloneTemplate(current, course = "", deviceRole)
+    }
+
+    // Shared by resolveCourseRace's new-sibling path and endRecordingForCourse — a new row
+    // under [source]'s own name, courses menu, location, bib range, and server URL, so neither
+    // caller makes the operator re-enter them just to move on to another course (or none yet).
+    private suspend fun cloneTemplate(source: RaceEntity, course: String, deviceRole: String?): Long =
+        startNewRace(
+            name = source.name,
+            course = course,
+            location = source.location,
+            deviceRole = deviceRole,
+            serverUrl = source.serverUrl,
+            bibsRangeStart = source.bibsRangeStart,
+            bibsRangeCount = source.bibsRangeCount,
+            courses = source.courses,
+        )
 
     // Bibs and CP are mutually exclusive for the same race — both are alternate ways of
     // logging the same physical station, so switching from one to the other while it still

@@ -26,6 +26,7 @@ import mobile.racemaster.data.repository.lineSyncState
 import mobile.racemaster.data.repository.linesWithAnySync
 import mobile.racemaster.data.repository.outstandingBibs
 import mobile.racemaster.data.repository.rangeWarningMessage
+import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.di.applicationContext
@@ -98,7 +99,7 @@ data class BibsModeUiState(
 class BibsModeViewModel(
     private val bibsModeRepository: BibsModeRepository,
     private val raceRepository: RaceRepository,
-    settingsRepository: SettingsRepository,
+    private val settingsRepository: SettingsRepository,
     private val serverStatusRepository: ServerStatusRepository,
     bluetoothStateRepository: BluetoothStateRepository,
     private val beeper: Beeper,
@@ -230,9 +231,44 @@ class BibsModeViewModel(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BibsModeUiState())
 
+    // See TimeModeViewModel's own identical trio (coursePickerOptions/onCoursePicked/
+    // dismissCoursePicker/beginCourse) for the full doc — same course-resolution flow, just
+    // calling Bibs' own reset/start pair instead of Time's.
+    private val _coursePickerOptions = MutableStateFlow<List<String>?>(null)
+    val coursePickerOptions: StateFlow<List<String>?> = _coursePickerOptions
+
     fun startBibsMode() {
         val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch { bibsModeRepository.startBibsMode(raceId) }
+        viewModelScope.launch {
+            val race = raceRepository.getRace(raceId) ?: return@launch
+            val onlyCourse = race.courses.singleOrNull()
+            if (onlyCourse != null) beginCourse(raceId, onlyCourse) else _coursePickerOptions.value = race.courses
+        }
+    }
+
+    fun onCoursePicked(course: String) {
+        val raceId = raceIdFlow.value ?: return
+        _coursePickerOptions.value = null
+        viewModelScope.launch { beginCourse(raceId, course) }
+    }
+
+    fun dismissCoursePicker() {
+        _coursePickerOptions.value = null
+    }
+
+    private suspend fun beginCourse(raceId: Long, course: String) {
+        val targetId = raceRepository.resolveCourseRace(raceId, course, AppMode.BIBS.name)
+        if (targetId != raceId) settingsRepository.setActiveRaceId(targetId)
+        val target = requireNotNull(raceRepository.getRace(targetId)) { "Race $targetId not found" }
+        // Already started means this course was previously ended via "End recording" (never
+        // Reset — Reset already clears bibsModeStartedAtMillis, so this branch is never taken
+        // right after one) — resume exactly where it left off rather than starting a fresh
+        // segment; see BibsModeRepository.resumeBibsMode's own doc.
+        if (target.bibsModeStartedAtMillis != null) {
+            bibsModeRepository.resumeBibsMode(targetId)
+        } else {
+            bibsModeRepository.startBibsMode(targetId)
+        }
     }
 
     // A fresh digit always starts a new entry — if the digits on screen are a frozen (already
@@ -346,6 +382,16 @@ class BibsModeViewModel(
     fun resetBibsMode() {
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch { bibsModeRepository.resetBibsMode(raceId) }
+    }
+
+    // See TimeModeViewModel.endRecording's own doc — same StopOrResetButton confirm choice,
+    // this course's bib entries left exactly as recorded.
+    fun endRecording() {
+        val raceId = raceIdFlow.value ?: return
+        viewModelScope.launch {
+            val newRaceId = raceRepository.endRecordingForCourse(raceId, AppMode.BIBS.name)
+            settingsRepository.setActiveRaceId(newRaceId)
+        }
     }
 
     override fun onCleared() {

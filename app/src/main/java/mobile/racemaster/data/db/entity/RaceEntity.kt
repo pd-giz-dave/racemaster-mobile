@@ -9,7 +9,17 @@ data class RaceEntity(
     // Raw user-entered fields, kept separately from the computed label below so a race's
     // details can be re-edited later without having to parse them back out of it.
     val name: String = "",
+    // Blank until a mode's own Start button actually picks one from [courses] below — see
+    // RaceRepository.resolveCourseRace. A race details form no longer locks a single course in
+    // at creation time; this field (and `label`, which stays a placeholder without a course
+    // segment — see buildRaceLabel) is only ever written once, atomically with that race
+    // actually starting to record something.
     val course: String = "",
+    // The menu of course names offered for this race, set on the race details screen (its
+    // "Courses" field — a multi-pick list, not a single value) and copied onto every sibling
+    // row [resolveCourseRace] creates under the same name, so the Start-time course picker
+    // always has the right options regardless of which course-specific row is currently active.
+    val courses: List<String> = emptyList(),
     // Which physical point on the course this device's own records represent (e.g. "Finish",
     // "Start", "Checkpoint 2") — lets more than one device contribute different stations'
     // worth of data for what's otherwise the same race. Not part of `label`: two devices

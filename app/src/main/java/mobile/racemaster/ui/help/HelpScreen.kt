@@ -100,15 +100,39 @@ fun HelpScreen(onBack: () -> Unit) {
                     "— see \"External triggers\" below.",
             )
             HelpSection(
+                title = "Race details — Courses",
+                body = "The race details form's Courses field (defaulting to Seniors/Juniors/" +
+                    "Mixed) is a menu, not a single fixed value — pick every course this race " +
+                    "might record, and add more by typing a name and tapping Add. Which course " +
+                    "a given recording session actually is isn't chosen here: it's asked the " +
+                    "moment Start is pressed on Time/Bibs/CP Mode's own screen, via a small " +
+                    "\"Which course?\" picker listing whatever's ticked here (skipped " +
+                    "automatically if only one is). Picking a course already used today (by " +
+                    "this device, in any mode) resumes that same file with a fresh segment; " +
+                    "picking one that hasn't been started yet creates its own separate file " +
+                    "under the same race name and details — so recording Juniors, then later " +
+                    "swapping to Seniors, then back to Juniors again for stragglers, never " +
+                    "needs a new race defining, just a different pick at Start each time.",
+            )
+            HelpSection(
                 title = "Time Mode",
                 body = "START begins the stopwatch and records a fixed \"Start\" marker as split S0. " +
                     "SPLIT records the current time every time it's tapped — two fast taps always " +
                     "produce two separate splits. STOP freezes the clock and records a \"Stop\" marker " +
                     "(shown as S– — a boundary marker, not a numbered split); undoing that Stop marker " +
                     "resumes the clock with no time lost. Once stopped, the same button becomes RESET, " +
-                    "which wipes every split and returns to the blank pre-start screen (with " +
-                    "confirmation). Undo last removes only the most recent split. Tap any split row to " +
-                    "give it a short label.",
+                    "which asks \"Reset course\" (adds a reset marker and starts a fresh S0 count — " +
+                    "nothing is deleted, every split stays in Race History regardless; genuine deletion " +
+                    "only ever happens explicitly, from the History list — this is for a new operator's " +
+                    "own practice attempt, not for ending a course for real) or \"End recording\" (the " +
+                    "normal way a course finishes — leaves every split exactly as recorded and returns " +
+                    "to the pre-start screen ready for a fresh Start-time course pick; see \"Race " +
+                    "details — Courses\" above). Picking a different course there starts a genuine new " +
+                    "segment; picking this same course instead — there are still runners out, or it was " +
+                    "ended by mistake — carries straight on exactly where it left off: no new Start " +
+                    "marker, no split renumbering, Undo last still reaches back before the Stop. Undo " +
+                    "last removes only the most recent split. Tap any split row to give it a short " +
+                    "label.",
             )
             HelpSection(
                 title = "Bibs Mode — starting a race",
@@ -164,8 +188,16 @@ fun HelpScreen(onBack: () -> Unit) {
                 body = "STOP freezes logging (the keypad and Event are disabled) and frees up New " +
                     "Race — this records a \"Stop\" marker (shown as S–, not a numbered split) that can " +
                     "be undone to resume logging. Once stopped, the same button becomes RESET, which " +
-                    "wipes every bib entry and returns to the same Start-button screen a freshly " +
-                    "created race shows (with confirmation).",
+                    "asks \"Reset course\" (adds a reset marker and starts a fresh count from it — " +
+                    "nothing is deleted, every entry stays in Race History regardless; genuine deletion " +
+                    "only ever happens explicitly, from the History list — this is for a new operator's " +
+                    "own practice attempt, not for ending a course for real) or \"End recording\" (the " +
+                    "normal way a course finishes — leaves every entry exactly as recorded and returns " +
+                    "to the same Start-button screen ready for a fresh Start-time course pick; see " +
+                    "\"Race details — Courses\" above). Picking a different course there starts a " +
+                    "genuine new segment; picking this same course instead — there are still runners " +
+                    "out, or it was ended by mistake — carries straight on exactly where it left off: " +
+                    "no new Clock marker, no renumbering, Undo last still reaches back before the Stop.",
             )
             HelpSection(
                 title = "CP Mode",

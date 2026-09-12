@@ -128,7 +128,7 @@ class SettingsRepositoryTest {
         val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
         val repository = SettingsRepository(dataStoreOverFile(file, scope))
 
-        assertEquals(listOf("Seniors", "Juniors", "Pairs"), repository.courseHistory.first())
+        assertEquals(listOf("Seniors", "Juniors", "Mixed"), repository.courseHistory.first())
         scope.cancel()
     }
 
@@ -143,7 +143,7 @@ class SettingsRepositoryTest {
         // Saving a default for real must not list it twice.
         repository.addCourseToHistory("Seniors")
 
-        assertEquals(listOf("Seniors", "10K", "Juniors", "Pairs"), repository.courseHistory.first())
+        assertEquals(listOf("Seniors", "10K", "Juniors", "Mixed"), repository.courseHistory.first())
         scope.cancel()
     }
 

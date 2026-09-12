@@ -314,6 +314,34 @@ class BibsModeRepositoryTest {
     }
 
     @Test
+    fun resumeBibsModeWritesNothingAndLeavesSplitNumberingIntact() = runTest {
+        // Backs "End recording" then picking the same course again (see
+        // RaceRepository.resolveCourseRace/endRecordingForCourse's own docs) — unlike
+        // resetBibsMode, this must never look like a fresh segment: no new Start/Clock row, no
+        // counter reset, the current-segment view (and Undo last) reaching straight back
+        // through the Stop to what came before it, exactly as if it had never happened.
+        repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
+        repository.stopBibsMode(raceId, stoppedAtMillis = 123L)
+        val beforeResume = db.historyLineDao().observeAllForRace(raceId).first()
+
+        repository.resumeBibsMode(raceId)
+
+        // Nothing written — same rows, same count, as right after Stop.
+        assertEquals(beforeResume, db.historyLineDao().observeAllForRace(raceId).first())
+        val race = db.raceDao().getById(raceId)
+        assertNull(race?.bibsModeStoppedAtMillis)
+        assertEquals(2, race?.bibsModeNextSplit)
+        // The Finish (and the Stop marker itself) are both still visible in the live view —
+        // resume never touched RESET, so nothing is excluded from the current segment.
+        assertEquals(2, db.historyLineDao().observeCurrentSegment(raceId, HistoryMode.BIBS, HistoryAction.RESET).first().size)
+
+        // Split numbering carries straight on rather than restarting at S1.
+        repository.recordEntry(raceId, HistoryAction.FINISH, 102, note = null)
+        val finishes = db.historyLineDao().observeAllForRace(raceId).first().filter { it.action == HistoryAction.FINISH }
+        assertEquals(listOf(1, 2), finishes.sortedBy { it.id }.map { it.splitNumber })
+    }
+
+    @Test
     fun resetBibsModeInsertsMarkerAndLeavesPriorEntriesIntact() = runTest {
         repository.recordEntry(raceId, HistoryAction.START, 101, note = null)
         repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)

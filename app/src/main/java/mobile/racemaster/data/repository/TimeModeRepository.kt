@@ -189,6 +189,15 @@ class TimeModeRepository(
         }
     }
 
+    // Resumes logging in place after "End recording" picks this same course again — see
+    // EntryLogModeEngine.resume's own doc (Bibs/CP's identical sibling): writes nothing to
+    // history and touches no counter, unlike resetStopwatch above. Picking the same course
+    // again after ending it means "I'm not done after all", not "start a new segment" — splits
+    // and the permanent line history read exactly as if the Stop had never happened.
+    suspend fun resumeStopwatch(raceId: Long) {
+        raceDao.clearTimeModeStoppedAt(raceId)
+    }
+
     // Undoing the start/stop markers reverts the corresponding race state so the operator
     // isn't left stuck: undoing "Stop" resumes the live clock, undoing "Start" (only
     // reachable once every real split has also been undone) returns to the Start screen.

@@ -105,16 +105,19 @@ interface RaceDao {
     suspend fun incrementLineNumber(raceId: Long)
 
     // Editable at any time via the race details screen, including after the race has
-    // stopped — name/course typos shouldn't be permanently locked in once logging is done.
-    // The date portion of the label is deliberately not touched here, since it stays fixed to
-    // when the race was originally created. bibsRangeStart/bibsRangeCount are included here
-    // too, but the screen only actually lets them change while the race is still "fresh" (no
-    // real splits/entries recorded) — otherwise it just writes back the same values it read.
-    // serverUrl is deliberately NOT touched here — it's not exposed on this screen (it'll
-    // live under Mule Mode setup eventually), so an edit here must never clobber it.
+    // stopped — name typos shouldn't be permanently locked in once logging is done. `course`
+    // is passed through unchanged by RaceRepository.updateRaceDetails (this screen no longer
+    // edits a single course — see RaceEntity.course's own doc), only `courses` (the offered
+    // menu) and `label`'s name portion can actually change here. The date portion of the label
+    // is deliberately not touched here, since it stays fixed to when the race was originally
+    // created. bibsRangeStart/bibsRangeCount are included here too, but the screen only
+    // actually lets them change while the race is still "fresh" (no real splits/entries
+    // recorded) — otherwise it just writes back the same values it read. serverUrl is
+    // deliberately NOT touched here — it's not exposed on this screen (it'll live under Mule
+    // Mode setup eventually), so an edit here must never clobber it.
     @Query(
         "UPDATE races SET name = :name, course = :course, location = :location, label = :label, " +
-            "bibsRangeStart = :bibsRangeStart, bibsRangeCount = :bibsRangeCount WHERE id = :raceId",
+            "courses = :courses, bibsRangeStart = :bibsRangeStart, bibsRangeCount = :bibsRangeCount WHERE id = :raceId",
     )
     suspend fun updateDetails(
         raceId: Long,
@@ -122,7 +125,14 @@ interface RaceDao {
         course: String,
         location: String,
         label: String,
+        courses: List<String>,
         bibsRangeStart: Int?,
         bibsRangeCount: Int?,
     )
+
+    // Claims a still-course-less row (see RaceEntity.course's own doc) in place, the moment a
+    // Start press first picks a course for it — see RaceRepository.resolveCourseRace. Never
+    // touches `courses` (the offered menu) itself, only which one this row has now committed to.
+    @Query("UPDATE races SET course = :course, label = :label WHERE id = :raceId")
+    suspend fun setCourseAndLabel(raceId: Long, course: String, label: String)
 }

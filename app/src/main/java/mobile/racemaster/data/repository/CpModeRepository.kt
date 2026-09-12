@@ -98,4 +98,6 @@ class CpModeRepository(
     suspend fun stopCpMode(raceId: Long, stoppedAtMillis: Long = System.currentTimeMillis()) = engine.stop(raceId, stoppedAtMillis)
 
     suspend fun resetCpMode(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()) = engine.reset(raceId, resetAtMillis)
+
+    suspend fun resumeCpMode(raceId: Long) = engine.resume(raceId)
 }
