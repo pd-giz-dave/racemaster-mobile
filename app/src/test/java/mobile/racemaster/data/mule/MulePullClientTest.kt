@@ -118,4 +118,29 @@ class MulePullClientTest {
         val decoded = json.decodeFromString<PullRequest>(encoded)
         assertEquals(request.requestKey, decoded.requestKey)
     }
+
+    // shouldDeliverProgress — the bandwidth-saving gate behind readDeviceInfo's own
+    // progressToDeliver/progressRaceLabel piggybacking (mirrors deliverProgress's own decision
+    // in the racemaster web app's js/mule-ble.js).
+
+    @Test
+    fun deliversWhenRaceMatchesAndGeneratedAtDiffers() {
+        assertTrue(shouldDeliverProgress("race-a", "2020-01-01T00:00:00.000Z", "race-a", "2026-08-23T10:00:00.000Z"))
+    }
+
+    @Test
+    fun deliversWhenRaceMatchesAndPeerHasNeverHeldAnyProgressYet() {
+        assertTrue(shouldDeliverProgress("race-a", null, "race-a", "2026-08-23T10:00:00.000Z"))
+    }
+
+    @Test
+    fun doesNotDeliverWhenThePeerAlreadyHasThisExactGeneratedAt() {
+        assertEquals(false, shouldDeliverProgress("race-a", "2026-08-23T10:00:00.000Z", "race-a", "2026-08-23T10:00:00.000Z"))
+    }
+
+    @Test
+    fun doesNotDeliverWhenTheRaceLabelsDifferRegardlessOfGeneratedAt() {
+        assertEquals(false, shouldDeliverProgress("race-b", "2020-01-01T00:00:00.000Z", "race-a", "2026-08-23T10:00:00.000Z"))
+        assertEquals(false, shouldDeliverProgress("race-b", null, "race-a", "2026-08-23T10:00:00.000Z"))
+    }
 }

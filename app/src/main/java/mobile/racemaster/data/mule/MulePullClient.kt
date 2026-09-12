@@ -309,6 +309,17 @@ class MulePullClient {
         pullerDeviceId: String? = null,
         pullerDeviceName: String = "",
         sinkConfirmedRecordUuids: List<String> = emptyList(),
+        // Progress this device is holding (see ProgressRepository) that it wants to propagate on
+        // to whichever peer this connection is with — piggybacked onto this same connection
+        // exactly like sinkConfirmedRecordUuids above, and for the identical reason (see this
+        // function's own doc on why a separate reconnect for that failed 100% of the time
+        // against a real device). Only actually written if this read's own freshly-decoded
+        // DeviceInfo.raceLabel matches [progressRaceLabel] and its own progressGeneratedAt
+        // differs from [progressToDeliver]'s — see [shouldDeliverProgress] — so a peer that
+        // already has the current copy, or is tracking a different race entirely, costs nothing
+        // beyond the DeviceInfo read this connection was already making.
+        progressToDeliver: ProgressPayload? = null,
+        progressRaceLabel: String? = null,
         onConfirmationsRelayed: suspend (List<String>) -> Unit = {},
         // Fires (with a short, [describeConnectFailure]-style reason) whenever the best-effort
         // ack write below fails/times out — see that call site's own doc for why this can't just
@@ -316,6 +327,8 @@ class MulePullClient {
         // those, a still-broken confirmation relay is a real, ongoing field problem (TODO.md's
         // Sony-Mule report) that an operator needs some way to actually see.
         onAckFailure: suspend (String) -> Unit = {},
+        // Same idea as [onAckFailure], for the progress-delivery write above.
+        onProgressDeliveryFailure: suspend (String) -> Unit = {},
     ): DeviceInfo {
         require(sinkConfirmedRecordUuids.isEmpty() || pullerDeviceId != null) {
             "pullerDeviceId is required when sinkConfirmedRecordUuids is non-empty"
@@ -324,7 +337,10 @@ class MulePullClient {
             var lastError: Throwable? = null
             for (attempt in 1..READ_DEVICE_INFO_ATTEMPTS) {
                 try {
-                    return@withLock readDeviceInfoOnce(advertisement, pullerDeviceId, pullerDeviceName, sinkConfirmedRecordUuids, onConfirmationsRelayed, onAckFailure)
+                    return@withLock readDeviceInfoOnce(
+                        advertisement, pullerDeviceId, pullerDeviceName, sinkConfirmedRecordUuids,
+                        progressToDeliver, progressRaceLabel, onConfirmationsRelayed, onAckFailure, onProgressDeliveryFailure,
+                    )
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {
@@ -344,8 +360,11 @@ class MulePullClient {
         pullerDeviceId: String?,
         pullerDeviceName: String,
         sinkConfirmedRecordUuids: List<String>,
+        progressToDeliver: ProgressPayload?,
+        progressRaceLabel: String?,
         onConfirmationsRelayed: suspend (List<String>) -> Unit,
         onAckFailure: suspend (String) -> Unit,
+        onProgressDeliveryFailure: suspend (String) -> Unit,
     ): DeviceInfo = coroutineScope {
         val peripheral = peripheralFor(advertisement)
         // Tagged by phase (connect vs MTU negotiation vs the actual read) rather than left as a
@@ -475,6 +494,33 @@ class MulePullClient {
                     if (batch.sinkConfirmedRecordUuids.isNotEmpty()) {
                         onConfirmationsRelayed(batch.sinkConfirmedRecordUuids)
                     }
+                }
+            }
+            // Piggybacked the same way the ack write above is — see readDeviceInfo's own doc on
+            // progressToDeliver/progressRaceLabel. Own settle delay regardless of whether the ack
+            // block above ran: INTER_OPERATION_SETTLE_DELAY's own doc is explicit that the issue
+            // it fixes is a second GATT operation following the first too soon, "regardless of
+            // which operation goes first" — this is always at least the second GATT operation on
+            // this connection (the DeviceInfo read was the first), whether or not an ack write
+            // happened in between.
+            if (progressToDeliver != null && progressRaceLabel != null &&
+                shouldDeliverProgress(info.raceLabel, info.progressGeneratedAt, progressRaceLabel, progressToDeliver.generatedAt)
+            ) {
+                delay(INTER_OPERATION_SETTLE_DELAY)
+                try {
+                    withTimeout(PROGRESS_DELIVERY_TIMEOUT) { deliverProgressPayload(peripheral, progressToDeliver) }
+                    Log.d(TAG, "progress delivered to address=${advertisement.identifier} generatedAt=${progressToDeliver.generatedAt}")
+                } catch (e: CancellationException) {
+                    // Same posture as the ack write just above — only our own timeout is
+                    // best-effort; a genuine outer cancellation must still propagate.
+                    if (e !is TimeoutCancellationException) throw e
+                    val reason = describeConnectFailure(MulePhaseTimeoutException("delivering progress", e))
+                    Log.w(TAG, "progress delivery timed out for address=${advertisement.identifier} — DeviceInfo read above still counts", e)
+                    onProgressDeliveryFailure(reason)
+                } catch (e: Throwable) {
+                    val reason = describeConnectFailure(e)
+                    Log.w(TAG, "progress delivery failed for address=${advertisement.identifier} — DeviceInfo read above still counts", e)
+                    onProgressDeliveryFailure(reason)
                 }
             }
             succeeded = true
@@ -632,6 +678,30 @@ class MulePullClient {
         }
     }
 
+    // Writes [payload] to the peer's PROGRESS_CHARACTERISTIC_UUID as a sequence of small,
+    // ordinary writes terminated by a single END_OF_STREAM_MARKER byte — the write-direction
+    // twin of collectChunkedResponse's own read-direction framing below, and identical to the
+    // racemaster web app's own deliverProgress() (js/mule-ble.js). Each chunk stays within
+    // MAX_SAFE_CHUNK_SIZE_BYTES (509, Android's own GATT_MAX_ATTR_LEN ceiling — see that
+    // constant's own doc in MuleGattProfile) regardless of this connection's negotiated MTU:
+    // PeripheralSyncService.onExecuteWrite already transparently reassembles any single write
+    // here that ends up exceeding the negotiated per-PDU size into a prepared-write sequence
+    // (the same OS mechanism ackBatches' own doc describes in detail), so this chunk size only
+    // needs to respect the one true hard ceiling, not guess at MTU.
+    private suspend fun deliverProgressPayload(peripheral: Peripheral, payload: ProgressPayload) {
+        val progressCharacteristic = characteristicOf(
+            MuleGattProfile.SERVICE_UUID.toKotlinUuid(), MuleGattProfile.PROGRESS_CHARACTERISTIC_UUID.toKotlinUuid(),
+        )
+        val bytes = json.encodeToString(payload).toByteArray(Charsets.UTF_8)
+        var offset = 0
+        while (offset < bytes.size) {
+            val end = minOf(offset + MuleGattProfile.MAX_SAFE_CHUNK_SIZE_BYTES, bytes.size)
+            peripheral.write(progressCharacteristic, bytes.copyOfRange(offset, end), WriteType.WithResponse)
+            offset = end
+        }
+        peripheral.write(progressCharacteristic, byteArrayOf(MuleGattProfile.END_OF_STREAM_MARKER), WriteType.WithResponse)
+    }
+
     // Shared by pull()/pullRelayManifest(): negotiates MTU, subscribes to the DATA
     // characteristic, writes [requestJson] to CONTROL, and reassembles the notified chunks
     // into one payload string once the END_OF_STREAM_MARKER lands — everything both requests
@@ -712,6 +782,12 @@ class MulePullClient {
         // see the two call sites' own docs for why this can't just fall under PULL_TIMEOUT.
         private val ACK_WRITE_TIMEOUT = 10_000.milliseconds
 
+        // Bounds deliverProgressPayload's own whole multi-chunk write loop — a race's full
+        // progress.json can take many more individual writes than a single ack batch ever would
+        // (see MAX_SAFE_CHUNK_SIZE_BYTES), so this covers the entire delivery rather than being
+        // shared with ACK_WRITE_TIMEOUT's own single-write budget.
+        private val PROGRESS_DELIVERY_TIMEOUT = 15_000.milliseconds
+
         // See readDeviceInfo's own doc for why this retry exists and why both of these are kept
         // small — 3 total attempts (matching the web app's own DEVICE_INFO_ATTEMPTS) with a
         // short pause between them, not this app's much longer inter-device intervals.
@@ -757,6 +833,20 @@ class MulePullClient {
  * [TimeoutCancellationException].
  */
 internal class MulePhaseTimeoutException(val phase: String, cause: TimeoutCancellationException) : Exception("timed out $phase", cause)
+
+/**
+ * Whether progress held for [deliveryRaceLabel] (generated at [deliveryGeneratedAt]) is actually
+ * worth delivering to a peer whose own freshly-read DeviceInfo reported [peerRaceLabel]/
+ * [peerProgressGeneratedAt] — the bandwidth-saving gate behind
+ * [MulePullClient.readDeviceInfo]'s own progressToDeliver/progressRaceLabel params. False when
+ * the peer is tracking a different race entirely (delivering here would be actively wrong, not
+ * just wasteful), or when it already reports holding this exact generatedAt (delivering again
+ * would just resend unchanged data over the air for nothing). Pulled out as a top-level pure
+ * function, matching [computeRequestKey]/[ackBatches]'s own precedent, so this decision is
+ * directly testable without a live BLE connection.
+ */
+internal fun shouldDeliverProgress(peerRaceLabel: String, peerProgressGeneratedAt: String?, deliveryRaceLabel: String, deliveryGeneratedAt: String): Boolean =
+    peerRaceLabel == deliveryRaceLabel && peerProgressGeneratedAt != deliveryGeneratedAt
 
 /**
  * Deterministically identifies one "give me your data since X" ask so a responder that's

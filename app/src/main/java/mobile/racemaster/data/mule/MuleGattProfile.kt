@@ -37,6 +37,18 @@ object MuleGattProfile {
      *  fully reassembled, so the peripheral knows it's safe to mark those records synced. */
     val ACK_CHARACTERISTIC_UUID: UUID = UUID.fromString("6d6f6269-6c65-2e72-6163-000000000004")
 
+    /** Write: the racemaster web app (never an ordinary phone-to-phone Mule pull — Web Bluetooth
+     *  can only ever be a GATT central, so it can't be asked-from the way this device's own
+     *  server-facing HTTP fetch can; see [mobile.racemaster.data.mule.MuleSyncClient.getProgress]
+     *  for that transport's own twin of this one) delivers a chunked, JSON-encoded
+     *  [ProgressPayload] here — the race-wide bib/name/course/category/timing export the web app
+     *  already produces (`progress.json` server-side). Framed exactly like
+     *  [DATA_CHARACTERISTIC_UUID]'s own notify stream (raw bytes concatenated until a single
+     *  [END_OF_STREAM_MARKER] byte), just carried as ordinary characteristic writes instead of
+     *  notifications, since this device is always the peripheral here too — see
+     *  [PeripheralSyncService]'s own reassembly of this characteristic's writes. */
+    val PROGRESS_CHARACTERISTIC_UUID: UUID = UUID.fromString("6d6f6269-6c65-2e72-6163-000000000005")
+
     /** Advertised (primary-packet) only — never registered as an actual GATT service, since an
      *  advertised service UUID is purely an advertisement-layer claim to begin with (the web
      *  app's own `connectAndVerify` in mule-ble.js already treats it that way, confirming via a
@@ -339,6 +351,12 @@ data class DeviceInfo(
     // a puller running newer code than an old, already-installed peripheral still deserializes
     // its DeviceInfo fine and just falls back to this same default.
     val pollIntervalMs: Long = MuleGattProfile.RECOMMENDED_POLL_INTERVAL_MS,
+    // The generatedAt of whatever progress this device currently holds for its OWN active race
+    // (see ProgressRepository) — null if it holds none. Lets a puller (currently only the
+    // racemaster web app) skip re-delivering progress it already knows this phone has, mirroring
+    // relayManifestVersion's own "only act on a genuine change" precedent just above, in the
+    // opposite (inbound) direction. Defaulted so an old-build requester still decodes this fine.
+    val progressGeneratedAt: String? = null,
 )
 
 /** Written to [MuleGattProfile.CONTROL_CHARACTERISTIC_UUID] to request either a delta stream of
@@ -468,4 +486,36 @@ data class SyncRecord(
     val refLineNumber: Long? = null,
     val note: String?,
     val timestampMillis: Long,
+)
+
+/** One race entry from the racemaster web app's own `progress.json` — mirrors that file's own
+ *  wire shape byte-for-byte (see racemaster's server/routes/mobile.js POST handler). Every entry
+ *  in Entries gets a row regardless of mobile activity, so this doubles as bib/course
+ *  allocation data (this repo's own TODO.md: "pull a race name, its courses and bib allocations
+ *  from the server, or a mule") as well as live progress. Identical over both transports this
+ *  repo supports (BLE — [MuleGattProfile.PROGRESS_CHARACTERISTIC_UUID] — and HTTP —
+ *  [mobile.racemaster.data.mule.MuleSyncClient.getProgress]) — unlike [SyncRecord]/its own
+ *  server-side counterpart, nothing here differs by transport, so one shared type covers both. */
+@Serializable
+data class ProgressEntry(
+    val bibNumber: Int = 0,
+    val name: String = "",
+    val category: String = "",
+    val course: String = "",
+    val startTime: String = "",
+    val finishTime: String = "",
+    val cpTimes: Map<String, String> = emptyMap(),
+)
+
+/** Race-wide progress payload — see [ProgressEntry]'s own doc. [generatedAt] is the racemaster
+ *  server's own version stamp (an ISO string, stamped fresh on every push) — what
+ *  [mobile.racemaster.data.mule.ProgressRepository] compares to decide whether a newly-received
+ *  copy is actually new, and what this device reports back (see [DeviceInfo.progressGeneratedAt])
+ *  so a puller can skip re-delivering/re-fetching a copy this device already has. */
+@Serializable
+data class ProgressPayload(
+    val raceName: String = "",
+    val raceDate: String = "",
+    val generatedAt: String = "",
+    val entries: List<ProgressEntry> = emptyList(),
 )

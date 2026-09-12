@@ -222,6 +222,15 @@ class PeripheralSyncService : Service() {
     // GATT callback thread, never from a serviceScope coroutine — unlike outboundChunks).
     private val pendingPreparedWrites = mutableMapOf<String, MutableList<PendingWrite>>()
 
+    // Raw bytes accumulated for an in-flight PROGRESS_CHARACTERISTIC_UUID delivery, keyed by MAC
+    // address — the receive-side twin of outboundChunks, but application-level chunking
+    // (ordinary immediate writes, terminated by END_OF_STREAM_MARKER, mirroring how this device's
+    // own DATA notify stream is framed — see MuleGattProfile's class doc), not Android's own
+    // prepared-write/long-write queueing (pendingPreparedWrites just above) — the racemaster web
+    // app's own deliverProgress() deliberately avoids relying on that instead (see its own doc:
+    // no requestMtu()-equivalent exists for page JS to size chunks against reliably).
+    private val pendingProgressBytes = mutableMapOf<String, MutableList<ByteArray>>()
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -443,6 +452,10 @@ class PeripheralSyncService : Service() {
                 .collect {
                     servingState = it
                     recentResponses = emptyMap()
+                    // A stored progress payload for a race that's no longer active must never
+                    // leak into DeviceInfo.progressGeneratedAt/a puller for whatever race
+                    // replaces it — see ProgressRepository.clearIfRaceChanged's own doc.
+                    container.progressRepository.clearIfRaceChanged(it.raceId)
                     scheduleAdvertisedIdentityRefresh()
                 }
         }
@@ -535,6 +548,11 @@ class PeripheralSyncService : Service() {
             BluetoothGattCharacteristic.PROPERTY_WRITE,
             BluetoothGattCharacteristic.PERMISSION_WRITE,
         )
+        val progressCharacteristic = BluetoothGattCharacteristic(
+            MuleGattProfile.PROGRESS_CHARACTERISTIC_UUID,
+            BluetoothGattCharacteristic.PROPERTY_WRITE,
+            BluetoothGattCharacteristic.PERMISSION_WRITE,
+        )
         dataCharacteristic = dataCharacteristicLocal
 
         val service = BluetoothGattService(MuleGattProfile.SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY).apply {
@@ -542,6 +560,7 @@ class PeripheralSyncService : Service() {
             addCharacteristic(controlCharacteristic)
             addCharacteristic(dataCharacteristicLocal)
             addCharacteristic(ackCharacteristic)
+            addCharacteristic(progressCharacteristic)
         }
         server.addService(service)
 
@@ -732,6 +751,7 @@ class PeripheralSyncService : Service() {
                 deviceName = deviceName,
                 relayCount = freshRelayManifest().size,
                 relayManifestVersion = relayManifestVersion,
+                progressGeneratedAt = container.progressRepository.generatedAtFor(servingState.raceId),
             )
             val bytes = json.encodeToString(info).toByteArray(Charsets.UTF_8)
             val value = bytes.drop(offset).toByteArray()
@@ -896,12 +916,51 @@ class PeripheralSyncService : Service() {
                         gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
                     }
                 }
+                MuleGattProfile.PROGRESS_CHARACTERISTIC_UUID -> {
+                    val buffered = pendingProgressBytes.getOrPut(device.address) { mutableListOf() }
+                    if (isProgressTerminatorChunk(value)) {
+                        val bytes = reassembleProgressChunks(buffered)
+                        pendingProgressBytes.remove(device.address)
+                        serviceScope.launch { handleProgressPayload(bytes) }
+                    } else {
+                        val totalSoFar = buffered.sumOf { it.size } + value.size
+                        if (totalSoFar > MAX_PROGRESS_PAYLOAD_BYTES) {
+                            Log.w(TAG, "progress write from ${device.address} exceeded $MAX_PROGRESS_PAYLOAD_BYTES bytes — dropping")
+                            pendingProgressBytes.remove(device.address)
+                        } else {
+                            buffered.add(value)
+                        }
+                    }
+                    if (responseNeeded) {
+                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+                    }
+                }
                 else -> {
                     if (responseNeeded) {
                         gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
                     }
                 }
             }
+        }
+
+        // Decodes and stores a fully-reassembled progress delivery (see the PROGRESS_CHARACTERISTIC_UUID
+        // branch above). Only a cheap "does this device currently have ANY active race open at
+        // all" guard is applied here — deliberately NOT a race-label string comparison (this
+        // device's own buildRaceLabel()-equivalent and the web app's own deriveRaceLabel() are
+        // separate implementations that could in principle diverge) — the browser's own
+        // pre-delivery raceLabel match (mule-ble.js's pullFromConnectedPhone) is the sole
+        // authority for whether this delivery should have happened at all; this is
+        // defense-in-depth against storing progress for literally nothing, not a security
+        // boundary of its own.
+        private suspend fun handleProgressPayload(bytes: ByteArray) {
+            val raceId = servingState.raceId ?: return
+            val payload = runCatching { json.decodeFromString<ProgressPayload>(String(bytes, Charsets.UTF_8)) }.getOrNull()
+            if (payload == null) {
+                Log.w(TAG, "progress write failed to decode (${bytes.size} bytes)")
+                return
+            }
+            container.progressRepository.storeFromBle(raceId, servingState.raceLabel, payload)
+            Log.i(TAG, "progress stored: raceId=$raceId generatedAt=${payload.generatedAt} entries=${payload.entries.size}")
         }
 
         // Reassembles a completed "prepared write" (long write) once the central tells us to
@@ -965,6 +1024,9 @@ class PeripheralSyncService : Service() {
                 // onExecuteWrite's own removal covers the ordinary completed-transaction path,
                 // this is what stops a queue entry leaking forever if that callback never fires.
                 pendingPreparedWrites.remove(device.address)
+                // Same backstop for a progress delivery that never sent its terminator before
+                // dropping.
+                pendingProgressBytes.remove(device.address)
             }
         }
 
@@ -1274,6 +1336,12 @@ class PeripheralSyncService : Service() {
         private const val MAX_CACHED_RESPONSES = 64
         private const val CACHED_RESPONSE_MAX_AGE_MS = 60_000L
 
+        // Defensive cap on pendingProgressBytes — a progress delivery that never sends its
+        // terminator (a stalled/aborted write sequence, still connected) can't grow this buffer
+        // unboundedly. A real race's progress.json is expected to be at most a few tens of KB
+        // even for a large entry list; this leaves generous headroom above that.
+        private const val MAX_PROGRESS_PAYLOAD_BYTES = 2_000_000
+
         // Mirrors mule-ble.js's own WEB_DEVICE_ID/deviceName exactly (see sendSinkAck there) —
         // used only for backfillSinkAck's own inferred LineSyncEntity rows, so a "Synced to"
         // entry looks identical in Race History regardless of whether it came from an explicit
@@ -1391,3 +1459,19 @@ internal fun cacheAfterAnswering(
         .take(maxEntries)
         .associate { it.key to it.value }
 }
+
+/** Whether a single write to PROGRESS_CHARACTERISTIC_UUID is the end-of-stream terminator
+ *  (a lone [MuleGattProfile.END_OF_STREAM_MARKER] byte) rather than another chunk of the payload
+ *  itself — the same framing [MuleGattProfile]'s own class doc describes for the DATA notify
+ *  stream, just applied to an inbound write instead of an outbound notify. Pulled out as a
+ *  top-level pure function, matching [sinkConfirmedUuids]/[cacheAfterAnswering]'s own precedent,
+ *  so this framing decision is directly testable without PeripheralSyncService's live BLE/Service
+ *  dependencies. */
+internal fun isProgressTerminatorChunk(value: ByteArray): Boolean =
+    value.size == 1 && value[0] == MuleGattProfile.END_OF_STREAM_MARKER
+
+/** Concatenates [chunks] (accumulated PROGRESS_CHARACTERISTIC_UUID writes, in receive order) into
+ *  the single byte array the phone then JSON-decodes as a [ProgressPayload] — pulled out as a
+ *  pure function for the same reason as [isProgressTerminatorChunk] above. */
+internal fun reassembleProgressChunks(chunks: List<ByteArray>): ByteArray =
+    chunks.fold(ByteArray(0)) { acc, chunk -> acc + chunk }

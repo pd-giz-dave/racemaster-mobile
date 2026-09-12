@@ -1,6 +1,9 @@
 package mobile.racemaster.data.mule
 
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PeripheralSyncServiceTest {
@@ -93,5 +96,42 @@ class PeripheralSyncServiceTest {
         val result = cacheAfterAnswering(cache, "newest", "p3", nowMillis = 3_000L, maxEntries = 2, maxAgeMillis = 60_000L)
 
         assertEquals(setOf("middle", "newest"), result.keys)
+    }
+
+    // isProgressTerminatorChunk / reassembleProgressChunks — the receive-side framing for a
+    // browser-delivered progress payload (the mirror image of MuleGattProfile's own DATA notify
+    // stream framing, just applied to inbound writes to PROGRESS_CHARACTERISTIC_UUID instead).
+
+    @Test
+    fun aSingleZeroByteIsTheTerminator() {
+        assertTrue(isProgressTerminatorChunk(byteArrayOf(0)))
+    }
+
+    @Test
+    fun anyOtherSingleByteIsNotTheTerminator() {
+        assertFalse(isProgressTerminatorChunk(byteArrayOf(1)))
+        assertFalse(isProgressTerminatorChunk(byteArrayOf(0x41)))
+    }
+
+    @Test
+    fun aMultiByteChunkIsNeverTheTerminatorEvenIfItStartsWithZero() {
+        assertFalse(isProgressTerminatorChunk(byteArrayOf(0, 1)))
+    }
+
+    @Test
+    fun anEmptyChunkIsNotTheTerminator() {
+        assertFalse(isProgressTerminatorChunk(ByteArray(0)))
+    }
+
+    @Test
+    fun reassembleProgressChunksConcatenatesInOrder() {
+        val result = reassembleProgressChunks(listOf(byteArrayOf(1, 2), byteArrayOf(3), byteArrayOf(4, 5, 6)))
+
+        assertArrayEquals(byteArrayOf(1, 2, 3, 4, 5, 6), result)
+    }
+
+    @Test
+    fun reassembleProgressChunksOfAnEmptyListIsAnEmptyArray() {
+        assertArrayEquals(ByteArray(0), reassembleProgressChunks(emptyList()))
     }
 }

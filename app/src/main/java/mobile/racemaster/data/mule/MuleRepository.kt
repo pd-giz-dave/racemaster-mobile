@@ -125,17 +125,27 @@ class MuleRepository(
         advertisement: Advertisement,
         sourceDeviceId: String? = null,
         sourceRaceLabel: String? = null,
+        // Progress this Mule already holds (from a BLE delivery or a direct server fetch — see
+        // ProgressRepository) that it should propagate on to whoever's on the other end of this
+        // connection, piggybacked exactly like the sink confirmation above — see
+        // MulePullClient.readDeviceInfo's own progressToDeliver/progressRaceLabel doc for why.
+        // Forwarded straight through; both null (the default) is a no-op, same as
+        // sinkConfirmedRecordUuids ending up empty above.
+        progressToDeliver: ProgressPayload? = null,
+        progressRaceLabel: String? = null,
         // Forwarded straight through to MulePullClient.readDeviceInfo's own param of the same
         // name — see its own doc. A no-op default, same as that one, for the common case (no
         // caller cares, or sinkConfirmedRecordUuids ends up empty so it never fires anyway).
         onAckFailure: suspend (String) -> Unit = {},
+        // Same idea as onAckFailure, for the progress-delivery write.
+        onProgressDeliveryFailure: suspend (String) -> Unit = {},
     ): DeviceInfo {
         val sinkConfirmedRecordUuids = if (sourceDeviceId != null && sourceRaceLabel != null) {
             pulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource(sourceDeviceId, sourceRaceLabel)
         } else {
             emptyList()
         }
-        if (sinkConfirmedRecordUuids.isEmpty()) return pullClient.readDeviceInfo(advertisement)
+        if (sinkConfirmedRecordUuids.isEmpty() && progressToDeliver == null) return pullClient.readDeviceInfo(advertisement)
         val myDeviceId = settingsRepository.getOrCreateDeviceId()
         val myDeviceName = settingsRepository.getOrCreateDeviceName()
         return pullClient.readDeviceInfo(
@@ -143,10 +153,13 @@ class MuleRepository(
             myDeviceId,
             myDeviceName,
             sinkConfirmedRecordUuids,
+            progressToDeliver = progressToDeliver,
+            progressRaceLabel = progressRaceLabel,
             onConfirmationsRelayed = { relayedUuids ->
                 pulledRecordDao.markConfirmationRelayed(relayedUuids, System.currentTimeMillis())
             },
             onAckFailure = onAckFailure,
+            onProgressDeliveryFailure = onProgressDeliveryFailure,
         )
     }
 

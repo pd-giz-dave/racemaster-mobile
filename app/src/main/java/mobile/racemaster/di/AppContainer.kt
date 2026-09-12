@@ -11,6 +11,7 @@ import mobile.racemaster.data.mule.MulePullClient
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.MuleSyncClient
 import mobile.racemaster.data.mule.MuleSyncEngine
+import mobile.racemaster.data.mule.ProgressRepository
 import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.CpModeRepository
@@ -30,6 +31,7 @@ interface AppContainer {
     val muleSyncEngine: MuleSyncEngine
     val serverStatusRepository: ServerStatusRepository
     val bluetoothStateRepository: BluetoothStateRepository
+    val progressRepository: ProgressRepository
 }
 
 class DefaultAppContainer(context: Context) : AppContainer {
@@ -71,7 +73,7 @@ class DefaultAppContainer(context: Context) : AppContainer {
     }
 
     override val muleSyncEngine: MuleSyncEngine by lazy {
-        MuleSyncEngine(muleRepository, bluetoothStateRepository, raceRepository, timeModeRepository, bibsModeRepository, cpModeRepository, settingsRepository)
+        MuleSyncEngine(muleRepository, bluetoothStateRepository, raceRepository, timeModeRepository, bibsModeRepository, cpModeRepository, settingsRepository, progressRepository)
     }
 
     override val serverStatusRepository: ServerStatusRepository by lazy {
@@ -80,5 +82,9 @@ class DefaultAppContainer(context: Context) : AppContainer {
 
     override val bluetoothStateRepository: BluetoothStateRepository by lazy {
         BluetoothStateRepository(context)
+    }
+
+    override val progressRepository: ProgressRepository by lazy {
+        ProgressRepository(muleSyncClient)
     }
 }

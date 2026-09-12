@@ -1,5 +1,6 @@
 package mobile.racemaster.data.mule
 
+import kotlinx.serialization.json.Json
 import mobile.racemaster.data.settings.AppMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -7,6 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MuleGattProfileTest {
+    private val json = Json { ignoreUnknownKeys = true }
 
     // encodeAdvertisedIdentity/decodeAdvertisedIdentity — the scan-response payload
     // MuleSyncEngine's shouldConnect gate relies on to decide whether a real GATT connect is
@@ -178,5 +180,60 @@ class MuleGattProfileTest {
             MuleGattProfile.AdvertisedIdentity(1L, MuleGattProfile.shortDeviceId("device-a"), "name", null),
             MuleGattProfile.decodeAdvertisedIdentity(encoded),
         )
+    }
+
+    // ProgressPayload/ProgressEntry — the racemaster web app's progress.json wire shape, carried
+    // over both BLE (PROGRESS_CHARACTERISTIC_UUID) and HTTP (MuleSyncClient.getProgress).
+
+    @Test
+    fun progressPayloadRoundTripsExactly() {
+        val payload = ProgressPayload(
+            raceName = "Test Race",
+            raceDate = "23/08/2026",
+            generatedAt = "2026-08-23T10:00:00.000Z",
+            entries = listOf(
+                ProgressEntry(
+                    bibNumber = 1, name = "Dave", category = "MSEN", course = "Seniors",
+                    startTime = "00:00:00", finishTime = "00:45:00", cpTimes = mapOf("1" to "00:10:00"),
+                ),
+            ),
+        )
+
+        val decoded = json.decodeFromString<ProgressPayload>(json.encodeToString(payload))
+
+        assertEquals(payload, decoded)
+    }
+
+    @Test
+    fun progressPayloadDecodesMissingFieldsAsDefaults() {
+        val decoded = json.decodeFromString<ProgressPayload>("{}")
+
+        assertEquals(ProgressPayload(), decoded)
+        assertEquals("", decoded.generatedAt)
+        assertTrue(decoded.entries.isEmpty())
+    }
+
+    // DeviceInfo.progressGeneratedAt — must default to null so an old-build requester (or an
+    // old-build responder being read by a new-build requester) still decodes fine either way.
+
+    @Test
+    fun deviceInfoProgressGeneratedAtDefaultsToNullWhenMissingFromTheWire() {
+        val decoded = json.decodeFromString<DeviceInfo>(
+            """{"deviceId":"dev1","raceLabel":"race-a","lastLineNumber":0}""",
+        )
+
+        assertNull(decoded.progressGeneratedAt)
+    }
+
+    @Test
+    fun deviceInfoProgressGeneratedAtRoundTripsWhenPresent() {
+        val info = DeviceInfo(
+            deviceId = "dev1", raceLabel = "race-a", lastLineNumber = 0,
+            progressGeneratedAt = "2026-08-23T10:00:00.000Z",
+        )
+
+        val decoded = json.decodeFromString<DeviceInfo>(json.encodeToString(info))
+
+        assertEquals("2026-08-23T10:00:00.000Z", decoded.progressGeneratedAt)
     }
 }

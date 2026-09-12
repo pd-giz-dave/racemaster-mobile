@@ -7,6 +7,7 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.expectSuccess
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.get
+import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
@@ -89,6 +90,19 @@ data class MobileSyncResponse(val added: Int = 0)
 @Serializable
 data class PingResponseBody(val ok: Boolean = false)
 
+// Response for GET .../progress — see MuleSyncClient.getProgress's own doc. `unchanged` true
+// means the server confirmed knownGeneratedAt already matched, in which case `entries` is
+// omitted server-side and defaults to empty here (ProgressRepository.refreshFromServer never
+// reads entries in that case anyway — see its own doc).
+@Serializable
+data class ProgressResponse(
+    val unchanged: Boolean = false,
+    val generatedAt: String? = null,
+    val raceName: String = "",
+    val raceDate: String = "",
+    val entries: List<ProgressEntry> = emptyList(),
+)
+
 /** Outcome of a [MuleSyncClient.ping] call, kept separate from the interpretation of what it
  *  *means* (see ServerStatusRepository) — this just reports what happened on the wire. */
 sealed interface PingOutcome {
@@ -153,6 +167,21 @@ class MuleSyncClient {
             bearerAuth(token)
             contentType(ContentType.Application.Json)
             setBody(MobileSyncPayload(devices.mapValues { (_, records) -> records.map { it.toServerSyncRecord() } }))
+        }.body()
+
+    // Fetches race-wide progress directly from the server, bypassing Bluetooth entirely — the
+    // HTTP twin of the racemaster web app's own BLE delivery (PeripheralSyncService's
+    // PROGRESS_CHARACTERISTIC_UUID handling). Bearer-authed, like getSyncStatus/pushRecords —
+    // deliberately requires login, unlike progress.json's own incidental unauthenticated
+    // exposure via the server's static-file route. [knownGeneratedAt] is the bandwidth-saving
+    // hint — pass whatever ProgressRepository already has cached for this race, or null on a
+    // first-ever fetch — omitted from the request entirely rather than sent empty, so the server
+    // can tell "never fetched before" apart from "fetched, but held nothing that time" purely by
+    // the query parameter's presence.
+    suspend fun getProgress(baseUrl: String, token: String, raceLabel: String, knownGeneratedAt: String?): ProgressResponse =
+        client.get("${baseUrl.trimEnd('/')}/api/mobile/${encodePathSegment(raceLabel)}/progress") {
+            bearerAuth(token)
+            knownGeneratedAt?.let { parameter("knownGeneratedAt", it) }
         }.body()
 
     fun close() {

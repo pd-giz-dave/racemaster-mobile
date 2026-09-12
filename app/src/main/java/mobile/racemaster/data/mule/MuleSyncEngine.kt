@@ -198,6 +198,7 @@ class MuleSyncEngine(
     private val bibsModeRepository: BibsModeRepository,
     private val cpModeRepository: CpModeRepository,
     private val settingsRepository: SettingsRepository,
+    private val progressRepository: ProgressRepository,
 ) {
     // A background engine that talks to arbitrary other phones over BLE regardless of what
     // screen (if any) is currently showing must never let a stray uncaught exception take
@@ -346,6 +347,7 @@ class MuleSyncEngine(
         startScan()
         startAutoSyncLoop()
         startBluetoothStateLoop()
+        startProgressPollLoop()
     }
 
     /** Tears down every loop [start] set up — the central-side counterpart to
@@ -542,6 +544,27 @@ class MuleSyncEngine(
         }
     }
 
+    // The HTTP twin of the racemaster web app's own BLE progress delivery (see
+    // PeripheralSyncService's PROGRESS_CHARACTERISTIC_UUID handling) — this repo's own TODO.md:
+    // "the race progress info should be grabbed regularly to update bib expectations." Much
+    // coarser than AUTO_SYNC_INTERVAL (a direct server HTTP hit, not a BLE radio operation
+    // sharing a budget with scanning/connecting) — see PROGRESS_POLL_INTERVAL's own doc.
+    // Silently does nothing on any tick where there's no active race, no configured server, or
+    // no login yet, exactly the same "not an error, just nothing to do right now" posture
+    // autoPullAndPushIfArmed's own gates already use elsewhere in this engine.
+    private fun startProgressPollLoop() {
+        engineScope.launch {
+            while (isActive) {
+                delay(PROGRESS_POLL_INTERVAL)
+                val raceId = settingsRepository.activeRaceId.first() ?: continue
+                val race = raceRepository.getRace(raceId) ?: continue
+                val baseUrl = settingsRepository.serverBaseUrl.first() ?: continue
+                val token = settingsRepository.authToken.first() ?: continue
+                progressRepository.refreshFromServer(baseUrl, token, raceId, race.label)
+            }
+        }
+    }
+
     // Only used for a newly-discovered device's first resolve (see startScan()) — the
     // periodic loop no longer needs a separate universal refresh pass, since
     // pullAllVisibleDevices() (called every tick from autoPullAndPushIfArmed) already
@@ -556,6 +579,13 @@ class MuleSyncEngine(
         // frees, rather than spreading naturally across FIRST_SIGHTING_JITTER's window.
         delay(Random.nextLong(FIRST_SIGHTING_JITTER.inWholeMilliseconds))
         val device = discoveredFlow.value[key] ?: return
+        // Whatever progress this Mule is currently holding (BLE delivery or direct server
+        // fetch), offered to this peer too — see MuleRepository.readDeviceInfo's own
+        // progressToDeliver/progressRaceLabel doc. Actual delivery only happens if this peer's
+        // own freshly-read race matches and it doesn't already have this exact copy — resolving
+        // this snapshot once, up front, rather than re-reading the flow after the connect below,
+        // keeps what gets offered consistent with whatever this whole call was decided against.
+        val heldProgress = progressRepository.current.value
         // Falls back to the raw key (a BLE address, pre-resolve) when there's no name yet —
         // see BluetoothStateRepository.recordConnectAttempt's own doc for what this identifies.
         val peerLabel = device.deviceName.ifBlank { key }
@@ -567,7 +597,12 @@ class MuleSyncEngine(
         // distinguishable from a device that never scans in at all.
         Log.d(TAG, "first-sighting connect attempt: key=$key")
         val result = connectSemaphore.withPermit {
-            runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }
+            runCatching {
+                muleRepository.readDeviceInfo(
+                    device.requiredAdvertisement,
+                    progressToDeliver = heldProgress?.toPayload(), progressRaceLabel = heldProgress?.raceLabel,
+                )
+            }
                 .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
                 .onFailure { Log.w(TAG, "first-sighting connect failed: key=$key", it) }
         }
@@ -784,6 +819,10 @@ class MuleSyncEngine(
     private suspend fun pullAllVisibleDevices(force: Boolean = false): String? {
         var tickFailure: String? = null
         val myDeviceId = muleRepository.myDeviceId()
+        // Resolved once for the whole tick (not per-device) — see refreshDeviceInfo's own
+        // matching doc for why a snapshot up front, rather than re-reading the flow per device,
+        // keeps what's offered to every peer this tick consistent with each other.
+        val heldProgress = progressRepository.current.value
         // Seeded from last tick's relay rows (see the loop below and its final assembly) —
         // under the new connect-gating, most peers are skipped on most ticks, so relayFlow can
         // no longer be rebuilt purely from whatever this one tick happens to touch (that used
@@ -840,6 +879,7 @@ class MuleSyncEngine(
                 val periodicResult = runCatching {
                     muleRepository.readDeviceInfo(
                         device.requiredAdvertisement, device.deviceId, device.raceLabel,
+                        progressToDeliver = heldProgress?.toPayload(), progressRaceLabel = heldProgress?.raceLabel,
                         // The read itself can succeed (this device stays green/reachable) even
                         // while its piggybacked sink-confirmation ack keeps failing underneath —
                         // see MulePullClient.readDeviceInfoOnce's own doc for why that's
@@ -851,6 +891,8 @@ class MuleSyncEngine(
                         // confirmation relay — TODO.md's Sony-Mule report — isn't silently
                         // invisible on screen the way it was before this existed.
                         onAckFailure = { reason -> tickFailure = "Confirmation relay to $peerLabel failed: $reason" },
+                        // Same reasoning, for a still-broken progress relay.
+                        onProgressDeliveryFailure = { reason -> tickFailure = "Progress relay to $peerLabel failed: $reason" },
                     )
                 }
                     .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
@@ -878,7 +920,12 @@ class MuleSyncEngine(
                     result.onSuccess {
                         // Reflects the drop in outstanding lines immediately rather than waiting for
                         // the next periodic refresh, up to AUTO_SYNC_INTERVAL later.
-                        runCatching { muleRepository.readDeviceInfo(device.requiredAdvertisement) }
+                        runCatching {
+                            muleRepository.readDeviceInfo(
+                                device.requiredAdvertisement,
+                                progressToDeliver = heldProgress?.toPayload(), progressRaceLabel = heldProgress?.raceLabel,
+                            )
+                        }
                             .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
                             .getOrNull()?.let {
                                 val newSince = muleRepository.lastPulledLineNumber(it.deviceId, it.raceLabel)
@@ -1021,6 +1068,14 @@ class MuleSyncEngine(
         // preemptively — this loop's timing has a documented history of causing real crashes
         // when tuned too aggressively (see MAX_CONCURRENT_CONNECTS' own doc).
         private const val AUTO_SYNC_JITTER_FRACTION = 0.125
+
+        // How often startProgressPollLoop() above hits the server directly for progress —
+        // matches the racemaster web app's own default background-poll cadence
+        // (getServerPollIntervalSeconds() in js/mobile-files-shared.js) purely for symmetry, not
+        // because anything here requires the two to agree. Deliberately much coarser than
+        // AUTO_SYNC_INTERVAL: this is a plain HTTP request against the configured server, not a
+        // BLE radio operation competing with this engine's own scan/connect budget.
+        private val PROGRESS_POLL_INTERVAL = 30_000L.milliseconds
 
         // The periodic backstop behind shouldConnect's version-gate: even a device whose
         // advertised counter never seems to move still gets a real GATT connect+DeviceInfo
