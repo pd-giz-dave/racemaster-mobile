@@ -32,6 +32,7 @@ import mobile.racemaster.ui.mulemode.MuleServerSetupScreen
 import mobile.racemaster.ui.mulemode.SetupOptionsScreen
 import mobile.racemaster.ui.racedetails.RaceDetailsScreen
 import mobile.racemaster.ui.racehistory.MuleSourceDetailScreen
+import mobile.racemaster.ui.racehistory.ProgressDetailScreen
 import mobile.racemaster.ui.racehistory.RaceHistoryDetailScreen
 import mobile.racemaster.ui.racehistory.RaceHistoryScreen
 import mobile.racemaster.ui.timemode.EditSplitScreen
@@ -224,6 +225,7 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                         onMuleSourceSelected = { raceLabel, sourceDeviceId ->
                             navController.navigate(Routes.muleSourceDetail(raceLabel, sourceDeviceId))
                         },
+                        onProgressSelected = { raceId -> navController.navigate(Routes.progressDetail(raceId)) },
                     )
                 }
                 composable(
@@ -232,6 +234,13 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                 ) { backStackEntry ->
                     val raceId = backStackEntry.arguments?.getLong("raceId") ?: return@composable
                     RaceHistoryDetailScreen(raceId = raceId, onBack = { navController.popBackStack() })
+                }
+                composable(
+                    route = Routes.PROGRESS_DETAIL,
+                    arguments = listOf(navArgument("raceId") { type = NavType.LongType }),
+                ) { backStackEntry ->
+                    val raceId = backStackEntry.arguments?.getLong("raceId") ?: return@composable
+                    ProgressDetailScreen(raceId = raceId, onBack = { navController.popBackStack() })
                 }
                 composable(
                     route = Routes.MULE_SOURCE_DETAIL,

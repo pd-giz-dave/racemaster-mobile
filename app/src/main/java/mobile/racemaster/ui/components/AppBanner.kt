@@ -96,6 +96,11 @@ private fun ServerStatusIndicator(status: ServerStatus) {
         ServerStatus.ONLINE -> ServerOnlineGreen to "Online"
         ServerStatus.OFFLINE -> ServerOfflineRed to "Offline"
         ServerStatus.INVALID -> ServerInvalidAmber to "Invalid server"
+        // Reachable, genuinely a Racemaster server, but this device's own saved login isn't
+        // accepted (or was never set up) — see ServerStatus.UNAUTHORIZED's own doc. Same amber
+        // tier as INVALID (both are "needs operator attention", not an outage) but a distinct
+        // label, since the fix is different: log back in, not fix the server URL.
+        ServerStatus.UNAUTHORIZED -> ServerInvalidAmber to "Login expired"
         // Server sync deliberately turned off from Mule Mode — see AppBannerViewModel's own doc.
         ServerStatus.PAUSED -> ServerPausedGrey to "Paused"
     } ?: return

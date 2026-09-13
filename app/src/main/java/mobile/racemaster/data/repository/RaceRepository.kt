@@ -122,6 +122,27 @@ class RaceRepository(
         }
     }
 
+    // Promotes [newRaceId] to the device's own active race, first deleting whatever race is
+    // being switched away from if it's a still-course-less placeholder (see RaceEntity.course's
+    // own doc) — a row RaceDetailsScreen created, or endRecordingForCourse spawned, but that got
+    // abandoned before a course was ever picked has, by construction, zero real history: a
+    // course is always claimed (see resolveCourseRace's own "claim in place" branch) before any
+    // HistoryLineEntity row can exist for a race, so `course.isBlank()` alone is a reliable,
+    // sufficient signal that this is pure clutter — not a genuinely unfinished race worth
+    // keeping around to clog up Race History. Every setActiveRaceId call site should route
+    // through here rather than calling it directly, so this applies uniformly regardless of
+    // *why* the switch is happening (a brand new race, a course swap, ending a course). Safe to
+    // call even when resolveCourseRace has already cleaned up the exact same predecessor itself
+    // (its own doc's outcome 1) — deleteRace is a no-op once the row's already gone.
+    suspend fun switchActiveRace(newRaceId: Long) {
+        val oldRaceId = settingsRepository.activeRaceId.first()
+        if (oldRaceId != null && oldRaceId != newRaceId) {
+            val old = raceDao.getById(oldRaceId)
+            if (old != null && old.course.isBlank()) deleteRace(oldRaceId)
+        }
+        settingsRepository.setActiveRaceId(newRaceId)
+    }
+
     // Lets an operator un-stick a race that RaceHistoryScreen's own caption says is still
     // "Active in X Mode", even when that mode's own screen no longer shows any sign of it.
     // settingsRepository.activeRaceId is a single, device-wide "currently selected race"

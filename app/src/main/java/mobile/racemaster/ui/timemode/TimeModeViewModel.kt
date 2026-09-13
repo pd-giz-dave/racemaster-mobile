@@ -210,7 +210,7 @@ class TimeModeViewModel(
     // Mode itself or another mode sharing the same race row), then actually starts the clock.
     private suspend fun beginCourse(raceId: Long, course: String) {
         val targetId = raceRepository.resolveCourseRace(raceId, course, AppMode.TIME.name)
-        if (targetId != raceId) settingsRepository.setActiveRaceId(targetId)
+        if (targetId != raceId) raceRepository.switchActiveRace(targetId)
         val target = requireNotNull(raceRepository.getRace(targetId)) { "Race $targetId not found" }
         // Already started means this course was previously ended via "End recording" (never
         // Reset — Reset already clears timeModeStartedAtMillis, so this branch is never taken
@@ -253,7 +253,7 @@ class TimeModeViewModel(
         viewModelScope.launch {
             lastEndedCourse = raceRepository.getRace(raceId)?.course?.ifBlank { null }
             val newRaceId = raceRepository.endRecordingForCourse(raceId, AppMode.TIME.name)
-            settingsRepository.setActiveRaceId(newRaceId)
+            raceRepository.switchActiveRace(newRaceId)
         }
     }
 

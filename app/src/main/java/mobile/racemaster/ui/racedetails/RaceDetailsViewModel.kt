@@ -113,7 +113,11 @@ class RaceDetailsViewModel(
                 courses = trimmedCourses,
             )
             settingsRepository.setAppMode(mode)
-            settingsRepository.setActiveRaceId(newRaceId)
+            // Routed through RaceRepository (not settingsRepository directly) so an earlier
+            // "New Race" attempt abandoned before ever picking a course — still sitting as the
+            // active race, course-less — gets cleaned up now rather than lingering forever; see
+            // RaceRepository.switchActiveRace's own doc.
+            raceRepository.switchActiveRace(newRaceId)
             newRaceId
         }
     }

@@ -37,7 +37,7 @@ class AppBannerViewModel(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), serverStatusRepository.state.value)
 
     init {
-        serverStatusRepository.startPolling(viewModelScope, settingsRepository.serverBaseUrl)
+        serverStatusRepository.startPolling(viewModelScope, settingsRepository.serverBaseUrl, settingsRepository.authToken)
     }
 
     companion object {

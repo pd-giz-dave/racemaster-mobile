@@ -233,6 +233,56 @@ class RaceRepositoryTest {
         assertEquals(listOf("Seniors", "Juniors"), pending.courses)
     }
 
+    // switchActiveRace — the "auto delete the empty placeholder" cleanup every setActiveRaceId
+    // call site routes through instead of calling settingsRepository.setActiveRaceId directly.
+
+    @Test
+    fun switchActiveRaceDeletesAStillCourseLessPlaceholderBeingSwitchedAwayFrom() = runTest {
+        val pendingId = repository.startNewRace(name = "Acme", course = "", courses = listOf("Seniors"))
+        settingsRepository.setActiveRaceId(pendingId)
+        val newRaceId = repository.startNewRace(name = "Other", course = "", courses = listOf("Seniors"))
+
+        repository.switchActiveRace(newRaceId)
+
+        assertNull(repository.getRace(pendingId))
+        assertEquals(newRaceId, settingsRepository.activeRaceId.first())
+    }
+
+    @Test
+    fun switchActiveRaceKeepsARealRaceBeingSwitchedAwayFrom() = runTest {
+        val juniorsId = repository.startNewRace(name = "Acme", course = "Juniors", courses = listOf("Seniors", "Juniors"))
+        settingsRepository.setActiveRaceId(juniorsId)
+        val newRaceId = repository.startNewRace(name = "Other", course = "", courses = listOf("Seniors"))
+
+        repository.switchActiveRace(newRaceId)
+
+        // A course already locked in means real history could exist for it — never deleted,
+        // regardless of whether any has actually been recorded yet.
+        assertEquals("Juniors", repository.getRace(juniorsId)?.course)
+        assertEquals(newRaceId, settingsRepository.activeRaceId.first())
+    }
+
+    @Test
+    fun switchActiveRaceIsSafeWhenNothingWasActiveBefore() = runTest {
+        val newRaceId = repository.startNewRace(name = "Acme", course = "", courses = listOf("Seniors"))
+
+        repository.switchActiveRace(newRaceId)
+
+        assertEquals(newRaceId, settingsRepository.activeRaceId.first())
+    }
+
+    @Test
+    fun switchActiveRaceIsSafeWhenSwitchingToTheSameRace() = runTest {
+        val pendingId = repository.startNewRace(name = "Acme", course = "", courses = listOf("Seniors"))
+        settingsRepository.setActiveRaceId(pendingId)
+
+        repository.switchActiveRace(pendingId)
+
+        // Must not delete the race it's simultaneously being asked to promote.
+        assertEquals(pendingId, repository.getRace(pendingId)?.id)
+        assertEquals(pendingId, settingsRepository.activeRaceId.first())
+    }
+
     @Test
     fun renamingARaceNeedsNoPulledRecordsBookkeeping() = runTest {
         // Unlike the old design (which had to retag a separately-staged mirror of this

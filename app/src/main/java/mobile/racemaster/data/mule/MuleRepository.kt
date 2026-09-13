@@ -340,6 +340,26 @@ class MuleRepository(
         settingsRepository.setServerSession(normalizedUrl, response.token)
     }
 
+    // pushToServer's own last-resort recovery from a 401/403 — see ServerRequestException's own
+    // doc for the field report this exists to fix: a server-side session reset (this app's dev
+    // server rebuilding sessions.txt from a remote pull, in the confirmed case, but any restart
+    // that happens to drop an old token would do the same) invalidates every already-logged-in
+    // phone's saved token, with nothing on the phone itself wrong at all. Reaches for
+    // SettingsRepository.serverCredentialHistory — most-recent-first, so the first entry for
+    // this exact baseUrl is whatever this phone last actually typed and submitted here — rather
+    // than needing a separately-tracked "current username" this repository has never kept.
+    // Deliberately swallows every failure into a plain null (no saved credentials for this URL,
+    // or they no longer work either — e.g. the password itself changed server-side) rather than
+    // throwing a second, more confusing exception from in here: either way, the caller's own
+    // original ServerRequestException is what should actually reach the operator.
+    private suspend fun reauthenticate(baseUrl: String): String? {
+        val credential = settingsRepository.serverCredentialHistory.first()
+            .firstOrNull { normalizeBaseUrl(it.url) == baseUrl } ?: return null
+        return runCatching { syncClient.login(baseUrl, credential.username, credential.password) }
+            .onSuccess { settingsRepository.setServerSession(baseUrl, it.token) }
+            .getOrNull()?.token
+    }
+
     // See SettingsRepository.clearServerSession's own doc.
     suspend fun clearServerSession() {
         settingsRepository.clearServerSession()
@@ -391,7 +411,7 @@ class MuleRepository(
      *  or the other. */
     suspend fun pushToServer(): Int {
         val baseUrl = requireNotNull(settingsRepository.serverBaseUrl.first()) { "Not logged in" }
-        val token = requireNotNull(settingsRepository.authToken.first()) { "Not logged in" }
+        var token = requireNotNull(settingsRepository.authToken.first()) { "Not logged in" }
 
         val pulledRows = pulledRecordDao.getAll()
         val localRaces = raceRepository.observeAllRaces().first()
@@ -405,6 +425,10 @@ class MuleRepository(
         val raceLabels = pulledByLabel.keys + localRacesByLabel.keys
 
         var added = 0
+        // Scoped to once per pushToServer() call (not once per race label) — see
+        // reauthenticate's own doc for why a single stale/invalidated token should only ever
+        // cost one extra login attempt here, not one per race label this pass happens to touch.
+        var reauthAttempted = false
         for (raceLabel in raceLabels) {
             val pulledForRace = pulledByLabel[raceLabel].orEmpty()
             val localRace = localRacesByLabel[raceLabel]
@@ -450,7 +474,19 @@ class MuleRepository(
             val byDevice = if (selfRecords.isEmpty()) pulledByDevice else pulledByDevice + (myDeviceName to selfRecords)
             val devicesToSend = recordsDueForDevices(byDevice, status)
             if (devicesToSend.isNotEmpty()) {
-                val response = syncClient.pushRecords(baseUrl, token, raceLabel, devicesToSend)
+                // See reauthenticate's own doc: a 401/403 here — this device's saved token no
+                // longer being accepted, most often a server-side session reset rather than
+                // anything wrong on the phone — gets exactly one automatic retry against a fresh
+                // login using this phone's own last-saved credentials for this server, before
+                // giving up and letting the original exception reach the operator as-is.
+                val response = try {
+                    syncClient.pushRecords(baseUrl, token, raceLabel, devicesToSend)
+                } catch (e: ServerRequestException) {
+                    if (reauthAttempted || (e.statusCode != 401 && e.statusCode != 403)) throw e
+                    reauthAttempted = true
+                    token = reauthenticate(baseUrl) ?: throw e
+                    syncClient.pushRecords(baseUrl, token, raceLabel, devicesToSend)
+                }
                 added += response.added
             }
 

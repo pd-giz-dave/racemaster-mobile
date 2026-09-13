@@ -121,7 +121,7 @@ fun ModePickerScreen(
                 ),
                 modifier = Modifier.weight(1f).height(56.dp),
             ) {
-                Text("History", style = MaterialTheme.typography.titleMedium)
+                Text("Progress", style = MaterialTheme.typography.titleMedium)
             }
             Button(
                 onClick = withClickSound(onHelp),

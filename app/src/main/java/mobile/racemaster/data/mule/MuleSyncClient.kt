@@ -10,8 +10,10 @@ import io.ktor.client.request.get
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.HttpResponse
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
@@ -90,6 +92,34 @@ data class MobileSyncResponse(val added: Int = 0)
 @Serializable
 data class PingResponseBody(val ok: Boolean = false)
 
+@Serializable
+private data class ErrorResponseBody(val error: String = "")
+
+// Thrown by every request below in place of Ktor's own non-2xx handling, which turned out not
+// to be a safe thing to lean on at all: `login`, `getSyncStatus`, and `pushRecords` used to rely
+// on this client's default `expectSuccess` to throw on a non-2xx response and never explicitly
+// checked the status themselves — but confirmed live (the same way getProgress's own 404 bug
+// below was confirmed), that default does *not* reliably throw here. A 401 from `pushRecords`
+// decoded its `{"error": "Unauthorised"}` body straight into `MobileSyncResponse(added = 0)`
+// (every field of which defaults) — a clean, exception-free "0 new records" result, exactly as
+// if the push had genuinely succeeded with nothing new to send. That's the actual root cause a
+// "server push broken" field report traced back to here: a local dev server's sessions.txt got
+// rebuilt out from under four already-logged-in phones, invalidating their saved tokens, and
+// every subsequent push silently no-op'd instead of failing — no exception for
+// MuleSyncEngine.pushIfNeeded's runCatching to catch, so no "Push failed" message ever appeared
+// anywhere, and the affected records just stayed permanently unsynced with nothing to explain
+// why. Every call below now checks `response.status` itself (via [checkSuccess]) instead of
+// trusting the client's implicit behavior, so a real failure is always a real, typed exception —
+// see [MuleRepository.pushToServer] for how the 401/403 case specifically now gets a chance to
+// recover on its own via [statusCode].
+class ServerRequestException(val statusCode: Int, message: String) : Exception(message)
+
+private suspend fun checkSuccess(response: HttpResponse) {
+    if (response.status.isSuccess()) return
+    val serverMessage = runCatching { response.body<ErrorResponseBody>().error }.getOrNull()?.takeIf { it.isNotBlank() }
+    throw ServerRequestException(response.status.value, serverMessage ?: response.status.toString())
+}
+
 // Response for GET .../progress — see MuleSyncClient.getProgress's own doc. `unchanged` true
 // means the server confirmed knownGeneratedAt already matched, in which case `entries` is
 // omitted server-side and defaults to empty here (ProgressRepository.refreshFromServer never
@@ -123,17 +153,22 @@ class MuleSyncClient {
         }
     }
 
-    suspend fun login(baseUrl: String, username: String, password: String): LoginResponse =
-        client.post("${baseUrl.trimEnd('/')}/api/auth/login") {
+    suspend fun login(baseUrl: String, username: String, password: String): LoginResponse {
+        val response = client.post("${baseUrl.trimEnd('/')}/api/auth/login") {
+            expectSuccess = false
             contentType(ContentType.Application.Json)
             setBody(LoginRequest(username, password))
-        }.body()
+        }
+        checkSuccess(response)
+        return response.body()
+    }
 
-    // No auth, and expectSuccess is scoped to just this call (unlike the rest of this
-    // client, which relies on the default expectSuccess=true throwing on non-2xx to signal
-    // failure to their callers) — a ping needs to inspect *any* status code it gets back,
-    // including error ones, to tell "reachable but not actually a Racemaster server" (a
-    // non-200, or a 200 with the wrong body shape) apart from "unreachable at all".
+    // No auth, and expectSuccess is scoped to just this call the same way every other request in
+    // this client now is (see [ServerRequestException]'s own doc for why none of them can lean
+    // on the client's own default anymore) — a ping needs to inspect *any* status code it gets
+    // back, including error ones, to tell "reachable but not actually a Racemaster server" (a
+    // non-200, or a 200 with the wrong body shape) apart from "unreachable at all", rather than
+    // throwing on the non-200 case the way [checkSuccess] deliberately does everywhere else.
     suspend fun ping(baseUrl: String): PingOutcome =
         try {
             val response = client.get("${baseUrl.trimEnd('/')}/api/ping") {
@@ -146,13 +181,47 @@ class MuleSyncClient {
             PingOutcome.Unreachable
         }
 
+    // Cheap authenticated probe used only to tell whether [token] itself is still accepted by
+    // the server — ServerStatusRepository's own doc for why the AppBanner needs this apart from
+    // plain reachability at all (ServerStatus.UNAUTHORIZED). GET /api/mobile/status (see
+    // server/routes/mobile.js) needs nothing more than a valid bearer token to succeed and costs
+    // one fs.statSync per already-stored device file (see that route's own doc) — deliberately
+    // not getSyncStatus/pushRecords themselves, which both need a real race label this device
+    // may not even have one for yet. The response body (this account's whole Mobile Files
+    // listing) is never read, only the status code.
+    //
+    // Returns null — "inconclusive", not "rejected" — for anything other than a clean 2xx or a
+    // clean 401/403, network failures included (unlike every other call in this client, this one
+    // is expected to run continuously in the background every few seconds; a transient timeout
+    // here must never itself be misreported as "logged out" — see interpretServerStatus's own
+    // doc for how the null case is handled).
+    suspend fun checkAuth(baseUrl: String, token: String): Boolean? {
+        val response = try {
+            client.get("${baseUrl.trimEnd('/')}/api/mobile/status") {
+                expectSuccess = false
+                bearerAuth(token)
+            }
+        } catch (_: Exception) {
+            return null
+        }
+        return when {
+            response.status.isSuccess() -> true
+            response.status.value == 401 || response.status.value == 403 -> false
+            else -> null
+        }
+    }
+
     // What the server already has stored, per device, for this race — call before pushing so
     // only the lineNumber delta needs to be sent (see MuleRepository.pushToServer). A device
     // absent from the response means the server has nothing for it yet (treat as 0).
-    suspend fun getSyncStatus(baseUrl: String, token: String, raceLabel: String): Map<String, Long> =
-        client.get("${baseUrl.trimEnd('/')}/api/mobile/${encodePathSegment(raceLabel)}/status") {
+    suspend fun getSyncStatus(baseUrl: String, token: String, raceLabel: String): Map<String, Long> {
+        val response = client.get("${baseUrl.trimEnd('/')}/api/mobile/${encodePathSegment(raceLabel)}/status") {
+            expectSuccess = false
             bearerAuth(token)
-        }.body()
+        }
+        checkSuccess(response)
+        return response.body()
+    }
 
     // The response's `added` count (genuinely new rows, not the full send size) is what
     // should be shown to the operator. [raceLabel] scopes the push to
@@ -162,12 +231,16 @@ class MuleSyncClient {
         token: String,
         raceLabel: String,
         devices: Map<String, List<SyncRecord>>,
-    ): MobileSyncResponse =
-        client.post("${baseUrl.trimEnd('/')}/api/mobile/${encodePathSegment(raceLabel)}") {
+    ): MobileSyncResponse {
+        val response = client.post("${baseUrl.trimEnd('/')}/api/mobile/${encodePathSegment(raceLabel)}") {
+            expectSuccess = false
             bearerAuth(token)
             contentType(ContentType.Application.Json)
             setBody(MobileSyncPayload(devices.mapValues { (_, records) -> records.map { it.toServerSyncRecord() } }))
-        }.body()
+        }
+        checkSuccess(response)
+        return response.body()
+    }
 
     // Fetches race-wide progress directly from the server, bypassing Bluetooth entirely — the
     // HTTP twin of the racemaster web app's own BLE delivery (PeripheralSyncService's
@@ -178,11 +251,23 @@ class MuleSyncClient {
     // first-ever fetch — omitted from the request entirely rather than sent empty, so the server
     // can tell "never fetched before" apart from "fetched, but held nothing that time" purely by
     // the query parameter's presence.
-    suspend fun getProgress(baseUrl: String, token: String, raceLabel: String, knownGeneratedAt: String?): ProgressResponse =
-        client.get("${baseUrl.trimEnd('/')}/api/mobile/${encodePathSegment(raceLabel)}/progress") {
+    //
+    // Returns null for a 404 (server/routes/mobile.js's GET .../progress: "No progress recorded
+    // for this race yet") — the ordinary, expected outcome for the overwhelming majority of
+    // races, which never have a Progress tab entry pushed for them at all. expectSuccess is
+    // turned off and the status checked explicitly here, rather than trusting this client's own
+    // default expectSuccess to throw on it (confirmed live: it doesn't — a 404's
+    // {"error": "..."} body was silently decoding into an all-default ProgressResponse instead,
+    // which ProgressRepository then stored as if it were genuine empty progress data, cluttering
+    // the Races page with a spurious entry for every race that simply never had one pushed).
+    suspend fun getProgress(baseUrl: String, token: String, raceLabel: String, knownGeneratedAt: String?): ProgressResponse? {
+        val response = client.get("${baseUrl.trimEnd('/')}/api/mobile/${encodePathSegment(raceLabel)}/progress") {
+            expectSuccess = false
             bearerAuth(token)
             knownGeneratedAt?.let { parameter("knownGeneratedAt", it) }
-        }.body()
+        }
+        return if (response.status.isSuccess()) response.body() else null
+    }
 
     fun close() {
         client.close()

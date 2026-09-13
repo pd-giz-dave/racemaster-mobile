@@ -1,16 +1,43 @@
 package mobile.racemaster.data.mule
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.test.runTest
+import mobile.racemaster.data.db.dao.ProgressDao
+import mobile.racemaster.data.db.entity.ProgressEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
-// refreshFromServer (the HTTP-fetch path) is deliberately not exercised here — constructing a
-// live MuleSyncClient for network calls under plain JUnit (no Robolectric in this module, see
-// app/build.gradle.kts) isn't something any existing test in this codebase does either (no
-// MuleSyncClientTest.kt exists) — this repository's own pure state-management logic (storing,
-// looking up, and invalidating by raceId) is what's covered here instead.
+// A plain in-memory stand-in for the real Room DAO — this module has no Robolectric (see
+// app/build.gradle.kts), so a real Room database isn't available under plain JUnit; this is
+// enough to exercise ProgressRepository's own write-through/read logic without one.
+private class FakeProgressDao : ProgressDao {
+    private val rows = MutableStateFlow<Map<Long, ProgressEntity>>(emptyMap())
+
+    override suspend fun upsert(entity: ProgressEntity) {
+        rows.value = rows.value + (entity.raceId to entity)
+    }
+
+    override suspend fun getByRaceId(raceId: Long): ProgressEntity? = rows.value[raceId]
+
+    override fun observeAll(): Flow<List<ProgressEntity>> = rows.map { it.values.sortedByDescending { e -> e.storedAtMillis } }
+
+    override suspend fun deleteByRaceId(raceId: Long) {
+        rows.value = rows.value - raceId
+    }
+}
+
+// refreshFromServer's own network leg (constructing a live MuleSyncClient call) is deliberately
+// not exercised here — same reasoning as before this class also covered persistence: no
+// MuleSyncClientTest.kt exists in this codebase either. storeFromBle already shares
+// refreshFromServer's own store() write-through, so this is exact coverage of that shared path.
 class ProgressRepositoryTest {
-    private val repository = ProgressRepository(MuleSyncClient())
+    private val dao = FakeProgressDao()
+    private val repository = ProgressRepository(MuleSyncClient(), dao)
 
     private fun payload(generatedAt: String = "2026-08-23T10:00:00.000Z") = ProgressPayload(
         raceName = "Test Race", raceDate = "23/08/2026", generatedAt = generatedAt,
@@ -18,14 +45,14 @@ class ProgressRepositoryTest {
     )
 
     @Test
-    fun storeFromBleThenGeneratedAtForTheSameRaceIdReturnsIt() {
+    fun storeFromBleThenGeneratedAtForTheSameRaceIdReturnsIt() = runTest {
         repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = payload())
 
         assertEquals("2026-08-23T10:00:00.000Z", repository.generatedAtFor(1L))
     }
 
     @Test
-    fun generatedAtForADifferentRaceIdReturnsNull() {
+    fun generatedAtForADifferentRaceIdReturnsNull() = runTest {
         repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = payload())
 
         assertNull(repository.generatedAtFor(2L))
@@ -38,7 +65,7 @@ class ProgressRepositoryTest {
     }
 
     @Test
-    fun clearIfRaceChangedWipesStoredProgressWhenTheActiveRaceDiffers() {
+    fun clearIfRaceChangedWipesStoredProgressWhenTheActiveRaceDiffers() = runTest {
         repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = payload())
 
         repository.clearIfRaceChanged(activeRaceId = 2L)
@@ -48,7 +75,7 @@ class ProgressRepositoryTest {
     }
 
     @Test
-    fun clearIfRaceChangedLeavesStoredProgressWhenTheActiveRaceStillMatches() {
+    fun clearIfRaceChangedLeavesStoredProgressWhenTheActiveRaceStillMatches() = runTest {
         repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = payload())
 
         repository.clearIfRaceChanged(activeRaceId = 1L)
@@ -64,7 +91,7 @@ class ProgressRepositoryTest {
     }
 
     @Test
-    fun storingANewPayloadForTheSameRaceReplacesTheOldOne() {
+    fun storingANewPayloadForTheSameRaceReplacesTheOldOne() = runTest {
         repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = payload("2020-01-01T00:00:00.000Z"))
         repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = payload("2026-08-23T10:00:00.000Z"))
 
@@ -72,17 +99,73 @@ class ProgressRepositoryTest {
     }
 
     @Test
-    fun storeFromBleCarriesTheRaceLabelAlongsideTheLocalRaceId() {
+    fun storeFromBleCarriesTheRaceLabelAlongsideTheLocalRaceId() = runTest {
         repository.storeFromBle(raceId = 1L, raceLabel = "spring-5k-26-08-23", payload = payload())
 
         assertEquals("spring-5k-26-08-23", repository.current.value?.raceLabel)
     }
 
     @Test
-    fun toPayloadRoundTripsBackToTheOriginalWireShape() {
+    fun toPayloadRoundTripsBackToTheOriginalWireShape() = runTest {
         val original = payload()
         repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = original)
 
         assertEquals(original, repository.current.value?.toPayload())
+    }
+
+    // Persistence — see ProgressRepository's own doc for why storeFromBle/refreshFromServer
+    // write through to Room (observeStored/getStored/delete below), not just `current`.
+
+    @Test
+    fun storeFromBleWritesThroughToTheRoomBackedStore() = runTest {
+        repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = payload())
+
+        val stored = repository.getStored(1L)
+        assertEquals("2026-08-23T10:00:00.000Z", stored?.generatedAt)
+        assertEquals(listOf(ProgressEntry(bibNumber = 1, name = "Dave", course = "Seniors")), stored?.entries)
+    }
+
+    @Test
+    fun getStoredReturnsNullForARaceNeverStored() = runTest {
+        assertNull(repository.getStored(99L))
+    }
+
+    @Test
+    fun clearIfRaceChangedNeverTouchesTheRoomBackedStore() = runTest {
+        repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = payload())
+
+        repository.clearIfRaceChanged(activeRaceId = 2L)
+
+        // current is wiped (already covered above) but the persisted copy survives — that's
+        // the whole point of it existing separately, for the Races page to still list/view.
+        assertEquals("2026-08-23T10:00:00.000Z", repository.getStored(1L)?.generatedAt)
+    }
+
+    @Test
+    fun observeStoredListsEveryRaceEverStoredNewestFirst() = runTest {
+        repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = payload())
+        repository.storeFromBle(raceId = 2L, raceLabel = "race-b", payload = payload())
+
+        val stored = repository.observeStored().first()
+        assertEquals(setOf(1L, 2L), stored.map { it.raceId }.toSet())
+    }
+
+    @Test
+    fun deleteRemovesTheStoredCopyAndClearsCurrentWhenItWasTheActiveRace() = runTest {
+        repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = payload())
+
+        repository.delete(1L)
+
+        assertNull(repository.getStored(1L))
+        assertNull(repository.current.value)
+    }
+
+    @Test
+    fun deletingADifferentRaceLeavesCurrentAlone() = runTest {
+        repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = payload())
+
+        repository.delete(2L)
+
+        assertTrue(repository.current.value != null)
     }
 }

@@ -31,6 +31,8 @@ fun ServerStatusLine(state: ServerStatusState, modifier: Modifier = Modifier) {
         ServerStatus.ONLINE -> MaterialTheme.colorScheme.primary to "Online"
         ServerStatus.OFFLINE -> MaterialTheme.colorScheme.error to "Offline"
         ServerStatus.INVALID -> MaterialTheme.colorScheme.error to "Invalid server"
+        // See AppBanner's own ServerStatus.UNAUTHORIZED branch — same status, same reasoning.
+        ServerStatus.UNAUTHORIZED -> MaterialTheme.colorScheme.error to "Login expired"
         // Server sync deliberately turned off from Mule Mode — see AppBannerViewModel's own doc.
         ServerStatus.PAUSED -> MaterialTheme.colorScheme.onSurfaceVariant to "Paused"
     }

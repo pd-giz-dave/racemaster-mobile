@@ -56,6 +56,14 @@ class RaceHistoryViewModelTest {
 
     private fun freshMuleSource(sourceDeviceId: String = "device-1") = staleMuleSource(sourceDeviceId).copy(serverSyncSkippedAsStale = false)
 
+    private fun progressFile(raceId: Long = 1) = HistoryItemUi.ProgressFile(
+        raceId = raceId,
+        raceLabel = "race-$raceId",
+        raceName = "Race",
+        generatedAt = "2026-08-23T10:00:00.000Z",
+        entryCount = 1,
+    )
+
     @Test
     fun staleInactiveLocalRaceIsDeletable() {
         assertTrue(staleLocalRace().isStaleAndDeletable())
@@ -106,5 +114,22 @@ class RaceHistoryViewModelTest {
         val summary = staleDeletionSummary(listOf(freshLocalRace(), freshMuleSource()))
 
         assertEquals(0, summary.total)
+    }
+
+    // ProgressFile — never swept up by "Delete stale" (see isStaleAndDeletable's own doc for
+    // why); it has its own individual delete button on the Races page instead.
+
+    @Test
+    fun progressFileIsNeverDeletableViaDeleteStale() {
+        assertFalse(progressFile().isStaleAndDeletable())
+    }
+
+    @Test
+    fun summaryIgnoresProgressFilesEvenWhenMixedInWithStaleItems() {
+        val summary = staleDeletionSummary(listOf(staleLocalRace(), staleMuleSource(), progressFile()))
+
+        assertEquals(1, summary.localRaceCount)
+        assertEquals(1, summary.muleSourceCount)
+        assertEquals(2, summary.total)
     }
 }

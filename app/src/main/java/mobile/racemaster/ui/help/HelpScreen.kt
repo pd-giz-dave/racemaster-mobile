@@ -123,7 +123,7 @@ fun HelpScreen(onBack: () -> Unit) {
                     "resumes the clock with no time lost. Once stopped, the same button becomes RESET, " +
                     "which asks \"Reset course\" (adds a reset marker and starts a fresh S0 count — " +
                     "nothing is deleted, every split stays in Race History regardless; genuine deletion " +
-                    "only ever happens explicitly, from the History list — this is for a new operator's " +
+                    "only ever happens explicitly, from the Races list — this is for a new operator's " +
                     "own practice attempt, not for ending a course for real) or \"End recording\" (the " +
                     "normal way a course finishes — leaves every split exactly as recorded and returns " +
                     "to the pre-start screen ready for a fresh Start-time course pick; see \"Race " +
@@ -190,7 +190,7 @@ fun HelpScreen(onBack: () -> Unit) {
                     "be undone to resume logging. Once stopped, the same button becomes RESET, which " +
                     "asks \"Reset course\" (adds a reset marker and starts a fresh count from it — " +
                     "nothing is deleted, every entry stays in Race History regardless; genuine deletion " +
-                    "only ever happens explicitly, from the History list — this is for a new operator's " +
+                    "only ever happens explicitly, from the Races list — this is for a new operator's " +
                     "own practice attempt, not for ending a course for real) or \"End recording\" (the " +
                     "normal way a course finishes — leaves every entry exactly as recorded and returns " +
                     "to the same Start-button screen ready for a fresh Start-time course pick; see " +
@@ -278,7 +278,11 @@ fun HelpScreen(onBack: () -> Unit) {
                     "is turned on for it too. Once a server is configured, every mode's " +
                     "own screen shows a \"Server: \" line for it (in Mule Mode, directly above \"Last " +
                     "push to server\") — Online, Offline, Invalid server (wrong URL — a real server " +
-                    "just isn't answering there), or Paused (server sync turned off in Options), " +
+                    "just isn't answering there), Login expired (the server itself is reachable fine, " +
+                    "but this phone's saved login isn't being accepted — usually clears itself within " +
+                    "a few seconds as the background sync loop automatically logs back in; if it " +
+                    "doesn't, re-enter the password on the Setup Server screen), or Paused (server " +
+                    "sync turned off in Options), " +
                     "alongside \"(seen HH:MM)\", the last time it was actually confirmed reachable — " +
                     "judge that the same way as any other last-seen time in this app: if it looks old, " +
                     "something's stopped. The small dot in the green app banner at the very top " +
@@ -313,12 +317,17 @@ fun HelpScreen(onBack: () -> Unit) {
                     "switch mode\" dialog rather than performed. The Mode Picker marks whichever one " +
                     "is holding it \"- active\" right on its own button, alongside the race-in-progress " +
                     "card lower down. Muling on/off is separate (see Mule Mode above) and unaffected " +
-                    "by any of this. History on the mode picker shows every previously recorded " +
-                    "race, read-only — each row shows the wall-clock time (HH:MM) it was recorded, " +
-                    "alongside its line/split number, event, bib, and elapsed time. Button presses " +
-                    "play a short click sound at full volume, " +
-                    "regardless of the phone's own volume/Touch sounds setting, so it's audible at " +
-                    "a noisy finish line.",
+                    "by any of this. Progress on the mode picker opens the Races page, listing every " +
+                    "previously recorded race, read-only — each row shows the wall-clock time " +
+                    "(HH:MM) it was recorded, alongside its line/split number, event, bib, and " +
+                    "elapsed time. The same page also lists any progress files this device has " +
+                    "received (marked with their own icon so they're easy to tell apart from races) " +
+                    "— race-wide bib/course/status data pulled from the server or delivered by the " +
+                    "racemaster web app over Bluetooth; tap one to see every entry, or delete it to " +
+                    "remove it from this device only (it can always be fetched or delivered again " +
+                    "later). Button presses play a short click sound at full volume, regardless of " +
+                    "the phone's own volume/Touch sounds setting, so it's audible at a noisy finish " +
+                    "line.",
             )
         }
     }

@@ -11,6 +11,7 @@ object Routes {
     const val RACE_HISTORY = "race_history"
     const val RACE_HISTORY_DETAIL = "race_history_detail/{raceId}"
     const val MULE_SOURCE_DETAIL = "mule_source_detail/{raceLabel}/{sourceDeviceId}"
+    const val PROGRESS_DETAIL = "progress_detail/{raceId}"
     const val RACE_DETAILS = "race_details/{mode}/{raceId}"
     const val HELP = "help"
     const val SETUP_DEVICE = "setup_device"
@@ -30,6 +31,8 @@ object Routes {
     const val EDIT_ENTRY = "edit_entry/{mode}/{entryId}"
 
     fun raceHistoryDetail(raceId: Long) = "race_history_detail/$raceId"
+
+    fun progressDetail(raceId: Long) = "progress_detail/$raceId"
 
     // fromMule=true is what lets Options tell a Disable tap to pop all the way back to the Mode
     // Picker (past both Options and the now-pointless Mule Mode dashboard underneath it) — see

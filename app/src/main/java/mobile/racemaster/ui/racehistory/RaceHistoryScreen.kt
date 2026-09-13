@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -38,11 +39,13 @@ fun RaceHistoryScreen(
     onBack: () -> Unit,
     onRaceSelected: (Long) -> Unit,
     onMuleSourceSelected: (raceLabel: String, sourceDeviceId: String) -> Unit,
+    onProgressSelected: (raceId: Long) -> Unit,
     viewModel: RaceHistoryViewModel = viewModel(factory = RaceHistoryViewModel.Factory),
 ) {
     val items by viewModel.historyItems.collectAsStateWithLifecycle()
     var pendingDelete by remember { mutableStateOf<HistoryItemUi.LocalRace?>(null) }
     var pendingMuleSourceDelete by remember { mutableStateOf<HistoryItemUi.MuleSource?>(null) }
+    var pendingProgressDelete by remember { mutableStateOf<HistoryItemUi.ProgressFile?>(null) }
     // A separate dialog from pendingDelete above — an active race needs its stuck mode(s)
     // cleared first (see RaceRepository.forceResetActiveModes' own doc), not immediate deletion.
     var pendingForceReset by remember { mutableStateOf<HistoryItemUi.LocalRace?>(null) }
@@ -54,7 +57,7 @@ fun RaceHistoryScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Past Races") },
+                title = { Text("Races") },
                 navigationIcon = { TextButton(onClick = withClickSound(onBack)) { Text("Back") } },
                 actions = {
                     // Hidden entirely rather than disabled when there's nothing to sweep — this
@@ -83,6 +86,7 @@ fun RaceHistoryScreen(
                         when (it) {
                             is HistoryItemUi.LocalRace -> "race-${it.id}"
                             is HistoryItemUi.MuleSource -> "mule-${it.raceLabel}-${it.sourceDeviceId}"
+                            is HistoryItemUi.ProgressFile -> "progress-${it.raceId}"
                         }
                     },
                 ) { item ->
@@ -167,6 +171,39 @@ fun RaceHistoryScreen(
                                 onClick = withClickSound { onMuleSourceSelected(item.raceLabel, item.sourceDeviceId) },
                             ),
                         )
+                        // Progress files — race-wide bib-allocation/status data received from the
+                        // server or web app (see ProgressRepository's own doc) — get their own
+                        // leading icon + tertiary color, on both this row's icon and its
+                        // headline, so they read as a genuinely different kind of entry at a
+                        // glance rather than blending into the races/Mule sources above (neither
+                        // of which has a leading icon of its own at all).
+                        is HistoryItemUi.ProgressFile -> ListItem(
+                            headlineContent = {
+                                Text(item.raceName.ifBlank { item.raceLabel }, color = MaterialTheme.colorScheme.tertiary)
+                            },
+                            supportingContent = {
+                                Text("${item.entryCount} entries — generated ${formatGeneratedAt(item.generatedAt)}")
+                            },
+                            leadingContent = {
+                                Icon(
+                                    Icons.Filled.Assessment,
+                                    contentDescription = "Progress file",
+                                    tint = MaterialTheme.colorScheme.tertiary,
+                                )
+                            },
+                            trailingContent = {
+                                // Always deletable — see RaceHistoryViewModel.deleteProgress's
+                                // own doc for why this needs no active-race-style guard.
+                                IconButton(onClick = withClickSound { pendingProgressDelete = item }) {
+                                    Icon(
+                                        Icons.Filled.Delete,
+                                        contentDescription = "Delete progress file",
+                                        tint = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                            },
+                            modifier = Modifier.clickable(onClick = withClickSound { onProgressSelected(item.raceId) }),
+                        )
                     }
                     HorizontalDivider()
                 }
@@ -245,6 +282,31 @@ fun RaceHistoryScreen(
         )
     }
 
+    pendingProgressDelete?.let { progress ->
+        AlertDialog(
+            onDismissRequest = { pendingProgressDelete = null },
+            title = { Text("Delete this progress file?") },
+            text = {
+                Text(
+                    "This removes \"${progress.raceName.ifBlank { progress.raceLabel }}\"'s progress data from " +
+                        "this device only. It can be fetched again from the server, or delivered again over " +
+                        "Bluetooth, whenever it's next needed.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = withClickSound {
+                        viewModel.deleteProgress(progress.raceId)
+                        pendingProgressDelete = null
+                    },
+                ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = withClickSound { pendingProgressDelete = null }) { Text("Cancel") }
+            },
+        )
+    }
+
     if (pendingDeleteAllStale) {
         AlertDialog(
             onDismissRequest = { pendingDeleteAllStale = false },
@@ -274,3 +336,11 @@ fun RaceHistoryScreen(
         )
     }
 }
+
+// generatedAt is the racemaster server's own ISO-8601 timestamp string (e.g.
+// "2026-08-23T10:00:00.000Z") — trimmed to "yyyy-MM-dd HH:mm:ss" for a compact, still exact
+// display here rather than pulling in real date parsing just for this one label. Falls back to
+// the raw string untouched if it's ever not shaped the way we expect, rather than showing
+// nothing or crashing.
+internal fun formatGeneratedAt(generatedAt: String): String =
+    generatedAt.replace('T', ' ').substringBefore('.').ifBlank { generatedAt }

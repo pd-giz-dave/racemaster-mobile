@@ -8,6 +8,8 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.db.dao.PulledSourceSummary
 import mobile.racemaster.data.mule.MuleRepository
+import mobile.racemaster.data.mule.ProgressRepository
+import mobile.racemaster.data.mule.StoredProgress
 import mobile.racemaster.data.mule.isRaceStale
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.activeModeLabels
@@ -60,6 +62,20 @@ sealed interface HistoryItemUi {
         val deviceName: String,
         val serverSyncSkippedAsStale: Boolean,
     ) : HistoryItemUi
+    // Race-wide progress/bib-allocation data received for [raceId] (over BLE from the racemaster
+    // web app, or fetched directly over HTTP) — see ProgressRepository's own doc. Independent of
+    // whether a LocalRace entry for the same raceId still exists (ProgressEntity is deliberately
+    // not foreign-keyed against RaceEntity — see its own doc), so this can outlive a deleted
+    // race, or exist with no matching LocalRace entry at all. Always deletable (RaceHistoryScreen
+    // offers no active-race-style guard for it, unlike LocalRace) — it's a received snapshot, not
+    // this device's own live recording.
+    data class ProgressFile(
+        val raceId: Long,
+        val raceLabel: String,
+        val raceName: String,
+        val generatedAt: String,
+        val entryCount: Int,
+    ) : HistoryItemUi
 }
 
 // Thin, directly-testable name for this screen's own display badge — see isRaceStale's own
@@ -77,6 +93,11 @@ internal fun isSkippedAsStale(lastTouchedAtMillis: Long?, maxAgeDays: Int): Bool
 internal fun HistoryItemUi.isStaleAndDeletable(): Boolean = when (this) {
     is HistoryItemUi.LocalRace -> serverSyncSkippedAsStale && !isActive
     is HistoryItemUi.MuleSource -> serverSyncSkippedAsStale
+    // Not swept up by "Delete stale" — a progress file has no per-race activity timestamp of
+    // its own to judge staleness by (it's a received snapshot, not something this device keeps
+    // touching), and it's cheap enough (one small Room row) that there's no real clutter cost
+    // to leaving that decision to its own individual delete button instead.
+    is HistoryItemUi.ProgressFile -> false
 }
 
 // What RaceHistoryScreen's "Delete stale" confirmation dialog shows — split by kind since the
@@ -100,12 +121,14 @@ private data class HistorySources(
     val sourceSummaries: List<PulledSourceSummary>,
     val lastTouchedAtMillis: Map<String, Long>,
     val maxAgeDays: Int,
+    val progressFiles: List<StoredProgress>,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RaceHistoryViewModel(
     private val raceRepository: RaceRepository,
     private val muleRepository: MuleRepository,
+    private val progressRepository: ProgressRepository,
 ) : ViewModel() {
 
     val historyItems: StateFlow<List<HistoryItemUi>> = combine(
@@ -113,10 +136,11 @@ class RaceHistoryViewModel(
         muleRepository.sourceSummaries,
         muleRepository.raceLabelLastTouchedAtMillis,
         muleRepository.raceStaleAfterDays,
-    ) { races, sourceSummaries, lastTouchedAtMillis, maxAgeDays ->
-        HistorySources(races, sourceSummaries, lastTouchedAtMillis, maxAgeDays)
+        progressRepository.observeStored(),
+    ) { races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, progressFiles ->
+        HistorySources(races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, progressFiles)
     }
-        .flatMapLatest { (races, sourceSummaries, lastTouchedAtMillis, maxAgeDays) ->
+        .flatMapLatest { (races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, progressFiles) ->
             val muleItems = sourceSummaries.map {
                 HistoryItemUi.MuleSource(
                     raceLabel = it.sourceRaceLabel,
@@ -125,8 +149,17 @@ class RaceHistoryViewModel(
                     serverSyncSkippedAsStale = isSkippedAsStale(lastTouchedAtMillis[it.sourceRaceLabel], maxAgeDays),
                 )
             }
+            val progressItems = progressFiles.map {
+                HistoryItemUi.ProgressFile(
+                    raceId = it.raceId,
+                    raceLabel = it.raceLabel,
+                    raceName = it.raceName,
+                    generatedAt = it.generatedAt,
+                    entryCount = it.entries.size,
+                )
+            }
             if (races.isEmpty()) {
-                flowOf(muleItems)
+                flowOf(muleItems + progressItems)
             } else {
                 // One flow per race — its own last-activity timestamp (for staleness — a local
                 // race's own real history, not any Mule-inbox bookkeeping; see
@@ -146,7 +179,7 @@ class RaceHistoryViewModel(
                             )
                         }
                     },
-                ) { localRaces -> localRaces.toList() + muleItems }
+                ) { localRaces -> localRaces.toList() + muleItems + progressItems }
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -172,6 +205,12 @@ class RaceHistoryViewModel(
         viewModelScope.launch { muleRepository.deleteSource(raceLabel, sourceDeviceId) }
     }
 
+    // See ProgressRepository.delete's own doc — always deletable, no active-race guard, same
+    // reasoning as deleteMuleSource above.
+    fun deleteProgress(raceId: Long) {
+        viewModelScope.launch { progressRepository.delete(raceId) }
+    }
+
     // Bulk counterpart to deleteRace/deleteMuleSource above, for RaceHistoryScreen's own
     // "Delete stale" action. Reads historyItems.value fresh at call time — not whatever
     // snapshot the confirmation dialog was opened against — so an item that changed state
@@ -185,6 +224,10 @@ class RaceHistoryViewModel(
                 when (item) {
                     is HistoryItemUi.LocalRace -> raceRepository.deleteRace(item.id)
                     is HistoryItemUi.MuleSource -> muleRepository.deleteSource(item.raceLabel, item.sourceDeviceId)
+                    // Never actually reached — isStaleAndDeletable() always returns false for
+                    // one of these, so the filter above already excludes it; listed only so this
+                    // stays an exhaustive `when` rather than needing an `else`.
+                    is HistoryItemUi.ProgressFile -> Unit
                 }
             }
         }
@@ -194,7 +237,7 @@ class RaceHistoryViewModel(
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val container = appContainer()
-                RaceHistoryViewModel(container.raceRepository, container.muleRepository)
+                RaceHistoryViewModel(container.raceRepository, container.muleRepository, container.progressRepository)
             }
         }
     }

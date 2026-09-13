@@ -248,7 +248,7 @@ class CpModeViewModel(
 
     private suspend fun beginCourse(raceId: Long, course: String) {
         val targetId = raceRepository.resolveCourseRace(raceId, course, AppMode.CP.name)
-        if (targetId != raceId) settingsRepository.setActiveRaceId(targetId)
+        if (targetId != raceId) raceRepository.switchActiveRace(targetId)
         val target = requireNotNull(raceRepository.getRace(targetId)) { "Race $targetId not found" }
         // Already started means this course was previously ended via "End recording" (never
         // Reset — Reset already clears cpModeStartedAtMillis, so this branch is never taken
@@ -352,7 +352,7 @@ class CpModeViewModel(
         viewModelScope.launch {
             lastEndedCourse = raceRepository.getRace(raceId)?.course?.ifBlank { null }
             val newRaceId = raceRepository.endRecordingForCourse(raceId, AppMode.CP.name)
-            settingsRepository.setActiveRaceId(newRaceId)
+            raceRepository.switchActiveRace(newRaceId)
         }
     }
 
