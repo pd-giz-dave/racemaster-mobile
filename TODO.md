@@ -241,10 +241,22 @@ lineNumber) — progress needs the same treatment before phase 3's relay work ca
       `courseHistory` references across `app/src/main` and `app/src/test` — none left.
 - [x] **Verify (automated)**: `./gradlew testDebugUnitTest`, `./gradlew check` (lint included),
       and `./gradlew assembleDebug` all pass clean.
-- [ ] **Verify (manual, on-device)**: not done — this environment has no emulator/physical
-      device attached, so Setup Race → Start → Stop → Race History "Resume" → Start again
-      resuming mid-segment (all three modes), and CP Mode's new location-validity gate, still
-      need an actual on-device pass before this is fully trusted. Leaving unchecked deliberately.
+- [~] **Verify (manual, on-device)**: partially done — 3 real phones turned out to be attached
+      via adb (`8a0f61d4`/Mi 9 SE, `A756XXCM9A2200A5`/KING_KONG_3, `BH900MSDC8`/G8441). Installed
+      the phase-1 debug build on the first two (with the user's explicit go-ahead, since debug
+      and release share `applicationId` and would overwrite whatever's already on the device) and
+      confirmed, via screenshots, on real devices each already mid-race with real recorded data:
+      app launches cleanly, no crash, on both; the mode screens' top bar correctly shows "This
+      Race"/"Mode" (no "New Race"); Setup Device → Setup Race renders exactly per spec (race name
+      + location only, no course chips/bib fields) and correctly refuses to set up a new race
+      while one is active, pointing at Races (Progress) to resume a stopped one instead; the
+      Races page correctly shows the current race as "Active in Bibs Mode, can't be deleted".
+      **Not exercised** (would have required stopping/resetting one of these devices' real
+      in-progress races, which wasn't worth risking): actually creating a race via Setup Race,
+      the new Race History "Resume" action on a genuinely stopped-not-reset race, and CP Mode's
+      new location-validity gate. A future session with a spare/disposable test device (or by
+      deliberately sacrificing one of these three, if the user's OK with that) should complete
+      that last leg.
 - [x] Commit phase 1 (local only, no push).
 
 ### Phase 2 — internet-mode workflow (both repos)
