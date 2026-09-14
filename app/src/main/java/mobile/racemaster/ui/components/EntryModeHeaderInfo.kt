@@ -30,11 +30,11 @@ fun EntryModeHeaderInfo(
     dupCount: Int,
     unsyncedCount: Int,
     lastSyncedAtMillis: Long?,
-    firstBibNumber: Int?,
-    expectedRunnerCount: Int?,
-    finishedCount: Int,
+    expectedCount: Int,
+    outstandingCount: Int,
     duplicateBibNumbers: List<Int>,
     outstandingBibs: List<Int>,
+    unexpectedBibNumbers: List<Int>,
     serverStatus: ServerStatusState,
     btPollingStatus: BtPollingStatus,
 ) {
@@ -61,7 +61,7 @@ fun EntryModeHeaderInfo(
             SyncStatusLine(unsyncedCount, lastSyncedAtMillis)
         }
     }
-    formatBibsExpectedText(firstBibNumber, expectedRunnerCount, finishedCount)?.let { text ->
+    formatBibsExpectedText(expectedCount, outstandingCount)?.let { text ->
         Text(text = text, style = MaterialTheme.typography.labelMedium)
     }
     if (duplicateBibNumbers.isNotEmpty()) {
@@ -73,12 +73,18 @@ fun EntryModeHeaderInfo(
             overflow = TextOverflow.Ellipsis,
         )
     }
-    // Tied to the same raw "more expected" figure shown above (expected minus accounted-for
-    // records), not to how many specific bibs are outstanding — those two can differ while a
-    // duplicate is unresolved, and the raw count is the one that should decide when the list
-    // becomes worth showing.
-    val moreExpected = expectedRunnerCount?.let { (it - finishedCount).coerceAtLeast(0) }
-    if (outstandingBibs.isNotEmpty() && moreExpected != null && moreExpected <= 10) {
+    if (unexpectedBibNumbers.isNotEmpty()) {
+        Text(
+            text = "Unexpected: ${unexpectedBibNumbers.joinToString(", ")}",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.error,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+    // Only worth listing individually once few enough are left that the list is more useful
+    // than just the count above.
+    if (outstandingBibs.isNotEmpty() && outstandingCount <= 10) {
         Text(
             text = "Missing: ${outstandingBibs.joinToString(", ")}",
             style = MaterialTheme.typography.labelMedium,

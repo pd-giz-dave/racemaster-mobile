@@ -166,6 +166,21 @@ fun HelpScreen(onBack: () -> Unit) {
                     "resolves the duplicate, the flag disappears immediately.",
             )
             HelpSection(
+                title = "Bibs Mode — who's expected",
+                body = "There's no fixed bib range to check against any more — instead, every phone " +
+                    "in the same race shares regularly-updated progress records (over the server " +
+                    "and/or a Bluetooth Mule), and this device works out who's expected at its own " +
+                    "Location from that: all starters are expected at CP1, a bib that's passed (and " +
+                    "not retired) a checkpoint is expected at the next one, and a bib that's passed " +
+                    "the last checkpoint is expected at Finish. The header shows \"N of M still " +
+                    "outstanding\", and lists the actual missing bib numbers once fewer than 10 " +
+                    "remain. A bib that's recorded here but wasn't expected is still accepted — it's " +
+                    "flagged as \"Unexpected\", the same non-blocking treatment as a duplicate, in " +
+                    "case someone's arrived at the wrong station or the progress data just hasn't " +
+                    "caught up yet. Nothing is shown at all until this device has received at least " +
+                    "one progress update.",
+            )
+            HelpSection(
                 title = "Bibs Mode — editing rows",
                 body = "Tap any logged row to edit it. For a normal row this opens the event type, bib " +
                     "number (numeric keypad), and an optional short note. For the Clock row (split S0) " +
@@ -190,7 +205,9 @@ fun HelpScreen(onBack: () -> Unit) {
                 title = "CP Mode",
                 body = "CP Mode is a lighter checkpoint variant of Bibs Mode, for a station out on " +
                     "the course rather than at the finish line — same keypad, entry list, duplicate " +
-                    "flagging, out-of-range flagging, row editing, and Clock-marker Start (split S0), " +
+                    "flagging, who's-expected flagging (see \"Bibs Mode — who's expected\" above; " +
+                    "here it's driven by this device's own CP number in its Location), row editing, " +
+                    "and Clock-marker Start (split S0), " +
                     "and the same auto-save-on-3-digits entry: typing a bib's 3rd digit records it " +
                     "automatically as a Pass, so bibs below 100 still need leading zeros (e.g. " +
                     "\"007\"). Each Pass gets a running split number too, counting how many have " +

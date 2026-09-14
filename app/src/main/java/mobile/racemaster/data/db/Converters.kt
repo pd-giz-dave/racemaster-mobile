@@ -16,13 +16,4 @@ class Converters {
 
     @TypeConverter
     fun toHistoryAction(value: String): HistoryAction = HistoryAction.valueOf(value)
-
-    // Comma-joined — backs RaceEntity.courses, always an empty list for every race created now
-    // (see that field's own doc), kept only so its column doesn't need its own separate Room
-    // migration until phase 4 drops it entirely.
-    @TypeConverter
-    fun fromStringList(value: List<String>): String = value.joinToString(",")
-
-    @TypeConverter
-    fun toStringList(value: String): List<String> = if (value.isEmpty()) emptyList() else value.split(",")
 }

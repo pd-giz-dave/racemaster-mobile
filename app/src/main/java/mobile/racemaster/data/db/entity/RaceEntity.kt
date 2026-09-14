@@ -7,18 +7,12 @@ import androidx.room.PrimaryKey
 data class RaceEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     // Raw user-entered fields, kept separately from the computed label below so a race's
-    // details can be re-edited later without having to parse them back out of it.
+    // details can be re-edited later without having to parse them back out of it. The notion of
+    // a "course" distinct from the race itself was dropped in phase 1 (see TODO.md) — a race is
+    // now just this name (which may, by convention, carry its own Seniors/Juniors suffix as
+    // plain text) and a location; `label` (see buildRaceLabel) is built with an always-blank
+    // course, which it already tolerates by omitting that segment entirely.
     val name: String = "",
-    // The notion of a "course" distinct from the race itself has been dropped (see TODO.md's
-    // phase 1) — a race is now just a name (which may, by convention, carry its own Seniors/
-    // Juniors suffix as plain text) and a location. This field (and `courses` below) is kept in
-    // the schema, always blank/empty for every race Setup Race creates from here on, purely so
-    // dropping the column entirely can wait for one clean Room migration at the end of phase 4
-    // rather than needing two separate ones. `label` (see buildRaceLabel) already tolerates a
-    // blank course by omitting that segment entirely.
-    val course: String = "",
-    // See `course`'s own doc above — always empty for every race created from here on.
-    val courses: List<String> = emptyList(),
     // Which physical point on the course this device's own records represent (e.g. "Finish",
     // "Start", "Checkpoint 2") — lets more than one device contribute different stations'
     // worth of data for what's otherwise the same race. Not part of `label`: two devices
@@ -40,8 +34,6 @@ data class RaceEntity(
     val nextLineNumber: Long = 1,
     val timeModeStartedAtMillis: Long? = null,
     val timeModeStoppedAtMillis: Long? = null,
-    val bibsRangeStart: Int? = null,
-    val bibsRangeCount: Int? = null,
     // Bibs' own started/stopped pair, shaped identically to Time's and CP's own — Bibs still
     // writes a Clock marker row on Start (see BibsModeRepository.startBibsMode/
     // CLOCK_SPLIT_NUMBER), but that row's mere presence is deliberately not what "started" is

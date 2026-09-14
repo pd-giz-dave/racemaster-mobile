@@ -19,33 +19,25 @@ class RaceRepository(
     private val lineSyncDao: LineSyncDao,
     private val settingsRepository: SettingsRepository,
 ) {
-    // course/courses/bibsRangeStart/bibsRangeCount are no longer collected by Setup Race (the
-    // only place a race gets created now — see RaceEntity.course's own doc) and stay at their
-    // defaults for every new race; the columns themselves are kept in the schema, unpopulated,
-    // until phase 4's migration removes them once bib-expectation logic no longer needs them.
+    // The only place a race gets created from a manually-typed name now (Setup Race's offline/
+    // manual branch; see adoptRaceLabel below for the online-pick path). course is always blank
+    // (see buildRaceLabel — the segment is simply omitted), matching the dropped "course"
+    // concept from phase 1.
     suspend fun startNewRace(
         name: String,
-        course: String = "",
         location: String = "Finish",
         createdAtMillis: Long = System.currentTimeMillis(),
         deviceRole: String? = null,
         serverUrl: String? = null,
-        bibsRangeStart: Int? = null,
-        bibsRangeCount: Int? = null,
-        courses: List<String> = emptyList(),
     ): Long =
         raceDao.insert(
             RaceEntity(
                 name = name,
-                course = course,
-                courses = courses,
                 location = location,
-                label = buildRaceLabel(name, course, createdAtMillis),
+                label = buildRaceLabel(name, course = "", createdAtMillis),
                 createdAtMillis = createdAtMillis,
                 deviceRole = deviceRole,
                 serverUrl = serverUrl,
-                bibsRangeStart = bibsRangeStart,
-                bibsRangeCount = bibsRangeCount,
                 createdByDeviceName = settingsRepository.getOrCreateDeviceName(),
             ),
         )
@@ -75,19 +67,18 @@ class RaceRepository(
     // race has actually started a mode (see its own identityFieldsEnabled doc); before that, no
     // history can possibly exist for this race yet (every mode's own startXxxMode is what both
     // sets its *ModeStartedAtMillis and inserts its first history row, in the same transaction),
-    // so nothing anywhere could already be referencing the old label. `course` itself is
-    // deliberately NOT a parameter here — it's always blank now (see RaceEntity.course's own
-    // doc), so the label is rebuilt from the race's own already-stored (blank) course, passed
-    // straight through unchanged. serverUrl is untouched here — it's not on this screen (see
-    // RaceDao.updateDetails). No Mule-inbox retagging needed on a rename (there used to be one
-    // here) — MuleRepository.pushToServer now reads this race's own current label fresh from
-    // RaceEntity on every attempt rather than tracking a separately-labeled mirrored copy, so a
-    // rename just takes effect on the very next push with nothing else to keep in sync. location
-    // is deliberately NOT part of the label (see RaceEntity.location's own doc) — a change here
-    // just takes effect the same way, on the next record this device pushes.
+    // so nothing anywhere could already be referencing the old label. `course` is always blank
+    // (the concept was dropped in phase 1), so the label is always rebuilt with one. serverUrl is
+    // untouched here — it's not on this screen (see RaceDao.updateDetails). No Mule-inbox
+    // retagging needed on a rename (there used to be one here) — MuleRepository.pushToServer now
+    // reads this race's own current label fresh from RaceEntity on every attempt rather than
+    // tracking a separately-labeled mirrored copy, so a rename just takes effect on the very next
+    // push with nothing else to keep in sync. location is deliberately NOT part of the label (see
+    // RaceEntity.location's own doc) — a change here just takes effect the same way, on the next
+    // record this device pushes.
     suspend fun updateRaceDetails(raceId: Long, name: String, location: String) {
         val race = raceDao.getById(raceId) ?: return
-        val label = buildRaceLabel(name, race.course, race.createdAtMillis)
+        val label = buildRaceLabel(name, course = "", race.createdAtMillis)
         raceDao.updateDetails(raceId, name, location, label)
     }
 
@@ -155,9 +146,9 @@ class RaceRepository(
     // navigated away from) that was never actually started in any mode, so it has, by
     // construction, zero real history worth keeping around to clog up Race History. Judged by
     // whether this race has ever recorded a single history line (observeLastActivityAtMillis
-    // returning null) rather than by its `course` field — course is always blank now (see
-    // RaceEntity.course's own doc), so it can no longer tell "an abandoned placeholder" apart
-    // from "a real race with a full history" the way it once did. A race that WAS started but
+    // returning null) — since the "course" concept is gone (phase 1), there's no field left on
+    // the entity that could tell "an abandoned placeholder" apart from "a real race with a full
+    // history" any other way. A race that WAS started but
     // is merely Stopped-not-Reset (see isRaceActive) still has real history, so it's correctly
     // never swept up here — that's exactly the race Race History's own "Resume" action exists to
     // switch back to later. Every setActiveRaceId call site should route through here rather

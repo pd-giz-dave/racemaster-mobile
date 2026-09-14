@@ -55,12 +55,9 @@ data class TimeModeUiState(
     val raceInProgress: Boolean = false,
     val unsyncedCount: Int = 0,
     val lastSyncedAtMillis: Long? = null,
-    // Set from the race details screen — mirrors BibsModeUiState's fields exactly (form and
-    // feedback wording are meant to be identical between the two modes), even though Time
-    // Mode itself never actually reads firstBibNumber for anything.
-    val firstBibNumber: Int? = null,
-    val expectedRunnerCount: Int? = null,
-    val finishedCount: Int = 0,
+    // Count of genuine SPLIT actions only (not Start/Stop/Reset markers) — feeds
+    // util.formatTimeSplitsText's running tally.
+    val splitCount: Int = 0,
     // Shown as another header line (see ui/components/ServerStatusLine.kt) — server
     // connectivity matters here just as much as in Mule Mode, since this device pushes its
     // own recorded data to the server on the same schedule regardless of mode.
@@ -146,9 +143,7 @@ class TimeModeViewModel(
                         ),
                         unsyncedCount = unsyncedCount,
                         lastSyncedAtMillis = lastSyncedAtMillis,
-                        firstBibNumber = race?.bibsRangeStart,
-                        expectedRunnerCount = race?.bibsRangeCount,
-                        finishedCount = splits.count { it.action == HistoryAction.SPLIT },
+                        splitCount = splits.count { it.action == HistoryAction.SPLIT },
                         serverStatus = serverStatus,
                     )
                 }

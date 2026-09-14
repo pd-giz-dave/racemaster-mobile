@@ -85,7 +85,7 @@ class SetupRaceViewModel(
         val trimmedLocation = location.trim()
         settingsRepository.addRaceNameToHistory(trimmedName)
         settingsRepository.addLocationToHistory(trimmedLocation)
-        val newRaceId = raceRepository.startNewRace(trimmedName, course = "", location = trimmedLocation)
+        val newRaceId = raceRepository.startNewRace(trimmedName, location = trimmedLocation)
         raceRepository.switchActiveRace(newRaceId)
         raceRepository.getRace(newRaceId)?.label?.let { muleRepository.announceRaceSetup(it) }
     }

@@ -174,9 +174,7 @@ private fun TimeModeContent(
                     )
                     SyncStatusLine(uiState.unsyncedCount, uiState.lastSyncedAtMillis)
                 }
-                formatTimeSplitsText(uiState.firstBibNumber, uiState.expectedRunnerCount, uiState.finishedCount)?.let { text ->
-                    Text(text = text, style = MaterialTheme.typography.labelMedium)
-                }
+                Text(text = formatTimeSplitsText(uiState.splitCount), style = MaterialTheme.typography.labelMedium)
                 Text(
                     text = if (uiState.stopwatchStarted) formatElapsed(uiState.liveElapsedMillis) else "",
                     style = MaterialTheme.typography.displayMedium,

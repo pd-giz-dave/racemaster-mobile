@@ -10,21 +10,24 @@ import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.BtPollingStatus
+import mobile.racemaster.data.mule.ProgressEntry
+import mobile.racemaster.data.mule.ProgressRepository
 import mobile.racemaster.data.mule.ServerStatus
 import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
-import mobile.racemaster.data.repository.accountedForRecordCount
 import mobile.racemaster.data.repository.countDuplicateExtras
 import mobile.racemaster.data.repository.duplicateBibNumbers
+import mobile.racemaster.data.repository.expectedBibsAtLocation
 import mobile.racemaster.data.repository.findDuplicateSplitRefs
 import mobile.racemaster.data.repository.hasRealEntries
 import mobile.racemaster.data.repository.isRaceInProgress
 import mobile.racemaster.data.repository.lineSyncState
 import mobile.racemaster.data.repository.linesWithAnySync
-import mobile.racemaster.data.repository.outstandingBibs
-import mobile.racemaster.data.repository.rangeWarningMessage
+import mobile.racemaster.data.repository.outstandingAtLocation
+import mobile.racemaster.data.repository.unexpectedBibNumbers
+import mobile.racemaster.data.repository.unexpectedBibWarning
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.di.applicationContext
@@ -51,6 +54,8 @@ private data class RaceContext(
     val lastSyncedAtMillis: Long?,
     val linesWithAnySync: Set<Long>,
     val serverStatus: ServerStatusState,
+    // See BibsModeViewModel's own RaceContext.progressEntries doc — identical role here.
+    val progressEntries: List<ProgressEntry>,
 )
 
 data class CpModeUiState(
@@ -79,11 +84,13 @@ data class CpModeUiState(
     val raceInProgress: Boolean = false,
     val unsyncedCount: Int = 0,
     val lastSyncedAtMillis: Long? = null,
-    val firstBibNumber: Int? = null,
-    val expectedRunnerCount: Int? = null,
-    val finishedCount: Int = 0,
+    // See BibsModeUiState's own doc for these three — identical phase-4 shape, keyed off this
+    // race's own shared progress records instead of a configured range.
+    val expectedCount: Int = 0,
+    val outstandingCount: Int = 0,
     val outstandingBibs: List<Int> = emptyList(),
     val duplicateBibNumbers: List<Int> = emptyList(),
+    val unexpectedBibNumbers: List<Int> = emptyList(),
     // Shown as another header line (see ui/components/ServerStatusLine.kt) — server
     // connectivity matters here just as much as in Mule Mode, since this device pushes its
     // own recorded data to the server on the same schedule regardless of mode.
@@ -96,6 +103,7 @@ class CpModeViewModel(
     private val raceRepository: RaceRepository,
     private val settingsRepository: SettingsRepository,
     private val serverStatusRepository: ServerStatusRepository,
+    private val progressRepository: ProgressRepository,
     bluetoothStateRepository: BluetoothStateRepository,
     private val beeper: Beeper,
 ) : ViewModel() {
@@ -138,22 +146,23 @@ class CpModeViewModel(
 
     private val raceAndEntriesFlow = raceIdFlow.flatMapLatest { raceId ->
         if (raceId == null) {
-            flowOf(RaceContext(null, emptyList(), 0, null, emptySet(), ServerStatusState(ServerStatus.UNKNOWN, null)))
+            flowOf(RaceContext(null, emptyList(), 0, null, emptySet(), ServerStatusState(ServerStatus.UNKNOWN, null), emptyList()))
         } else {
             combine(
                 raceRepository.observeRace(raceId),
                 cpModeRepository.observeCurrentSegmentEntries(raceId),
                 cpModeRepository.observeUnsyncedCount(raceId),
-                // Paired rather than added as the combine's own 6th argument — kotlinx
-                // coroutines' typed combine() overloads only go up to 5, and this stays a
-                // plain, directly-typed lambda without needing MuleModeViewModel's own
-                // Array<*>-based vararg + @Suppress("UNCHECKED_CAST") approach.
-                combine(cpModeRepository.observeLastSyncedAtMillis(raceId), serverStatusRepository.state) { lastSyncedAtMillis, serverStatus ->
-                    lastSyncedAtMillis to serverStatus
-                },
+                // Triple-packed rather than added as the combine's own 6th/7th argument — see
+                // BibsModeViewModel's own identical comment for why.
+                combine(
+                    cpModeRepository.observeLastSyncedAtMillis(raceId),
+                    serverStatusRepository.state,
+                    progressRepository.current,
+                ) { lastSyncedAtMillis, serverStatus, progress -> Triple(lastSyncedAtMillis, serverStatus, progress) },
                 raceRepository.observeLineSyncs(raceId),
-            ) { race, entries, unsyncedCount, (lastSyncedAtMillis, serverStatus), lineSyncs ->
-                RaceContext(race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync(lineSyncs), serverStatus)
+            ) { race, entries, unsyncedCount, (lastSyncedAtMillis, serverStatus, progress), lineSyncs ->
+                val progressEntries = progress?.takeIf { it.raceId == raceId }?.entries.orEmpty()
+                RaceContext(race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync(lineSyncs), serverStatus, progressEntries)
             }
         }
     }
@@ -163,9 +172,11 @@ class CpModeViewModel(
         digitsFlow,
         canRetagFlow,
     ) { context, digits, canRetag ->
-        val (race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync, serverStatus) = context
+        val (race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync, serverStatus, progressEntries) = context
         val dupRefs = findDuplicateSplitRefs(entries)
-        val outstanding = outstandingBibs(entries, race?.bibsRangeStart, race?.bibsRangeCount)
+        val raceLocation = race?.location.orEmpty()
+        val expectedBibs = expectedBibsAtLocation(progressEntries, raceLocation)
+        val outstanding = outstandingAtLocation(entries, progressEntries, raceLocation)
         CpModeUiState(
             raceId = race?.id,
             raceLabel = race?.label.orEmpty(),
@@ -183,7 +194,7 @@ class CpModeViewModel(
                     note = it.note,
                     dupSplitRefs = dupRefs[it.id].orEmpty(),
                     syncState = lineSyncState(it.syncedAtMillis, it.lineNumber in linesWithAnySync),
-                    rangeWarning = rangeWarningMessage(it.bibNumber, race?.bibsRangeStart, race?.bibsRangeCount),
+                    expectationWarning = unexpectedBibWarning(it.bibNumber, expectedBibs),
                 )
             },
             canRetag = canRetag,
@@ -200,11 +211,11 @@ class CpModeViewModel(
             ),
             unsyncedCount = unsyncedCount,
             lastSyncedAtMillis = lastSyncedAtMillis,
-            firstBibNumber = race?.bibsRangeStart,
-            expectedRunnerCount = race?.bibsRangeCount,
-            finishedCount = accountedForRecordCount(entries),
+            expectedCount = expectedBibs.size,
+            outstandingCount = outstanding.size,
             outstandingBibs = outstanding,
             duplicateBibNumbers = duplicateBibNumbers(entries),
+            unexpectedBibNumbers = unexpectedBibNumbers(entries, progressEntries, raceLocation),
             serverStatus = serverStatus,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CpModeUiState())
@@ -328,6 +339,7 @@ class CpModeViewModel(
                     container.raceRepository,
                     container.settingsRepository,
                     container.serverStatusRepository,
+                    container.progressRepository,
                     container.bluetoothStateRepository,
                     Beeper(applicationContext()),
                 )

@@ -39,7 +39,7 @@ import kotlinx.coroutines.launch
 import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.formatSplitRef
-import mobile.racemaster.data.repository.rangeWarningMessage
+import mobile.racemaster.data.repository.unexpectedBibWarning
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.ui.components.ActionPickerDialog
@@ -149,8 +149,8 @@ fun EditEntryScreen(
             // Non-blocking — see EditEntryViewModel.saveEntry's own doc. Purely informational,
             // so it's shown separately from entryError below rather than tied to the field's
             // own isError (which stays reserved for the genuinely blocking "missing bib" case).
-            val rangeWarning = if (needsBib) {
-                rangeWarningMessage(bibText.toIntOrNull(), uiState.raceBibsRangeStart, uiState.raceBibsRangeCount)
+            val expectationWarning = if (needsBib) {
+                unexpectedBibWarning(bibText.toIntOrNull(), uiState.expectedBibs)
             } else {
                 null
             }
@@ -169,7 +169,7 @@ fun EditEntryScreen(
                     )
                 }
             }
-            rangeWarning?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+            expectationWarning?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
             OutlinedTextField(
                 value = noteText,
                 onValueChange = { noteText = it },

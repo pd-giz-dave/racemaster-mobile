@@ -3,37 +3,7 @@ package mobile.racemaster.data.repository
 import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
-
-/** Bib numbers are always 3 digits max, so a configured race range must fit within this. */
-const val MIN_BIB_NUMBER = 1
-const val MAX_BIB_NUMBER = 999
-
-/** True if no range is configured (defensive default — nothing to reject against). */
-fun isBibInLegalRange(bib: Int, rangeStart: Int?, rangeCount: Int?): Boolean {
-    if (rangeStart == null || rangeCount == null) return true
-    return bib in rangeStart until (rangeStart + rangeCount)
-}
-
-/** Shared by every place a bib gets validated against [isBibInLegalRange] and needs to explain
- *  a rejection (EditEntryScreen's dedicated edit screen, which still blocks) — kept as one
- *  function so the wording never drifts between them. */
-fun rangeErrorMessage(bib: Int, rangeStart: Int?, rangeCount: Int?): String {
-    val rangeText = if (rangeStart != null && rangeCount != null) "${rangeStart}–${rangeStart + rangeCount - 1}" else "unset"
-    return "Bib $bib is outside the legal range $rangeText."
-}
-
-/**
- * The flagged-entry counterpart of [rangeErrorMessage] for Bibs/CP Mode's own live submit
- * flow, which records an out-of-range bib rather than rejecting it (same treatment as a
- * duplicate — see [findDuplicateSplitRefs]) so the operator can fix it up later instead of
- * being blocked mid-race. Null (no flag) when [bib] is null, in range, or no range is
- * configured — same defensive default as [isBibInLegalRange].
- */
-fun rangeWarningMessage(bib: Int?, rangeStart: Int?, rangeCount: Int?): String? {
-    if (bib == null || rangeStart == null || rangeCount == null) return null
-    if (isBibInLegalRange(bib, rangeStart, rangeCount)) return null
-    return "not in range $rangeStart to ${rangeStart + rangeCount - 1}"
-}
+import mobile.racemaster.data.mule.ProgressEntry
 
 // A bib is no longer expected to cross the line once it's FINISH (they crossed), PASS (they
 // passed this checkpoint — CP Mode's own equivalent of FINISH), or RETIRE (they've been
@@ -191,32 +161,126 @@ fun duplicateBibNumbers(entries: List<HistoryLineEntity>): List<Int> {
         .sorted()
 }
 
-/**
- * How many finishers are still outstanding is purely arithmetic: the expected count minus the
- * raw number of accounted-for records (FINISH or RETIRE) — not a distinct-bib count. A bib
- * logged as FINISH twice by mistake still represents two records for this purpose; it isn't
- * collapsed down to one. That's deliberate: it's a recording error to be corrected later
- * (delete/fix the duplicate), not something the "how many more expected" figure should
- * quietly paper over by guessing which of the two records is the "real" one.
- */
-fun accountedForRecordCount(entries: List<HistoryLineEntity>): Int = entries.count { it.action in ACCOUNTED_FOR_ACTIONS }
-
-/** Distinct bib numbers that have at least one FINISH or RETIRE record — used only to name
- *  *which* specific bibs are still outstanding (see [outstandingBibs]), a different question
- *  from "how many" ([accountedForRecordCount]) and one where collapsing duplicates down to a
- *  distinct set is the right thing to do: a bib appearing twice is still just one bib to name.
- *  START doesn't count here either — this is specifically "who's been accounted for". */
+/** Distinct bib numbers that have at least one FINISH/PASS/RETIRE record — used to name *which*
+ *  specific bibs this device has already accounted for at its own location (see
+ *  [outstandingAtLocation]/[unexpectedBibNumbers]), collapsing duplicates down to a distinct set
+ *  since a bib appearing twice is still just one bib to name. START doesn't count here either —
+ *  this is specifically "who's been accounted for". */
 fun distinctAccountedForBibs(entries: List<HistoryLineEntity>): Set<Int> =
     entries.filter { it.action in ACCOUNTED_FOR_ACTIONS }.mapNotNull { it.bibNumber }.toSet()
 
-/** Bib numbers within the race's configured range with no FINISH/RETIRE record at all, in
- *  ascending order. Empty (not "everyone", by design) if the range isn't configured. Because
- *  this is based on the distinct set of bibs accounted for (see [distinctAccountedForBibs])
- *  while the "more expected" count is raw ([accountedForRecordCount]), the two can disagree
- *  while a duplicate is still unresolved — expected, not a bug: the list only ever names bibs
- *  never accounted for, regardless of how many records exist for others. */
-fun outstandingBibs(entries: List<HistoryLineEntity>, rangeStart: Int?, rangeCount: Int?): List<Int> {
-    if (rangeStart == null || rangeCount == null) return emptyList()
-    val accountedFor = distinctAccountedForBibs(entries)
-    return (rangeStart until rangeStart + rangeCount).filterNot { it in accountedFor }
+// --- Phase 4: progress-record-derived expectation (replaces the old configured-range model) ---
+//
+// TODO.md's own model: the course is ordered CP1..CPn..Finish, with the order itself derived
+// purely from whichever CP labels actually appear across every phone's own contributed
+// [ProgressEntry.cpTimes] — never a separately-configured course definition (that concept was
+// dropped in phase 1). All starters are expected at CP1; a bib that's passed (recorded, but not
+// retired) CPn is expected at CPn+1; a bib that's passed the last CP is expected at Finish.
+
+private val CP_NUMBER_REGEX = Regex("^CP(\\d+)", RegexOption.IGNORE_CASE)
+
+/** Extracts the CP number from a location/cpTimes-key string like "CP2" or "CP2-Bridge" — null
+ *  for anything that doesn't look like a CP label at all (e.g. "Finish", "Start", or a free-form
+ *  Bibs/Time Mode location no one's bothered to make CP-shaped). */
+private fun cpNumber(label: String): Int? = CP_NUMBER_REGEX.find(label.trim())?.groupValues?.get(1)?.toIntOrNull()
+
+/** The full CP1..CPn ordering for a race — ascending by number (so CP10 sorts after CP2, not
+ *  before it, unlike a plain string sort), deduplicated across however many entries/devices
+ *  contributed a cpTimes key for the same CP. */
+fun observedCpOrder(entries: List<ProgressEntry>): List<Int> =
+    entries.flatMap { it.cpTimes.keys }.mapNotNull(::cpNumber).distinct().sorted()
+
+// A cpTimes value of "Retire" means retired at that CP specifically — everywhere else in this
+// file "retired"/"passed" are judged per-CP, matching TODO.md's own "passing, and not retiring,
+// CPn" qualifier.
+private fun cpTimeAt(entry: ProgressEntry, cpNum: Int): String? =
+    entry.cpTimes.entries.firstOrNull { cpNumber(it.key) == cpNum }?.value
+
+private fun passedCp(entry: ProgressEntry, cpNum: Int): Boolean {
+    val value = cpTimeAt(entry, cpNum) ?: return false
+    return value.isNotBlank() && !value.equals("Retire", ignoreCase = true)
+}
+
+/** Distinct bib numbers with a recorded start — TODO.md's "starters". */
+fun starters(entries: List<ProgressEntry>): Set<Int> =
+    entries.filter { it.startTime.isNotBlank() }.map { it.bibNumber }.toSet()
+
+/** Distinct bib numbers with a recorded finish — TODO.md's "finishers". */
+fun finishers(entries: List<ProgressEntry>): Set<Int> =
+    entries.filter { it.finishTime.isNotBlank() }.map { it.bibNumber }.toSet()
+
+/** Distinct bib numbers retired at any CP at all — TODO.md's "retirees". A bib can only retire
+ *  once in practice, but this doesn't assume that; any "Retire" value anywhere in its cpTimes
+ *  counts. */
+fun retirees(entries: List<ProgressEntry>): Set<Int> =
+    entries.filter { e -> e.cpTimes.values.any { it.equals("Retire", ignoreCase = true) } }.map { it.bibNumber }.toSet()
+
+/** Which bibs are expected to arrive at [raceLocation] right now, derived purely from shared
+ *  progress records — see this section's own top-of-file doc for the CP1..CPn..Finish model.
+ *  Empty — not "everyone", by the same defensive-default convention [distinctAccountedForBibs]'s
+ *  own callers already rely on — when [raceLocation] doesn't correspond to a recognizable
+ *  station at all (not "Finish", and not a "CP#..." location whose number the race has actually
+ *  seen a cpTimes entry for). */
+fun expectedBibsAtLocation(entries: List<ProgressEntry>, raceLocation: String): Set<Int> {
+    val trimmedLocation = raceLocation.trim()
+    if (trimmedLocation.equals("Finish", ignoreCase = true)) {
+        // The last CP is the one genuinely-derived piece here — Finish itself carries no
+        // number of its own, so there's no arithmetic predecessor to fall back on the way
+        // CPn's own CP(n-1) below can. No CPs observed at all yet (a course with none, or one
+        // where nobody's reached the first one yet) falls back to starters, same reasoning as
+        // CP1 below.
+        val lastCp = observedCpOrder(entries).lastOrNull() ?: return starters(entries)
+        return entries.filter { passedCp(it, lastCp) }.map { it.bibNumber }.toSet()
+    }
+    val here = cpNumber(trimmedLocation) ?: return emptySet()
+    // CPn's predecessor is always CP(n-1) by the numbering convention itself (isValidCpLocation
+    // already requires "CP" + a number) — deliberately plain arithmetic, not a position derived
+    // from observedCpOrder: an unobserved CP(n-1) must mean "nobody's expected here yet"
+    // (empty, via passedCp safely returning false for everyone), never "treat CPn as if it
+    // were the first station" just because nothing earlier happens to be in the data yet — only
+    // CP1 itself (literally numbered 1) is ever the unconditional starters case.
+    if (here == 1) return starters(entries)
+    val previousCp = here - 1
+    return entries.filter { passedCp(it, previousCp) }.map { it.bibNumber }.toSet()
+}
+
+/** Bib numbers expected at [raceLocation] (see [expectedBibsAtLocation]) that this device
+ *  hasn't itself already accounted for (see [distinctAccountedForBibs] — a device only ever
+ *  records what happens at its own station, so "accounted for" is inherently local), ascending.
+ *  This is [outstandingBibs]'s phase-4 replacement: the expected set now comes from shared
+ *  progress records instead of a configured contiguous range, but the "expected minus
+ *  already-accounted-for-here" shape stays identical. */
+fun outstandingAtLocation(
+    localEntries: List<HistoryLineEntity>,
+    progressEntries: List<ProgressEntry>,
+    raceLocation: String,
+): List<Int> {
+    val expected = expectedBibsAtLocation(progressEntries, raceLocation)
+    val accountedFor = distinctAccountedForBibs(localEntries)
+    return (expected - accountedFor).sorted()
+}
+
+/** Distinct bib numbers this device has locally recorded (see [distinctAccountedForBibs]) that
+ *  aren't in the expected set for this location at all — flagged for operator awareness
+ *  (TODO.md: "allowed but flagged in a similar manner to the current range/duplicate check"),
+ *  never blocked, ascending. Empty when nothing's expected to compare against yet (see
+ *  [expectedBibsAtLocation]'s own defensive-empty doc) — an empty expected set here means "no
+ *  data to judge by", not "everything's unexpected". */
+fun unexpectedBibNumbers(
+    localEntries: List<HistoryLineEntity>,
+    progressEntries: List<ProgressEntry>,
+    raceLocation: String,
+): List<Int> {
+    val expected = expectedBibsAtLocation(progressEntries, raceLocation)
+    if (expected.isEmpty()) return emptyList()
+    return distinctAccountedForBibs(localEntries).filterNot { it in expected }.sorted()
+}
+
+/** Per-entry flagged-warning text for a bib outside [expectedBibs] — the phase-4 replacement for
+ *  the old range-based per-entry warning, attached the same way EntryLogUi's own warning field
+ *  already surfaces one. Null when [bib] is null, expected, or [expectedBibs] is empty (nothing
+ *  to judge by yet — same defensive default as [unexpectedBibNumbers]). */
+fun unexpectedBibWarning(bib: Int?, expectedBibs: Set<Int>): String? {
+    if (bib == null || expectedBibs.isEmpty() || bib in expectedBibs) return null
+    return "not expected at this location"
 }

@@ -470,28 +470,92 @@ cache-and-forward on its own next pull cycle, recursively through further mule h
       confidence the code-level work doesn't actually support.
 - [x] Commit phase 3 (local only, no push).
 
-### Phase 4 — bib/CP auto-expectation (mobile-only, depends on phases 1-3)
+### Phase 4 — bib/CP auto-expectation (mobile-only, depends on phases 1-3) — DONE 2026-09-14
 
-- [ ] `data/repository/BibValidation.kt`: remove `isBibInLegalRange`/`rangeErrorMessage`/
-      `rangeWarningMessage`/`outstandingBibs(entries, rangeStart, rangeCount)`. Add starters /
-      retirees / finishers / outstanding-at-this-location functions from `ProgressRepository`'s
-      `ProgressEntry` list joined against local `HistoryLineEntity` actions, reusing the join
-      shape `distinctAccountedForBibs` already uses.
-- [ ] Derive CP1..CPn..Finish order from the distinct set of CP labels already appearing across
-      all phones' `ProgressEntry.cpTimes` keys for this race — no new course-definition entity.
-- [ ] `util/ExpectedRunnersText.kt`: drop the "First bib X" echo; source outstanding-count/missing
-      list from the new set-based logic (keep the existing "N of M / missing list when <10" UI
-      shape).
-- [ ] `ui/bibsmode/BibsModeViewModel.kt` (~line 184-229) / `ui/cpmode/CpModeViewModel.kt`
-      (~line 169-208): replace range-based outstanding computation with the new functions. A bib
-      outside the expected set is flagged (not blocked), same treatment as a duplicate. Duplicate
-      detection itself unchanged.
-- [ ] Room migration: drop `RaceEntity.course`/`courses`/`bibsRangeStart`/`bibsRangeCount` now
-      that nothing reads them.
-- [ ] **Verify**: outstanding/starters/retirees/finishers lists update live as progress records
-      arrive via both HTTP and BLE; an unexpected bib is flagged, not blocked, on entry; full
-      `./gradlew check`.
-- [ ] Commit phase 4 (local only, no push).
+- [x] `data/repository/BibValidation.kt`: removed `isBibInLegalRange`/`rangeErrorMessage`/
+      `rangeWarningMessage`/`outstandingBibs(entries, rangeStart, rangeCount)`/`MIN_BIB_NUMBER`/
+      `MAX_BIB_NUMBER` (all dead once the callers below were updated), and the now-unused
+      `accountedForRecordCount` (its only callers were the removed `finishedCount` fields — see
+      below). Added `starters`/`finishers`/`retirees`/`observedCpOrder`/`expectedBibsAtLocation`/
+      `outstandingAtLocation`/`unexpectedBibNumbers`/`unexpectedBibWarning`, sourced from
+      `ProgressEntry` lists joined against local `HistoryLineEntity` actions via the existing
+      `distinctAccountedForBibs` (unchanged, reused as-is).
+- [x] CP ordering: `observedCpOrder` derives the full CP1..CPn set from `ProgressEntry.cpTimes`
+      keys (numeric sort, so "CP10" sorts after "CP2", not before) — used only for `Finish`'s own
+      "last CP" lookup. CPn's own predecessor is plain `n - 1` arithmetic instead of a position
+      derived from what's been observed — deliberate: an unobserved CP(n-1) must mean "nobody's
+      expected here yet" (empty), not "silently treat CPn as if it were CP1" just because nothing
+      earlier happens to be in the data yet. Only CP1 itself (literally numbered 1) is ever the
+      unconditional "expects all starters" case — including when *nothing* has been observed
+      yet for this race at all (a race that's only just started), which needed its own explicit
+      fallback and cost a real test failure to catch (see the CP1-with-no-cpTimes-yet test cases).
+- [x] `util/ExpectedRunnersText.kt`: dropped the "First bib X" echo everywhere, including Time
+      Mode's own `formatTimeSplitsText` (which never had a real per-bib concept to begin with —
+      simplified to just the split-count tally rather than carrying dead nullable params).
+      `formatBibsExpectedText(expectedCount, outstandingCount)` replaces the old nullable-range
+      signature; "N of M / Missing: ... when <10 remain" UI shape unchanged
+      (`ui/components/EntryModeHeaderInfo.kt`).
+- [x] `ui/bibsmode/BibsModeViewModel.kt`/`ui/cpmode/CpModeViewModel.kt`: both gained
+      `ProgressRepository` (new constructor param, wired via `AppContainer`/their `Factory`s) and
+      combine its `current` `StateFlow` alongside race/entries (packed into the existing
+      `combine()`'s already-paired 4th slot, now a `Triple`, to stay under kotlinx coroutines'
+      5-arg typed `combine` limit — same trick the surrounding code already used). Outstanding/
+      expected/unexpected are recomputed from `ProgressEntry` + local history on every emission —
+      live, not cached. A bib outside the expected set is flagged via `EntryLogUi.expectationWarning`
+      (renamed from `rangeWarning` throughout `EntryLogList.kt`/`BibEntryRow.kt` — the old name no
+      longer meant anything), same non-blocking treatment as a duplicate. `EditEntryViewModel.kt`/
+      `EditEntryScreen.kt` (the dedicated per-entry editor) got the identical treatment, loading
+      `expectedBibs` once alongside the entry via `ProgressRepository.getStored`. Duplicate
+      detection (`findDuplicateSplitRefs`) itself untouched.
+- [x] Room migration: dropped `RaceEntity.course`/`courses`/`bibsRangeStart`/`bibsRangeCount`
+      (schema v29→v30 — `fallbackToDestructiveMigration` already in place per Phase 3, so no
+      explicit `Migration` object needed, confirmed via a real device upgrade, see below). Also
+      removed the now-dead `Converters.fromStringList`/`toStringList` (existed only for the
+      removed `courses: List<String>` column — grepped first to confirm no other entity used it).
+- [x] `ui/help/HelpScreen.kt`: added a new "Bibs Mode — who's expected" section documenting the
+      progress-record-derived expectation model for operators (this didn't exist even in the old
+      range-based form), and fixed CP Mode's own description (was still saying "out-of-range
+      flagging").
+- [x] New tests: `BibValidationTest.kt` — starters/finishers/retirees, `observedCpOrder`'s numeric
+      sort (a CP1/CP2/CP10 case that would fail under a plain string sort), `expectedBibsAtLocation`
+      for CP1 (unconditional starters, including with zero progress data yet — this is the case
+      that caught the arithmetic-vs-observed-order bug above), CP2 (passed-CP1-not-retired),
+      Finish (passed-last-CP, and its own no-CPs-observed-yet fallback to starters), an
+      unrecognised location and a genuinely-never-observed CP both correctly expecting nobody,
+      a "CP1-Bridge"-style suffix still matching by number, `outstandingAtLocation`,
+      `unexpectedBibNumbers`, `unexpectedBibWarning`. Removed the now-obsolete range-based tests.
+      305 tests total (up from 291), all passing.
+- [x] **Verify (automated)**: `./gradlew testDebugUnitTest`, `./gradlew check`,
+      `./gradlew assembleDebug` all pass clean. Confirmed the Room schema export actually dropped
+      the four columns (`app/schemas/.../30.json` grepped for `course`/`bibsRange` — none found).
+- [~] **Verify (live, real device + real progress data)**: partially done. Installed the build on
+      a real device (`8a0f61d4`) that Phase 3's own schema-version upgrade had already emptied of
+      local race data (confirmed safe to use) — launched clean, no crash, Mode Picker renders with
+      no active-race card as expected. **Could not go further**: this device refuses adb input
+      injection (`SecurityException: Injecting to another application requires INJECT_EVENTS
+      permission` — hit this in phase 1 too), so the actual Setup Race → Bibs Mode → live
+      expectation-list flow couldn't be driven on it. `A756XXCM9A2200A5` (the device that *does*
+      accept injected input) has real in-progress race data from actual use — not touched, to
+      avoid disrupting it. A third device (`BH900MSDC8`) turned out to be a personal phone (locked
+      screen, Facebook/Spotify/personal Google account visible, not dedicated race hardware) —
+      the debug build was installed on it (harmless — an app install, not a data-destructive
+      action) but no further interaction was attempted once that became clear. **What this means
+      concretely is still unverified**: a real "outstanding/starters/retirees/finishers lists
+      update live as progress records arrive via both HTTP and BLE" exercise, end to end, with
+      actual progress.json data flowing from the web app. The reactive wiring is code-reviewed and
+      correct (`ProgressRepository.current` is updated by both `storeFromBle` and
+      `refreshFromServer`, and both ViewModels' `combine()` chains include it), and the pure
+      set-computation logic has thorough unit coverage, but a genuine live multi-device exercise —
+      like phase 3's own multi-hop relay test — needs a spare device and a real race's worth of
+      progress data, which wasn't available here. Left honestly unchecked.
+- [x] Commit phase 4 (local only, no push).
+
+**All four phases are now implemented, unit-tested, and committed locally.** What's left across
+the whole plan is exclusively the hardware/field verification each phase's own Verify section
+already flags as unchecked and explains why: phase 3's real multi-hop BLE relay/adoption chain,
+and phase 4's live cross-device expectation-list exercise — both need actual race-day-style
+conditions (multiple phones, real Bluetooth pairing, real progress data flowing) that a background
+session can't fabricate confidence about. Nothing has been pushed to `origin`.
 
 ### Critical files
 

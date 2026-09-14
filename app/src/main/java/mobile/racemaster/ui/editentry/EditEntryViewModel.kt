@@ -12,9 +12,11 @@ import kotlinx.coroutines.launch
 import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
+import mobile.racemaster.data.mule.ProgressRepository
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
+import mobile.racemaster.data.repository.expectedBibsAtLocation
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.ui.bibsmode.CP_ACTION_OPTIONS
@@ -25,12 +27,11 @@ data class EditEntryUiState(
     val entry: HistoryLineEntity? = null,
     // False until the one-shot load-by-id completes — see EditSplitUiState's own doc for why.
     val loaded: Boolean = false,
-    // The entry's race's configured bib range, loaded alongside it — lets the screen compute a
-    // live "not in range" warning (see mobile.racemaster.data.repository.rangeWarningMessage)
-    // as the operator types, same non-blocking treatment Bibs/CP Mode's own submit() now gives
-    // an out-of-range bib rather than rejecting it.
-    val raceBibsRangeStart: Int? = null,
-    val raceBibsRangeCount: Int? = null,
+    // The entry's race's own expected-bibs-at-this-location set (see
+    // mobile.racemaster.data.repository.expectedBibsAtLocation), loaded alongside it — lets the
+    // screen compute a live "not expected" warning as the operator types, same non-blocking
+    // treatment Bibs/CP Mode's own submit() now gives an unexpected bib rather than rejecting it.
+    val expectedBibs: Set<Int> = emptySet(),
 )
 
 /** Backs [EditEntryScreen] — shared by Bibs and CP Mode, same as the inline `EditEntryPanel`
@@ -47,6 +48,7 @@ class EditEntryViewModel(
     private val bibsModeRepository: BibsModeRepository,
     private val cpModeRepository: CpModeRepository,
     private val raceRepository: RaceRepository,
+    private val progressRepository: ProgressRepository,
 ) : ViewModel() {
 
     val availableTypes: List<HistoryAction> = if (mode == AppMode.BIBS) EVENT_PICKER_OPTIONS else CP_ACTION_OPTIONS
@@ -58,18 +60,18 @@ class EditEntryViewModel(
         viewModelScope.launch {
             val entry = if (mode == AppMode.BIBS) bibsModeRepository.getEntry(entryId) else cpModeRepository.getEntry(entryId)
             val race = entry?.raceId?.let { raceRepository.getRace(it) }
+            val progressEntries = race?.let { progressRepository.getStored(it.id)?.entries }.orEmpty()
             stateFlow.value = EditEntryUiState(
                 entry = entry,
                 loaded = true,
-                raceBibsRangeStart = race?.bibsRangeStart,
-                raceBibsRangeCount = race?.bibsRangeCount,
+                expectedBibs = expectedBibsAtLocation(progressEntries, race?.location.orEmpty()),
             )
         }
     }
 
-    // An out-of-range bib is flagged, not rejected — same non-blocking treatment
+    // An unexpected bib is flagged, not rejected — same non-blocking treatment
     // BibsModeViewModel/CpModeViewModel's own submit() gives one (see
-    // mobile.racemaster.data.repository.rangeWarningMessage, which EditEntryScreen also uses to
+    // mobile.racemaster.data.repository.unexpectedBibWarning, which EditEntryScreen also uses to
     // show the live warning as the operator types). Only a genuinely missing bib still blocks
     // the save. Returns an error message to show inline, or null on success.
     suspend fun saveEntry(bibNumber: Int?, type: HistoryAction, note: String?): String? {
@@ -100,7 +102,10 @@ class EditEntryViewModel(
         fun factory(mode: AppMode, entryId: Long): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val container = appContainer()
-                EditEntryViewModel(mode, entryId, container.bibsModeRepository, container.cpModeRepository, container.raceRepository)
+                EditEntryViewModel(
+                    mode, entryId, container.bibsModeRepository, container.cpModeRepository,
+                    container.raceRepository, container.progressRepository,
+                )
             }
         }
     }

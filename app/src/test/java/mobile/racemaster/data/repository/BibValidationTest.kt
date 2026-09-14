@@ -3,6 +3,7 @@ package mobile.racemaster.data.repository
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
+import mobile.racemaster.data.mule.ProgressEntry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -26,55 +27,6 @@ class BibValidationTest {
         refLineNumber = refLineNumber,
         timestampMillis = 0L,
     )
-
-    // isBibInLegalRange
-
-    @Test
-    fun bibAtRangeStartIsInRange() {
-        assertTrue(isBibInLegalRange(100, rangeStart = 100, rangeCount = 20))
-    }
-
-    @Test
-    fun bibAtRangeEndIsInRange() {
-        assertTrue(isBibInLegalRange(119, rangeStart = 100, rangeCount = 20))
-    }
-
-    @Test
-    fun bibOneBelowRangeIsOutOfRange() {
-        assertTrue(!isBibInLegalRange(99, rangeStart = 100, rangeCount = 20))
-    }
-
-    @Test
-    fun bibOneAboveRangeIsOutOfRange() {
-        assertTrue(!isBibInLegalRange(120, rangeStart = 100, rangeCount = 20))
-    }
-
-    @Test
-    fun nullRangeAllowsAnyBib() {
-        assertTrue(isBibInLegalRange(999_999, rangeStart = null, rangeCount = null))
-    }
-
-    // rangeWarningMessage
-
-    @Test
-    fun rangeWarningMessageNullForInRangeBib() {
-        assertEquals(null, rangeWarningMessage(110, rangeStart = 100, rangeCount = 20))
-    }
-
-    @Test
-    fun rangeWarningMessageNullWhenRangeUnset() {
-        assertEquals(null, rangeWarningMessage(999_999, rangeStart = null, rangeCount = null))
-    }
-
-    @Test
-    fun rangeWarningMessageNullForNullBib() {
-        assertEquals(null, rangeWarningMessage(null, rangeStart = 100, rangeCount = 20))
-    }
-
-    @Test
-    fun rangeWarningMessageNamesFirstAndLastBibForOutOfRangeBib() {
-        assertEquals("not in range 100 to 119", rangeWarningMessage(120, rangeStart = 100, rangeCount = 20))
-    }
 
     // findDuplicateSplitRefs
 
@@ -370,37 +322,10 @@ class BibValidationTest {
         assertEquals(listOf(101), duplicateBibNumbers(entries))
     }
 
-    // accountedForRecordCount — raw count, used for "how many more expected"
-
-    @Test
-    fun bibLoggedAsFinishTwiceByMistakeCountsAsTwoRecordsNotOne() {
-        // Outstanding-finisher arithmetic is purely expected minus raw accounted-for records
-        // — a duplicate Finish tap (operator unsure the first one registered) still
-        // represents two recorded events for this purpose, not one. It's a recording error to
-        // be corrected later, not something to silently collapse away here.
-        val entries = listOf(
-            entry(1, 101, HistoryAction.FINISH, 1),
-            entry(2, 101, HistoryAction.FINISH, 2),
-        )
-        assertEquals(2, accountedForRecordCount(entries))
-    }
-
-    @Test
-    fun retireCountsTowardAccountedForRecords() {
-        // A retired bib is accounted for elsewhere and won't cross the line either, so it
-        // counts the same as a Finish record for "how many more expected".
-        val entries = listOf(entry(1, 101, HistoryAction.RETIRE, 1))
-        assertEquals(1, accountedForRecordCount(entries))
-    }
-
-    @Test
-    fun startDoesNotCountAsAccountedFor() {
-        val entries = listOf(entry(1, 102, HistoryAction.START, 1))
-        assertEquals(0, accountedForRecordCount(entries))
-    }
-
-    // distinctAccountedForBibs / outstandingBibs — naming *which* specific bibs are still
-    // outstanding is a different question, where collapsing to a distinct set is correct.
+    // distinctAccountedForBibs — naming *which* specific bibs have been accounted for locally
+    // (used by phase 4's outstandingAtLocation/unexpectedBibNumbers below) is a different
+    // question from "how many" (accountedForRecordCount), where collapsing to a distinct set is
+    // correct.
 
     @Test
     fun duplicateFinishStillNamesTheBibAsSeenOnlyOnce() {
@@ -409,37 +334,165 @@ class BibValidationTest {
             entry(2, 101, HistoryAction.FINISH, 2),
         )
         assertEquals(setOf(101), distinctAccountedForBibs(entries))
-        assertEquals(listOf(100, 102, 103, 104), outstandingBibs(entries, rangeStart = 100, rangeCount = 5))
     }
 
     @Test
-    fun retireRemovesABibFromOutstanding() {
+    fun retireCountsTowardDistinctAccountedForBibs() {
         val entries = listOf(entry(1, 103, HistoryAction.RETIRE, 1))
         assertEquals(setOf(103), distinctAccountedForBibs(entries))
-        assertEquals(listOf(100, 101, 102, 104), outstandingBibs(entries, rangeStart = 100, rangeCount = 5))
     }
 
     @Test
-    fun startOnlyIsStillOutstanding() {
+    fun startOnlyDoesNotCountAsAccountedFor() {
         val entries = listOf(entry(1, 104, HistoryAction.START, 1))
         assertTrue(distinctAccountedForBibs(entries).isEmpty())
-        assertEquals(listOf(100, 101, 102, 103, 104), outstandingBibs(entries, rangeStart = 100, rangeCount = 5))
+    }
+
+    // --- Phase 4: progress-record-derived expectation --------------------------------------
+
+    private fun progressEntry(
+        bib: Int,
+        startTime: String = "",
+        finishTime: String = "",
+        cpTimes: Map<String, String> = emptyMap(),
+    ) = ProgressEntry(bibNumber = bib, startTime = startTime, finishTime = finishTime, cpTimes = cpTimes)
+
+    // starters / finishers / retirees
+
+    @Test
+    fun startersAreBibsWithARecordedStartTime() {
+        val entries = listOf(progressEntry(101, startTime = "09:00:00"), progressEntry(102))
+        assertEquals(setOf(101), starters(entries))
     }
 
     @Test
-    fun mixOfFinishRetireStartAndOutstandingBibs() {
+    fun finishersAreBibsWithARecordedFinishTime() {
+        val entries = listOf(progressEntry(101, finishTime = "10:30:00"), progressEntry(102))
+        assertEquals(setOf(101), finishers(entries))
+    }
+
+    @Test
+    fun retireesAreBibsWithARetireValueAtAnyCp() {
         val entries = listOf(
-            entry(1, 100, HistoryAction.FINISH, 1),
-            entry(2, 101, HistoryAction.RETIRE, 2),
-            entry(3, 102, HistoryAction.START, 3),
+            progressEntry(101, cpTimes = mapOf("CP1" to "09:10:00", "CP2" to "Retire")),
+            progressEntry(102, cpTimes = mapOf("CP1" to "09:12:00")),
         )
-        assertEquals(setOf(100, 101), distinctAccountedForBibs(entries))
-        assertEquals(listOf(102, 103, 104), outstandingBibs(entries, rangeStart = 100, rangeCount = 5))
+        assertEquals(setOf(101), retirees(entries))
     }
 
     @Test
-    fun outstandingBibsIsEmptyWithoutAConfiguredRange() {
-        assertEquals(emptyList<Int>(), outstandingBibs(emptyList(), rangeStart = null, rangeCount = null))
+    fun retireValueIsCaseInsensitive() {
+        val entries = listOf(progressEntry(101, cpTimes = mapOf("CP1" to "retire")))
+        assertEquals(setOf(101), retirees(entries))
+    }
+
+    // observedCpOrder — numeric, not lexicographic
+
+    @Test
+    fun observedCpOrderSortsNumericallyNotLexicographically() {
+        val entries = listOf(
+            progressEntry(101, cpTimes = mapOf("CP10" to "11:00:00", "CP2" to "09:30:00", "CP1" to "09:00:00")),
+        )
+        // A plain string sort would put "CP10" before "CP2" — this must not.
+        assertEquals(listOf(1, 2, 10), observedCpOrder(entries))
+    }
+
+    @Test
+    fun observedCpOrderDeduplicatesAcrossEntriesAndTakesTheNumberOnlyFromANamedCp() {
+        val entries = listOf(
+            progressEntry(101, cpTimes = mapOf("CP1" to "09:00:00", "CP2-Bridge" to "09:30:00")),
+            progressEntry(102, cpTimes = mapOf("CP1" to "09:05:00")),
+        )
+        assertEquals(listOf(1, 2), observedCpOrder(entries))
+    }
+
+    // expectedBibsAtLocation
+
+    @Test
+    fun cp1ExpectsAllStarters() {
+        val entries = listOf(
+            progressEntry(101, startTime = "09:00:00"),
+            progressEntry(102, startTime = "09:00:05"),
+            progressEntry(103),
+        )
+        assertEquals(setOf(101, 102), expectedBibsAtLocation(entries, "CP1"))
+    }
+
+    @Test
+    fun cp2ExpectsBibsThatPassedCp1AndDidNotRetireThere() {
+        val entries = listOf(
+            progressEntry(101, startTime = "09:00:00", cpTimes = mapOf("CP1" to "09:10:00")),
+            progressEntry(102, startTime = "09:00:05", cpTimes = mapOf("CP1" to "Retire")),
+            progressEntry(103, startTime = "09:00:10"),
+        )
+        assertEquals(setOf(101), expectedBibsAtLocation(entries, "CP2"))
+    }
+
+    @Test
+    fun finishExpectsBibsThatPassedTheLastObservedCp() {
+        val entries = listOf(
+            progressEntry(101, cpTimes = mapOf("CP1" to "09:10:00", "CP2" to "09:40:00")),
+            progressEntry(102, cpTimes = mapOf("CP1" to "09:11:00")), // hasn't reached CP2 yet
+        )
+        assertEquals(setOf(101), expectedBibsAtLocation(entries, "Finish"))
+    }
+
+    @Test
+    fun finishFallsBackToStartersWhenNoCpsHaveBeenObservedAtAll() {
+        val entries = listOf(progressEntry(101, startTime = "09:00:00"))
+        assertEquals(setOf(101), expectedBibsAtLocation(entries, "Finish"))
+    }
+
+    @Test
+    fun anUnrecognisedLocationExpectsNobody() {
+        // Not "Finish" and not a "CP#..." this race has actually seen a cpTimes entry for —
+        // empty, not "everyone", same defensive default the old range model used.
+        val entries = listOf(progressEntry(101, startTime = "09:00:00"))
+        assertTrue(expectedBibsAtLocation(entries, "Somewhere Else").isEmpty())
+        assertTrue(expectedBibsAtLocation(entries, "CP5").isEmpty()) // CP5 never actually observed
+    }
+
+    @Test
+    fun cpLocationWithANameSuffixStillMatchesByNumber() {
+        val entries = listOf(progressEntry(101, startTime = "09:00:00"))
+        assertEquals(setOf(101), expectedBibsAtLocation(entries, "CP1-Bridge"))
+    }
+
+    // outstandingAtLocation / unexpectedBibNumbers / unexpectedBibWarning
+
+    @Test
+    fun outstandingAtLocationIsExpectedMinusLocallyAccountedFor() {
+        val progress = listOf(progressEntry(101, startTime = "09:00:00"), progressEntry(102, startTime = "09:00:05"))
+        val local = listOf(entry(1, 101, HistoryAction.PASS, 1))
+        assertEquals(listOf(102), outstandingAtLocation(local, progress, "CP1"))
+    }
+
+    @Test
+    fun unexpectedBibNumbersFlagsALocallyRecordedBibNotInTheExpectedSet() {
+        val progress = listOf(progressEntry(101, startTime = "09:00:00"))
+        val local = listOf(entry(1, 999, HistoryAction.PASS, 1))
+        assertEquals(listOf(999), unexpectedBibNumbers(local, progress, "CP1"))
+    }
+
+    @Test
+    fun unexpectedBibNumbersIsEmptyWhenThereIsNothingToJudgeByYet() {
+        val local = listOf(entry(1, 101, HistoryAction.PASS, 1))
+        assertTrue(unexpectedBibNumbers(local, emptyList(), "CP1").isEmpty())
+    }
+
+    @Test
+    fun unexpectedBibWarningNullForExpectedBib() {
+        assertEquals(null, unexpectedBibWarning(101, expectedBibs = setOf(101, 102)))
+    }
+
+    @Test
+    fun unexpectedBibWarningNullWhenNothingIsExpectedYet() {
+        assertEquals(null, unexpectedBibWarning(999, expectedBibs = emptySet()))
+    }
+
+    @Test
+    fun unexpectedBibWarningFlagsABibOutsideTheExpectedSet() {
+        assertEquals("not expected at this location", unexpectedBibWarning(999, expectedBibs = setOf(101, 102)))
     }
 
     // Generic extractor-lambda core (findDuplicateSplitRefs/findDuplicateSplitRefsPerSegment
