@@ -50,6 +50,25 @@ class RaceRepository(
             ),
         )
 
+    // Setup Race's online branch (see SetupRaceViewModel.pickAvailableRace): adopts an existing
+    // server-side race label exactly, rather than reconstructing one from name+today's date the
+    // way startNewRace does — the picked race may have been registered on an earlier date, and
+    // this device must deposit its device file in that exact existing folder (TODO.md's phase 2:
+    // "the device becomes that race and deposits its device file in the selected folder"), not a
+    // fresh same-named one dated today. [raceLabel]'s own name portion (see RaceLabels.kt's
+    // raceNameFromLabel) already carries any Seniors/Juniors suffix as plain text, same as a
+    // manually-typed name would.
+    suspend fun adoptRaceLabel(raceLabel: String, location: String): Long =
+        raceDao.insert(
+            RaceEntity(
+                name = raceNameFromLabel(raceLabel),
+                location = location,
+                label = raceLabel,
+                createdAtMillis = System.currentTimeMillis(),
+                createdByDeviceName = settingsRepository.getOrCreateDeviceName(),
+            ),
+        )
+
     // The date portion of the label is rebuilt from the race's original createdAtMillis, not
     // the edit time — the date is always auto-derived and fixed once the race is created.
     // name/location genuinely can change here now — RaceDetailsScreen only locks them once the

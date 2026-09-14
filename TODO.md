@@ -142,7 +142,7 @@ Execution rules for whoever (or whichever session) picks this up:
 - If a verification step fails and the fix isn't obvious, stop and flag it rather than pushing
   into the next phase on top of something broken.
 
-### Cross-cutting: progress payloads must be deltas, not full replaces (build first, in phase 2)
+### Cross-cutting: progress payloads must be deltas, not full replaces (build first, in phase 2) — DONE 2026-09-14
 
 `progress.json` is currently full-replace both directions (`server/mobile.js` `writeProgress`;
 `GET .../progress` only shortcuts a whole-payload-unchanged case). The BLE
@@ -150,19 +150,45 @@ Execution rules for whoever (or whichever session) picks this up:
 payload every time too. Device-*record* sync is already delta-based (merge by `recordUuid`/
 lineNumber) — progress needs the same treatment before phase 3's relay work can build on it.
 
-- [ ] Give each `ProgressEntry` a per-entry change marker (e.g. `updatedAt`), stamped by
-      whichever side computes a real change to that entry.
-- [ ] Push (web-app → server): `js/progress-sync.js` sends only entries changed since its own
-      last successful push; server merges by `bibNumber` into the stored `progress.json`
-      (mirrors `POST /api/mobile/:raceLabel`'s existing merge-by-`recordUuid` shape).
-- [ ] Fetch (`GET /api/mobile/:raceLabel/progress`): extend `knownGeneratedAt` into a real
-      `?since=<cursor>` that returns only entries with `updatedAt > since` (keep today's
-      `{unchanged:true}` shortcut for zero-changed). `ProgressRepository.refreshFromServer`
-      merges by `bibNumber` instead of replacing wholesale.
-- [ ] BLE delivery: `deliverProgress()` diffs against the receiver's `DeviceInfo.progressGeneratedAt`
-      before sending; receiver merge uses the same by-`bibNumber` logic as the HTTP path (one
-      merge function, two transports).
-- [ ] Unit tests for the new merge/diff logic on both sides.
+- [x] Give each `ProgressEntry` a per-entry change marker (`updatedAt`, ISO string), stamped
+      server-side (same "server, not the client, is authoritative" precedent `generatedAt`
+      already set) in `server/mobile.js`'s new `mergeProgress()`. Mirrored on the mobile side as
+      `ProgressEntry.updatedAt: String?` (`MuleGattProfile.kt`).
+- [x] Push (web-app → server): `js/progress-sync.js` diffs a freshly built payload against an
+      in-memory per-owner+raceLabel snapshot of its own last successful push
+      (`lastPushedByRaceLabel`, deliberately not persisted — see its own doc for why a page
+      reload should self-heal by re-sending everything) and sends only `{entries: changed,
+      removed: [bibNumber...]}`. New route `POST .../progress` body shape change +
+      `mergeProgress()` (`server/mobile.js`) upserts by `bibNumber` and drops anything in
+      `removed` — mirrors `POST /api/mobile/:raceLabel`'s existing merge-by-`recordUuid` shape.
+      A course that had entries and now has none still pushes (to carry `removed`), fixed after
+      an initial version wrongly skipped it — see `js/progress-sync.js`'s own doc.
+- [x] Fetch (`GET /api/mobile/:raceLabel/progress`): `knownGeneratedAt` renamed to `since`
+      throughout (server + `MuleSyncClient.getProgress`) and now doubles as the delta cursor —
+      `entries` is filtered to `updatedAt > since` server-side, keeping the existing
+      `{unchanged:true}` shortcut for the zero-changed case. `ProgressRepository.refreshFromServer`
+      merges the response into the *Room-persisted* copy (not just in-memory `current`) by
+      `bibNumber` — see `mergeEntries`'s own doc for the one known gap this doesn't close (a bib
+      removed server-side has no signal on this read path yet, only the push path's `removed`
+      list — accepted as a rare, low-stakes limitation for now, not built out further).
+- [x] New route `GET /api/mobile/races?maxAgeDays=N` + `getAvailableRacesForUser()`
+      (`server/mobile.js`) — lean, server-filtered, feeds Setup Race's online branch (see phase 2
+      below) — grouped here since it shares the same "server does the filtering, not the client"
+      principle as the delta work, even though it's not itself a delta mechanism.
+- [x] BLE delivery: `deliverProgress()`'s call site in `pullFromConnectedPhone`
+      (`js/mule-ble.js`) diffs against the receiver's own `DeviceInfo.progressGeneratedAt` before
+      sending, transmitting only entries with `updatedAt` newer than it. Receiving side
+      (`ProgressRepository.storeFromBle`) merges by `bibNumber` via the same `mergeEntries` the
+      HTTP fetch path uses.
+- [x] Unit tests for the new merge/diff logic on both sides: `test/server/mobile.test.js`
+      (`mergeProgress`/`touchProgress`/`getAvailableRacesForUser`), `test/progress-sync.test.js`
+      (delta push + `removed`), `test/mule-ble.test.js` (delta BLE delivery),
+      `ProgressRepositoryTest.kt` (delta merge on receipt, both transports share the same path).
+- [x] **Verify**: `npm test` (647 passing, up from 633) and `./gradlew testDebugUnitTest`/`check`/
+      `assembleDebug` all pass. HTTP-level sanity check against the real local dev server (see
+      phase 2's own verify note below) confirmed touch/merge/removal/delta-fetch all behave
+      exactly as specified, using a throwaway test account cleaned up afterward — no real
+      `mobile/giz`/`mobile/mercia` data touched.
 
 ### Phase 1 — mobile race setup simplification (mobile-only) — DONE 2026-09-14
 
@@ -259,44 +285,77 @@ lineNumber) — progress needs the same treatment before phase 3's relay work ca
       that last leg.
 - [x] Commit phase 1 (local only, no push).
 
-### Phase 2 — internet-mode workflow (both repos)
+### Phase 2 — internet-mode workflow (both repos) — DONE 2026-09-14
 
 #### Web-app (`racemaster`)
 
-- [ ] New route `POST /api/mobile/:owner/:raceLabel/progress/touch` (`server/routes/mobile.js`)
+- [x] New route `POST /api/mobile/:owner/:raceLabel/progress/touch` (`server/routes/mobile.js`)
       + `touchProgress(username, raceLabel)` in `server/mobile.js` — rewrites existing
       `progress.json` with only `generatedAt` refreshed, no `entries` re-sent, 404 if none exists
       yet.
-- [ ] "Activate Race" button on `js/views/event.js` (Event Settings) — one touch-route call per
-      course this event has, via `deriveRaceLabel(state.event, course)`
-      (`js/mobile-files-shared.js`). Must never touch a race outside the currently loaded event.
-- [ ] New route `GET /api/mobile/races?maxAgeDays=N` (`server/routes/mobile.js`) +
+- [x] "Activate Race" button — on `js/views/event.js` (Event Settings, not the Mobile Files "All
+      Files" tab — deliberate, see correction #1), one touch-route call per course this event
+      has via `deriveRaceLabel(state.event, course)` (`js/mobile-files-shared.js`). New
+      `apiTouchProgress()` in `js/storage.js`. Only ever touches this event's own race label(s).
+      No dedicated test file — matches this codebase's existing convention that `js/views/*.js`
+      DOM-wiring modules aren't unit tested (confirmed: no `test/views/` directory exists at all,
+      no other view module has a test file either).
+- [x] New route `GET /api/mobile/races?maxAgeDays=N` (`server/routes/mobile.js`) +
       `getAvailableRacesForUser(username, maxAgeDays, adminAccess)` in `server/mobile.js` — lean
       shape `{raceLabel, raceName, raceDate, generatedAt}[]`, filtered server-side to
       `generatedAt` within `maxAgeDays`, sorted newest-first. No `devices`/`lines`/`recordCount`.
 
 #### Mobile app (`racemaster-mobile`)
 
-- [ ] `data/mule/MuleSyncClient.kt`: add `getAvailableRaces(baseUrl, token, maxAgeDays)` calling
-      the new route, passing `SettingsRepository.raceStaleAfterDays`.
-- [ ] Extend `SetupRaceScreen`/`SetupRaceViewModel` with an online branch: after location entry,
-      call `getAvailableRaces`, present as a picker (reuse `CoursePickerDialog.kt`'s list-picker
-      chrome as the template before it's deleted in phase 1, or recreate the same shape).
-- [ ] Race-id-then-progress sequencing: only call `startNewRace()` at the moment of picking (not
-      while browsing), then `ProgressRepository.refreshFromServer(...)` under the new `raceId`.
-- [ ] Device-file-on-setup: trigger `MuleRepository.pushToServer()`'s existing push
-      (`POST /api/mobile/{raceLabel}`) once with an empty record array, immediately on
-      setup-complete (both picked-from-server and typed-manually cases).
-- [ ] Server-unreachable fallback: share one "server unreachable → flip to mule broadcast"
-      function between the setup-time scan/push and the ongoing sync loop's existing
-      401/403-reauth path (`MuleRepository.pushToServer()` ~line 412).
-- [ ] **Verify**: end-to-end against the local dev server (`./gradlew devServer`) — Activate Race
-      bumps `generatedAt` only for the current event's race label(s); `GET /api/mobile/races`
-      returns only non-stale races with no device/line payload; setup picker shows results
-      newest-first; picking one creates the local race + device file server-side with an empty
-      initial record array. Confirm via devtools/BLE logs that only changed entries move once
-      real data exists.
-- [ ] Commit phase 2 (local only, no push).
+- [x] `data/mule/MuleSyncClient.kt`: `getAvailableRaces(baseUrl, token, maxAgeDays)` calling the
+      new route. New `AvailableRace` model.
+- [x] `data/mule/MuleRepository.kt`: `getAvailableRaces(maxAgeDays)` wraps the client call with
+      the same one-shot 401/403 reauthenticate `pushToServer()` already has, returning `null`
+      ("couldn't ask at all — not logged in, or truly unreachable") vs. an empty list
+      ("reachable, nothing recent") so the screen can say why, though both degrade to the same
+      manual-entry fallback.
+- [x] Extended `SetupRaceScreen`/`SetupRaceViewModel` with an online branch: "Scan Server for
+      Recent Races" button (enabled once location is entered) → `AvailableRacesState`
+      (`NotChecked`/`Loading`/`Found`/`Unavailable`) → a picker `AlertDialog` listing
+      `raceName`/`raceLabel` per result; `Unavailable` shows inline text pointing at the manual
+      name field, which stays visible either way — this *is* the "server-unreachable fallback"
+      (see below), not a separate mechanism.
+- [x] Race-id-then-progress sequencing: new `RaceRepository.adoptRaceLabel(raceLabel, location)`
+      (deliberately not `startNewRace` + hoping `buildRaceLabel` reconstructs the same date —
+      the picked race may have been registered on an earlier date, so the label is adopted
+      exactly, not rebuilt — see its own doc) creates the local race row *at the moment of
+      picking*; `SetupRaceViewModel.pickAvailableRace` then calls
+      `ProgressRepository.refreshFromServer(...)` under the new `raceId` before announcing.
+- [x] Device-file-on-setup: already implemented in phase 1 via `MuleRepository.announceRaceSetup`
+      — confirmed it's called from both the manual (`save()`) and online (`pickAvailableRace()`)
+      paths; no new work needed here.
+- [x] Server-unreachable fallback: `MuleRepository.getAvailableRaces` returning `null`/empty
+      naturally degrades the screen to the always-present manual name field (see above) — no
+      separate "flip to mule broadcast" mechanism built, since that's genuinely phase 3's own
+      job (manual entry today just means typing a name, same as offline), not this phase's.
+- [x] New tests: `RaceLabelsTest.kt` (`raceNameFromLabel`, `buildRaceLabel`'s own inverse),
+      `ProgressRepositoryTest.kt` additions (delta merge on `storeFromBle`, covering the same
+      path `refreshFromServer` shares). `MuleRepository`/`RaceRepository` methods needing real
+      network/DB dependencies are *not* unit tested — matches this codebase's existing pattern
+      (confirmed: no `MuleSyncClientTest.kt`/`RaceRepositoryTest.kt` exist either; `MuleRepositoryTest.kt`
+      only ever covered pure free functions, never the class's own DB/network methods).
+- [x] **Verify**: `./gradlew testDebugUnitTest`/`check`/`assembleDebug` all pass. HTTP-level
+      sanity check against the real local dev server (`./gradlew devServer`), using a throwaway
+      `deltatest` account created via `POST /api/auth/create` and fully cleaned up afterward
+      (`mobile/deltatest/` deleted, its `users.txt`/`sessions.txt` lines removed) — confirmed:
+      touch 404s with no `progress.json` yet, bumps only `generatedAt` once one exists; a delta
+      push merges by `bibNumber` and honors `removed`; `GET .../progress?since=` returns only the
+      entries changed since that cursor, `unchanged:true` when it matches current `generatedAt`;
+      `GET /api/mobile/races?maxAgeDays=` filters correctly (0.0000001 days → empty,
+      30 days → the test race) and 400s with no `maxAgeDays` at all. Installed the build on a
+      real device (`A756XXCM9A2200A5`) already mid-race with real data — launched clean, no
+      crash, upgrade preserved its existing race untouched, new "Scan Server for Recent Races"
+      button renders correctly on Setup Race (disabled, since that device already has an active
+      race — the same reason the actual scan/pick flow, and Activate Race's own web-UI, weren't
+      exercised live: doing so would have required disrupting real in-progress race data on the
+      only devices available). That live exercise is genuinely outstanding — noted, not silently
+      skipped.
+- [x] Commit phase 2 (local only, no push).
 
 ### Phase 3 — BT-mule-only workflow (both repos)
 

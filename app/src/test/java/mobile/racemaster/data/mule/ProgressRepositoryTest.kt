@@ -168,4 +168,51 @@ class ProgressRepositoryTest {
 
         assertTrue(repository.current.value != null)
     }
+
+    // Delta merging — storeFromBle/refreshFromServer's shared mergeEntries() (see its own doc):
+    // a later payload carrying only some entries must upsert into what's already stored, not
+    // replace it wholesale — mirrors racemaster's own server-side mergeProgress by design.
+
+    @Test
+    fun aSecondStoreFromBlePayloadWithOnlyOneChangedEntryLeavesTheOtherStoredEntriesAlone() = runTest {
+        val first = ProgressPayload(
+            raceName = "Test Race", raceDate = "23/08/2026", generatedAt = "2026-08-23T10:00:00.000Z",
+            entries = listOf(
+                ProgressEntry(bibNumber = 1, name = "Dave", course = "Seniors"),
+                ProgressEntry(bibNumber = 2, name = "Amy", course = "Juniors"),
+            ),
+        )
+        repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = first)
+
+        val delta = ProgressPayload(
+            raceName = "Test Race", raceDate = "23/08/2026", generatedAt = "2026-08-23T11:00:00.000Z",
+            entries = listOf(ProgressEntry(bibNumber = 1, name = "Dave", course = "Seniors", finishTime = "00:45:00")),
+        )
+        repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = delta)
+
+        val stored = repository.getStored(1L)
+        assertEquals("2026-08-23T11:00:00.000Z", stored?.generatedAt)
+        assertEquals(2, stored?.entries?.size)
+        assertEquals("00:45:00", stored?.entries?.find { it.bibNumber == 1 }?.finishTime)
+        assertEquals("Amy", stored?.entries?.find { it.bibNumber == 2 }?.name)
+    }
+
+    @Test
+    fun anEmptyDeltaChangesOnlyGeneratedAtAndLeavesEveryStoredEntryUntouched() = runTest {
+        val first = ProgressPayload(
+            raceName = "Test Race", raceDate = "23/08/2026", generatedAt = "2026-08-23T10:00:00.000Z",
+            entries = listOf(ProgressEntry(bibNumber = 1, name = "Dave", course = "Seniors")),
+        )
+        repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = first)
+
+        val touch = ProgressPayload(
+            raceName = "Test Race", raceDate = "23/08/2026", generatedAt = "2026-08-23T12:00:00.000Z",
+            entries = emptyList(),
+        )
+        repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = touch)
+
+        val stored = repository.getStored(1L)
+        assertEquals("2026-08-23T12:00:00.000Z", stored?.generatedAt)
+        assertEquals(listOf(ProgressEntry(bibNumber = 1, name = "Dave", course = "Seniors")), stored?.entries)
+    }
 }

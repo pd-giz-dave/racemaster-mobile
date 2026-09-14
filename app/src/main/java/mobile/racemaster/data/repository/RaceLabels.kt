@@ -13,3 +13,14 @@ fun buildRaceLabel(name: String, course: String, timestampMillis: Long = System.
     val trimmedCourse = course.trim()
     return if (trimmedCourse.isEmpty()) "${name.trim()}-$date" else "${name.trim()}-$trimmedCourse-$date"
 }
+
+// buildRaceLabel's own inverse for the one case that needs it: Setup Race's online branch picks
+// a race off the server by its raceLabel (e.g. "pontesbury-seniors-26-09-14", the web app's own
+// course-suffixed convention — see racemaster's js/mobile-files-shared.js deriveRaceLabel), and
+// this device's own RaceEntity.name needs to become "pontesbury-seniors" — the whole label minus
+// its own trailing date, not the server's separate (course-less) raceName field, since the
+// picked course is only ever encoded in the label's suffix, never sent as its own field. Returns
+// the label unchanged if it doesn't end in a date at all (defensive — every label this app or the
+// web app builds always does).
+private val TRAILING_DATE = Regex("-\\d{2}-\\d{2}-\\d{2}$")
+fun raceNameFromLabel(raceLabel: String): String = raceLabel.replace(TRAILING_DATE, "")

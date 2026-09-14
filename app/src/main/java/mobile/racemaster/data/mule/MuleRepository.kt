@@ -396,6 +396,29 @@ class MuleRepository(
         runCatching { syncClient.pushRecords(baseUrl, token, raceLabel, mapOf(myDeviceName to emptyList<SyncRecord>())) }
     }
 
+    /** Setup Race's own online branch — races this owner has recent server-side progress for,
+     *  within [maxAgeDays] (see [SettingsRepository.raceStaleAfterDays]), for the operator to
+     *  pick from instead of typing a name manually. Returns null — never an empty list, which
+     *  means "reachable, genuinely nothing recent" — for "couldn't ask at all": not logged in,
+     *  or the request itself failed even after one reauthenticate attempt on a 401/403 (same
+     *  one-shot recovery [pushToServer] already has, see [reauthenticate]'s own doc; scoped to
+     *  right here since this is never called from that loop). The caller's job either way is the
+     *  same — fall back to manual race-name entry — but null vs. empty lets the screen say
+     *  *why* there's nothing to pick from. */
+    suspend fun getAvailableRaces(maxAgeDays: Int): List<AvailableRace>? {
+        val baseUrl = settingsRepository.serverBaseUrl.first() ?: return null
+        var token = settingsRepository.authToken.first() ?: return null
+        return try {
+            syncClient.getAvailableRaces(baseUrl, token, maxAgeDays)
+        } catch (e: ServerRequestException) {
+            if (e.statusCode != 401 && e.statusCode != 403) return null
+            token = reauthenticate(baseUrl) ?: return null
+            runCatching { syncClient.getAvailableRaces(baseUrl, token, maxAgeDays) }.getOrNull()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /** Pushes on to the server everything this device knows about for every race label it has
      *  any connection to — its own local races (built fresh from [RaceRepository]'s own
      *  [mobile.racemaster.data.db.entity.HistoryLineEntity] rows on every single attempt, no

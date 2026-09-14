@@ -121,9 +121,11 @@ private suspend fun checkSuccess(response: HttpResponse) {
 }
 
 // Response for GET .../progress — see MuleSyncClient.getProgress's own doc. `unchanged` true
-// means the server confirmed knownGeneratedAt already matched, in which case `entries` is
-// omitted server-side and defaults to empty here (ProgressRepository.refreshFromServer never
-// reads entries in that case anyway — see its own doc).
+// means the server confirmed `since` already matched its own current generatedAt, in which case
+// `entries` is omitted server-side and defaults to empty here (ProgressRepository.refreshFromServer
+// never reads entries in that case anyway — see its own doc). When `unchanged` is false, `entries`
+// is a *delta* — only entries whose own updatedAt is newer than `since` — not the full race, once
+// `since` was actually passed (see racemaster's server/routes/mobile.js GET .../progress doc).
 @Serializable
 data class ProgressResponse(
     val unchanged: Boolean = false,
@@ -131,6 +133,17 @@ data class ProgressResponse(
     val raceName: String = "",
     val raceDate: String = "",
     val entries: List<ProgressEntry> = emptyList(),
+)
+
+// One entry from GET /api/mobile/races?maxAgeDays=N — see MuleSyncClient.getAvailableRaces' own
+// doc. Deliberately lean (no devices/lines/recordCount) — this is the setup-time server-race-scan
+// a phone with restricted mobile data runs, not the Mobile Files page's own heavier listing.
+@Serializable
+data class AvailableRace(
+    val raceLabel: String = "",
+    val raceName: String = "",
+    val raceDate: String = "",
+    val generatedAt: String = "",
 )
 
 /** Outcome of a [MuleSyncClient.ping] call, kept separate from the interpretation of what it
@@ -246,11 +259,15 @@ class MuleSyncClient {
     // HTTP twin of the racemaster web app's own BLE delivery (PeripheralSyncService's
     // PROGRESS_CHARACTERISTIC_UUID handling). Bearer-authed, like getSyncStatus/pushRecords —
     // deliberately requires login, unlike progress.json's own incidental unauthenticated
-    // exposure via the server's static-file route. [knownGeneratedAt] is the bandwidth-saving
-    // hint — pass whatever ProgressRepository already has cached for this race, or null on a
-    // first-ever fetch — omitted from the request entirely rather than sent empty, so the server
-    // can tell "never fetched before" apart from "fetched, but held nothing that time" purely by
-    // the query parameter's presence.
+    // exposure via the server's static-file route. [since] is both the bandwidth-saving hint and
+    // the delta cursor — pass whatever generatedAt ProgressRepository already has cached for this
+    // race, or null on a first-ever fetch — omitted from the request entirely rather than sent
+    // empty, so the server can tell "never fetched before" (send everything) apart from "fetched,
+    // but held nothing that time" purely by the query parameter's presence. When it doesn't match
+    // the server's own current generatedAt, the response's `entries` is a delta (only entries
+    // whose own updatedAt is newer than [since]), not the whole race — see ProgressResponse's own
+    // doc, and ProgressRepository.refreshFromServer for how that gets merged in rather than
+    // replacing what's already stored.
     //
     // Returns null for a 404 (server/routes/mobile.js's GET .../progress: "No progress recorded
     // for this race yet") — the ordinary, expected outcome for the overwhelming majority of
@@ -260,13 +277,30 @@ class MuleSyncClient {
     // {"error": "..."} body was silently decoding into an all-default ProgressResponse instead,
     // which ProgressRepository then stored as if it were genuine empty progress data, cluttering
     // the Races page with a spurious entry for every race that simply never had one pushed).
-    suspend fun getProgress(baseUrl: String, token: String, raceLabel: String, knownGeneratedAt: String?): ProgressResponse? {
+    suspend fun getProgress(baseUrl: String, token: String, raceLabel: String, since: String?): ProgressResponse? {
         val response = client.get("${baseUrl.trimEnd('/')}/api/mobile/${encodePathSegment(raceLabel)}/progress") {
             expectSuccess = false
             bearerAuth(token)
-            knownGeneratedAt?.let { parameter("knownGeneratedAt", it) }
+            since?.let { parameter("since", it) }
         }
         return if (response.status.isSuccess()) response.body() else null
+    }
+
+    // The mobile app's own setup-time server-race-scan (SetupRaceScreen/SetupRaceViewModel) —
+    // races this owner has progress.json for, whose generatedAt is within [maxAgeDays], leanest
+    // shape available (no devices/lines/recordCount — see AvailableRace's own doc and TODO.md's
+    // phase-2 correction on why this needed to be server-side filtered rather than downloading
+    // GET /api/mobile's full listing just to filter it client-side). Empty list (not an
+    // exception) for a genuinely empty result — 404 never applies here, an empty list is a valid,
+    // ordinary answer ("nothing recent"), unlike getProgress's single-race 404.
+    suspend fun getAvailableRaces(baseUrl: String, token: String, maxAgeDays: Int): List<AvailableRace> {
+        val response = client.get("${baseUrl.trimEnd('/')}/api/mobile/races") {
+            expectSuccess = false
+            bearerAuth(token)
+            parameter("maxAgeDays", maxAgeDays)
+        }
+        checkSuccess(response)
+        return response.body()
     }
 
     fun close() {

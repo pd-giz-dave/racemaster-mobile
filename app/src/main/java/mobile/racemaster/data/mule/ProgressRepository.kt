@@ -68,9 +68,13 @@ class ProgressRepository(private val syncClient: MuleSyncClient, private val pro
     val current: StateFlow<StoredProgress?> = _current.asStateFlow()
 
     /** [PeripheralSyncService]'s progress-write handler calls this once a chunked BLE delivery is
-     *  fully reassembled and decoded. */
+     *  fully reassembled and decoded. [payload.entries] may be a delta (only what changed since
+     *  this device's own last-reported progressGeneratedAt — see mule-ble.js's own deliverProgress
+     *  doc) rather than the whole race, so it's merged into whatever's already stored for
+     *  [raceId], not treated as the complete set — see [mergeEntries]'s own doc. */
     suspend fun storeFromBle(raceId: Long, raceLabel: String, payload: ProgressPayload) {
-        store(StoredProgress(raceId, raceLabel, payload.generatedAt, payload.raceName, payload.raceDate, payload.entries))
+        val merged = mergeEntries(existingEntries(raceId), payload.entries)
+        store(StoredProgress(raceId, raceLabel, payload.generatedAt, payload.raceName, payload.raceDate, merged))
     }
 
     /** What DeviceInfo.progressGeneratedAt should report for [raceId] — null if this repository
@@ -91,16 +95,45 @@ class ProgressRepository(private val syncClient: MuleSyncClient, private val pro
     }
 
     /** Fetches progress for [raceId]/[raceLabel] from the server, sending whatever generatedAt is
-     *  already cached for this exact race as the bandwidth-saving hint (see
+     *  already cached for this exact race as the bandwidth-saving/delta-cursor hint (see
      *  [MuleSyncClient.getProgress]'s own doc) — a no-op (network call still happens, but nothing
-     *  is overwritten) when the server reports `unchanged`. Swallows any failure (unreachable
-     *  server, etc.) the same best-effort way [MuleRepository]'s own server-facing calls do. */
+     *  is overwritten) when the server reports `unchanged`. Otherwise [response.entries] is a
+     *  delta once a hint was actually sent, merged into whatever's already stored for [raceId]
+     *  rather than replacing it outright — see [mergeEntries]'s own doc, including the one gap
+     *  that merge can't close on its own (a bib removed server-side since the last fetch has no
+     *  way to signal that on this read path yet — the write path's own `removed` list, see
+     *  racemaster's server/mobile.js mergeProgress, has no fetch-side counterpart; a genuinely
+     *  stale/removed bib can linger in a phone's local copy until this race's progress is deleted
+     *  and re-synced from scratch. Rare enough in practice — an admin deleting a registered
+     *  runner mid-race — and low-enough-stakes — phase 4's auto-expectation lists aren't built on
+     *  this data yet — to accept rather than build full tombstone tracking for right now). Swallows
+     *  any failure (unreachable server, etc.) the same best-effort way [MuleRepository]'s own
+     *  server-facing calls do. */
     suspend fun refreshFromServer(baseUrl: String, token: String, raceId: Long, raceLabel: String) {
         val known = generatedAtFor(raceId)
         val response = runCatching { syncClient.getProgress(baseUrl, token, raceLabel, known) }.getOrNull() ?: return
         if (!response.unchanged) {
-            store(StoredProgress(raceId, raceLabel, response.generatedAt.orEmpty(), response.raceName, response.raceDate, response.entries))
+            val merged = mergeEntries(existingEntries(raceId), response.entries)
+            store(StoredProgress(raceId, raceLabel, response.generatedAt.orEmpty(), response.raceName, response.raceDate, merged))
         }
+    }
+
+    // The Room-persisted copy, not [current] — correct even across an app restart or a race
+    // that isn't the currently-active one (refreshFromServer is only ever called for the active
+    // race today, but this stays correct regardless of that happening to be true).
+    private suspend fun existingEntries(raceId: Long): List<ProgressEntry> =
+        progressDao.getByRaceId(raceId)?.toStoredProgress()?.entries.orEmpty()
+
+    // Upserts [changed] into [existing] by bibNumber — a changed bib replaces its old entry, a
+    // new bib is added, everything else is left exactly as it was. Mirrors racemaster's own
+    // server/mobile.js mergeProgress (the write-side counterpart), just with no equivalent of its
+    // `removed` list on this read path — see refreshFromServer's own doc for that gap.
+    private fun mergeEntries(existing: List<ProgressEntry>, changed: List<ProgressEntry>): List<ProgressEntry> {
+        if (changed.isEmpty()) return existing
+        val byBib = LinkedHashMap<Int, ProgressEntry>(existing.size + changed.size)
+        for (entry in existing) byBib[entry.bibNumber] = entry
+        for (entry in changed) byBib[entry.bibNumber] = entry
+        return byBib.values.toList()
     }
 
     private suspend fun store(progress: StoredProgress) {

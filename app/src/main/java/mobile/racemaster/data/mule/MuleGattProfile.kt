@@ -505,6 +505,13 @@ data class ProgressEntry(
     val startTime: String = "",
     val finishTime: String = "",
     val cpTimes: Map<String, String> = emptyMap(),
+    // Server-stamped ISO timestamp of when this specific entry last actually changed (see
+    // racemaster's own server/mobile.js mergeProgress doc) — null only for a payload from before
+    // this field existed. What a delta fetch/delivery (see MuleSyncClient.getProgress's own
+    // `since` param and mule-ble.js's own deliverProgress doc) filters entries by, and what
+    // ProgressRepository's merge-by-bibNumber keys a "did this entry actually change" decision
+    // off when reconciling a partial payload into what's already stored locally.
+    val updatedAt: String? = null,
 )
 
 /** Race-wide progress payload — see [ProgressEntry]'s own doc. [generatedAt] is the racemaster

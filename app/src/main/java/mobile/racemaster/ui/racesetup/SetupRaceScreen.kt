@@ -4,15 +4,21 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -31,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
+import mobile.racemaster.data.mule.AvailableRace
 import mobile.racemaster.data.repository.isValidRaceName
 import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.ui.components.HistoryTextField
@@ -51,6 +58,7 @@ fun SetupRaceScreen(
     val hasActiveRace by viewModel.hasActiveRace.collectAsStateWithLifecycle()
     val raceNameHistory by viewModel.raceNameHistory.collectAsStateWithLifecycle()
     val locationHistory by viewModel.locationHistory.collectAsStateWithLifecycle()
+    val availableRaces by viewModel.availableRaces.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
@@ -119,6 +127,37 @@ fun SetupRaceScreen(
                 keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            // Online branch — scan the server for this owner's own recent races and pick one
+            // instead of typing a name (TODO.md's phase 2). Location must already be entered:
+            // the picked race still needs it (see SetupRaceViewModel.pickAvailableRace), and
+            // asking for it up front avoids a second interruption right after picking.
+            OutlinedButton(
+                onClick = withClickSound { viewModel.scanServer() },
+                enabled = !hasActiveRace && location.isNotBlank() && availableRaces != AvailableRacesState.Loading,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Scan Server for Recent Races") }
+            when (val state = availableRaces) {
+                AvailableRacesState.Loading -> CircularProgressIndicator(modifier = Modifier.padding(8.dp))
+                AvailableRacesState.Unavailable -> Text(
+                    "No recent race found on the server (or it's unreachable) — enter a race name below instead.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                AvailableRacesState.NotChecked -> {}
+                is AvailableRacesState.Found -> AvailableRacesDialog(
+                    races = state.races,
+                    onPick = { race ->
+                        isSaving = true
+                        scope.launch {
+                            viewModel.pickAvailableRace(race, location)
+                            onDone()
+                        }
+                    },
+                    onDismiss = viewModel::dismissAvailableRaces,
+                )
+            }
+
+            Text("— or enter a race name manually —", style = MaterialTheme.typography.bodySmall)
             Button(
                 onClick = withClickSound {
                     isSaving = true
@@ -132,4 +171,33 @@ fun SetupRaceScreen(
             ) { Text("Create") }
         }
     }
+}
+
+@Composable
+private fun AvailableRacesDialog(races: List<AvailableRace>, onPick: (AvailableRace) -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = withClickSound(onDismiss),
+        title = { Text("Recent races") },
+        text = {
+            if (races.isEmpty()) {
+                Text("No recent races found on the server.")
+            } else {
+                LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                    items(races, key = { it.raceLabel }) { race ->
+                        TextButton(
+                            onClick = withClickSound { onPick(race) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Text(race.raceName.ifBlank { race.raceLabel }, style = MaterialTheme.typography.bodyLarge)
+                                Text(race.raceLabel, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = withClickSound(onDismiss)) { Text("Cancel") } },
+    )
 }
