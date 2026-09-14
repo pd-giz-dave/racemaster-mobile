@@ -614,6 +614,30 @@ class MuleSyncEngine(
         Log.d(TAG, "first-sighting connect succeeded: key=$key deviceId=${info.deviceId} deviceName=${info.deviceName}")
         val since = muleRepository.lastPulledLineNumber(info.deviceId, info.raceLabel)
         mergeDeviceInfo(key, device, info, since)
+        deliverTargetedProgressIfPending(device.requiredAdvertisement, info.deviceId, peerLabel)
+    }
+
+    // Phase 3: if this device is holding a targeted-relay progress payload (see
+    // ProgressRepository's own doc) for [targetDeviceId] — either because [advertisement]
+    // genuinely IS that device (a direct hop) or because it's separately proven, via its own
+    // relay manifest, to be able to reach it (a further hop — see pullAllVisibleDevices' own
+    // relay-forward call site) — hands it off now, over a connection this device was already
+    // making to [advertisement] for this tick's own DeviceInfo/relay-manifest work anyway. This
+    // device never needs to know the full chain to the true origin, only whether the peer it's
+    // about to talk to is either the target itself or proven a step closer to it — see TODO.md's
+    // phase-3 "mule-to-mule chains" doc for the recursive design this participates in. Evicts on
+    // success only — see ProgressRepository.evictTargetedProgress's own doc for why a failed
+    // handoff deliberately leaves the cache entry alone instead (simply retried next tick, same
+    // self-correcting posture as every other best-effort delivery in this file).
+    private suspend fun deliverTargetedProgressIfPending(advertisement: Advertisement, targetDeviceId: String, peerLabel: String) {
+        val maxAgeDays = settingsRepository.raceStaleAfterDays.first()
+        val pending = progressRepository.pendingTargetedProgress(targetDeviceId, maxAgeDays) ?: return
+        runCatching { muleRepository.deliverTargetedProgress(advertisement, targetDeviceId, pending) }
+            .onSuccess {
+                progressRepository.evictTargetedProgress(targetDeviceId)
+                Log.d(TAG, "targeted progress handed off: targetDeviceId=$targetDeviceId via=$peerLabel")
+            }
+            .onFailure { Log.w(TAG, "targeted progress handoff failed: targetDeviceId=$targetDeviceId via=$peerLabel", it) }
     }
 
     /** "Forget" a device — purges any live entry for it from [discoveredFlow]/[relayFlow]
@@ -904,6 +928,7 @@ class MuleSyncEngine(
                 }
                 val since = muleRepository.lastPulledLineNumber(freshInfo.deviceId, freshInfo.raceLabel)
                 mergeDeviceInfo(key, device, freshInfo, since)
+                deliverTargetedProgressIfPending(device.requiredAdvertisement, freshInfo.deviceId, peerLabel)
                 val hasNewData = freshInfo.lastLineNumber - since > 0
                 Log.d(TAG, "pull decision: key=$key deviceId=${freshInfo.deviceId} lastLineNumber=${freshInfo.lastLineNumber} since=$since hasNewData=$hasNewData")
                 if (hasNewData) {
@@ -945,6 +970,20 @@ class MuleSyncEngine(
                 } else {
                     emptyList()
                 }
+
+                // Phase 3 relay-forward: [relayEntries] just proved this peer can reach each of
+                // these origins (it's already relaying their records) — for any one of them this
+                // device happens to be holding a targeted progress payload for, hand it off here
+                // too, tagged for that origin, letting the peer either deliver it directly (if
+                // the origin turns out to be itself) or cache-and-forward it again the exact same
+                // way. Deliberately uses the raw relayEntries, not relevantRelayEntries below
+                // (which excludes this device's own id — irrelevant here, since nothing would
+                // ever cache a targeted entry addressed to this device's own id under this path;
+                // case-1 direct delivery just above already covers that).
+                for (entry in relayEntries) {
+                    deliverTargetedProgressIfPending(device.requiredAdvertisement, entry.originDeviceId, peerLabel)
+                }
+
                 for (entry in relevantRelayEntries(myDeviceId, relayEntries)) {
                     val relayKey = "relay:${entry.originDeviceId}:${entry.originRaceLabel}"
                     val relaySince = muleRepository.lastPulledLineNumber(entry.originDeviceId, entry.originRaceLabel)

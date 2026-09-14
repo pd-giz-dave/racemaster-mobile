@@ -7,7 +7,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
 import mobile.racemaster.data.db.dao.ProgressDao
+import mobile.racemaster.data.db.dao.TargetedProgressDao
 import mobile.racemaster.data.db.entity.ProgressEntity
+import mobile.racemaster.data.db.entity.TargetedProgressEntity
 
 /** What's currently known about progress for [raceId] — the LOCAL race this was received for,
  *  never re-validated against a reconstructed race-label string for the purpose of deciding
@@ -58,7 +60,11 @@ fun StoredProgress.toPayload(): ProgressPayload = ProgressPayload(raceName, race
  *  Exposes only the transport-agnostic [StoredProgress] — nothing downstream (the Races page,
  *  a future "bib expectations" consumer) needs to know or care whether a given payload arrived
  *  over BLE or HTTP. */
-class ProgressRepository(private val syncClient: MuleSyncClient, private val progressDao: ProgressDao) {
+class ProgressRepository(
+    private val syncClient: MuleSyncClient,
+    private val progressDao: ProgressDao,
+    private val targetedProgressDao: TargetedProgressDao,
+) {
     private val json = Json { ignoreUnknownKeys = true }
 
     // ONLY the currently active race's own most-recently-received copy — never a list, never
@@ -171,4 +177,45 @@ class ProgressRepository(private val syncClient: MuleSyncClient, private val pro
 
     private fun ProgressEntity.toStoredProgress(): StoredProgress =
         StoredProgress(raceId, raceLabel, generatedAt, raceName, raceDate, json.decodeFromString(entriesJson))
+
+    // --- Phase 3: targeted-relay inbox — see TargetedProgressEntity's own doc -----------------
+
+    /** [PeripheralSyncService]'s progress-write handler calls this instead of [storeFromBle] when
+     *  an inbound payload's own [ProgressPayload.targetDeviceId] names some OTHER device — cached
+     *  verbatim (already in whatever delta form the sender computed it against) rather than
+     *  merged into anything, since this device has no race of its own to merge it into; it's
+     *  purely in transit. Replaces any already-cached entry for the same target (see the entity's
+     *  own doc for why an older superseded delta is never worth keeping alongside a newer one). */
+    suspend fun cacheTargetedProgress(targetDeviceId: String, payload: ProgressPayload) {
+        targetedProgressDao.upsert(
+            TargetedProgressEntity(
+                targetDeviceId = targetDeviceId,
+                payloadJson = json.encodeToString(payload),
+                receivedAtMillis = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    /** Whatever this device is currently holding to forward on to [targetDeviceId] — null if
+     *  nothing's cached, or what's cached is older than [maxAgeDays] (the same
+     *  [SettingsRepository.raceStaleAfterDays] cutoff [PeripheralSyncService]'s own relay
+     *  manifest freshness already uses — see [isRaceStale]). Read, not consumed:
+     *  [evictTargetedProgress] is the caller's own job once a delivery genuinely succeeds,
+     *  mirroring [mobile.racemaster.data.db.entity.PulledRecordEntity]'s own
+     *  read-then-separately-confirm shape — see [mobile.racemaster.data.mule.MuleSyncEngine]'s
+     *  own call sites for why a failed handoff deliberately leaves the entry alone instead
+     *  (retried on the very next tick, no special-casing needed). */
+    suspend fun pendingTargetedProgress(targetDeviceId: String, maxAgeDays: Int): ProgressPayload? {
+        val row = targetedProgressDao.getByTarget(targetDeviceId) ?: return null
+        if (isRaceStale(row.receivedAtMillis, maxAgeDays)) return null
+        return runCatching { json.decodeFromString<ProgressPayload>(row.payloadJson) }.getOrNull()
+    }
+
+    /** Clears a targeted-relay inbox entry once its own handoff genuinely succeeds — see
+     *  [pendingTargetedProgress]'s own doc; the one place an entry actually leaves the inbox
+     *  short of it simply going stale (handled by [pendingTargetedProgress]'s own filter, no
+     *  separate sweep needed). */
+    suspend fun evictTargetedProgress(targetDeviceId: String) {
+        targetedProgressDao.deleteByTarget(targetDeviceId)
+    }
 }

@@ -357,7 +357,7 @@ lineNumber) — progress needs the same treatment before phase 3's relay work ca
       skipped.
 - [x] Commit phase 2 (local only, no push).
 
-### Phase 3 — BT-mule-only workflow (both repos)
+### Phase 3 — BT-mule-only workflow (both repos) — DONE 2026-09-14
 
 Highest-risk phase — genuine wire-protocol extension, not just app logic (the browser can only
 ever write to the mule it's directly connected to; reaching a relayed device requires the mule to
@@ -365,50 +365,110 @@ cache-and-forward on its own next pull cycle, recursively through further mule h
 
 #### Web-app (`racemaster`)
 
-- [ ] "Adopted devices" selection state, keyed by `originDeviceId` (never `raceLabel`), modeled
-      on `js/mobile-files-shared.js`'s existing `selectedKeys`/`rowKey` pattern. Persist in
-      `localStorage` (new key), scoped per logged-in user.
-- [ ] UI: extend `js/views/mobile-files-ble.js` to render the relay manifest with a per-entry
-      adopt toggle (reuse `mobile-files-devices.js`'s row conventions).
-- [ ] Rework `deliverProgress()`/`pullFromConnectedPhone()`/`currentRaceProgressContext()`
-      (`js/views/mobile-files-ble.js` ~line 326): for each adopted relay entry, look up that
-      origin's true-race payload, diff against its reported checkpoint, write only changed
-      entries tagged `targetDeviceId = entry.originDeviceId`, bypassing the `raceLabel`-equality
-      gate for adopted targets only.
+- [x] "Adopted devices" selection state, keyed by `originDeviceId` (never `raceLabel`) —
+      `getAdoptedDevices`/`setAdoptedDevice`/`removeAdoptedDevice` in `js/mule-ble.js`
+      (`{[deviceId]: {raceLabel, deviceName}}`, not a plain Set — adoption needs to remember
+      *which* race a device was assigned to, not just that it's selected), persisted in
+      `localStorage` under a new `racemaster-ble-adopted-devices` key, plain/unscoped the same
+      way the existing `racemaster-ble-known-devices` already is (this codebase has no
+      per-username-scoped localStorage precedent to follow instead).
+- [x] UI: new `#mf-relay-devices` section on the Mobile Files page (`index.html`), rendered by
+      `renderRelayDevices()` in `js/views/mobile-files-ble.js` after every completed pull, from
+      `mule-ble.js`'s new `getCachedRelayEntries()` (exposes the module's own already-existing
+      relay-manifest cache read-only, rather than changing `pullFromConnectedPhone`'s return
+      shape, which every existing caller treats as a bare array). One checkbox per relayed
+      device; ticking assigns it to whichever course (Seniors, falling back to Juniors) the
+      currently loaded event derives a race label for. **Simplified from the original plan**: a
+      plain functional checkbox list, not the full `mobile-files-devices.js`-style themed table —
+      this is a small, occasional-use control, and there was no existing "relay manifest" UI
+      surface at all to extend (confirmed: relay entries were purely internal to `mule-ble.js`'s
+      own pull logic before this).
+- [x] Reworked `pullFromConnectedPhone()` (`js/mule-ble.js`) to accept a new `adoptedTargets:
+      [{deviceId, raceLabel, progress}]` option, built by `currentRaceProgressContext()`
+      (`js/views/mobile-files-ble.js`) from `getAdoptedDevices()` + `getLastKnownRaces()` the same
+      way `currentRaceCandidates` already is. Two delivery legs, both tagging the payload with
+      `targetDeviceId`/`targetRaceLabel` and bypassing the `raceLabel`-equality gate entirely:
+      **direct** (the connected phone itself is an adopted target — diffed against its own
+      `deviceInfo.progressGeneratedAt`, same mechanism the existing own-race leg uses) and
+      **relay-forward** (an adopted target found in the connected phone's own relay manifest —
+      proof that phone can reach it). **Simplified from the original plan**: the relay-forward leg
+      does not diff against the deep origin's own checkpoint before sending (`RelayManifestEntry`
+      carries no `progressGeneratedAt`, only `lastLineNumber`, which is about record sync, not
+      progress — adding one would mean threading a second checkpoint through the whole
+      relay-manifest pipeline purely for this). Accepted as a real, deliberate simplification: a
+      possible redundant re-send at worst, never an incorrect one — each hop's own receiver still
+      only re-adopts/re-caches on a genuine content change (see the mobile-side adoption/cache
+      logic below).
+- [x] Tests: `test/mule-ble.test.js` — direct targeted delivery + its own generatedAt-match
+      skip, relay-forward delivery, "never adopted → never delivered", plus
+      `getAdoptedDevices`/`setAdoptedDevice`/`removeAdoptedDevice`/`getCachedRelayEntries`
+      localStorage round-trips.
 
 #### Mobile app (`racemaster-mobile`)
 
-- [ ] Manual race-name entry (offline branch of `SetupRaceScreen`): free-text name field, existing
-      `PeripheralSyncService` advertisement (no protocol change needed here).
-- [ ] `ProgressRepository.kt`: add an `originDeviceId`-keyed lookup for this phone's own race
-      progress, plus a new **targeted-relay inbox** table (mirrors
-      `PeripheralSyncService`'s existing pulled-records-inbox pattern) holding progress this
-      device is only forwarding, keyed by `targetDeviceId`, stored in delta form.
-- [ ] Wire extension: add `targetDeviceId: String?` to the progress-delivery payload on
-      `PROGRESS_CHARACTERISTIC_UUID` (`MuleGattProfile.kt`), separate from `PullRequest`. A phone
-      receiving a payload targeted at someone else stores it in the inbox and starts advertising
-      it via its own relay-manifest mechanism (generalize `relayManifestVersion`/
-      `computeRelayManifestPayload` in `PeripheralSyncService.kt`) so it keeps propagating through
-      further hops.
-- [ ] `MuleSyncEngine.kt` relay loop (~line 882-926): for each `RelayManifestEntry`, check the
-      targeted-relay inbox and pass a matching payload as `progressToDeliver`/`progressRaceLabel`.
-- [ ] `MulePullClient.kt` (~line 507): bypass the receiving-peripheral's-own-`raceLabel`-match
-      gate for targeted delivery.
-- [ ] Evict a targeted-relay inbox entry on delivery confirmation (mirror
-      `backfillSinkAck`/`markRelayedRecordsSynced`) or after `raceStaleAfterDays`.
-- [ ] Adoption trigger: on receiving a self-targeted payload whose identity doesn't match the
-      current race, update the existing local `RaceEntity` row in place (same `id`, generalize
-      `updateRaceDetails()`/`RaceDao.updateDetails()` to rewrite `label` too) — no history-row
-      migration needed (`HistoryLineEntity.raceId` is a stable FK).
-- [ ] Confirm `MuleRepository.pushToServer()`'s existing "read label fresh from `RaceEntity`"
-      behavior naturally reflects adoption server-side once reachable (no new code expected here
-      — verify only).
-- [ ] **Verify**: needs ≥3 devices (or emulated BLE) — a mule directly connected to the web-app, a
-      second mule relaying through the first, a leaf device on the second mule. Adopting the leaf
-      device in the web-app UI eventually delivers progress after two hops; only changed entries
-      transmitted per hop; a manually-named race auto-adopts (migrates in place, all screens
-      update); targeted-relay inbox entries clear once delivered.
-- [ ] Commit phase 3 (local only, no push).
+- [x] Manual race-name entry (offline branch of `SetupRaceScreen`): already fully built by phases
+      1-2 (`SetupRaceViewModel.save()` is exactly this path — the manual name field "stays visible
+      either way" per phase 2's own note) — confirmed, no new work needed here.
+- [x] New `TargetedProgressEntity`/`TargetedProgressDao` (`data/db/entity`, `data/db/dao`) —
+      mirrors `PulledRecordEntity`'s pulled-records-inbox shape (a flat holding table, unique
+      index on `targetDeviceId` so a fresher delta simply replaces an older one — see the
+      entity's own doc). Wired into `RacemasterDatabase` (version 28 → 29,
+      `fallbackToDestructiveMigration` already in place — no manual migration needed) and
+      `AppContainer`. `ProgressRepository.kt` gained
+      `cacheTargetedProgress`/`pendingTargetedProgress(targetDeviceId, maxAgeDays)`/
+      `evictTargetedProgress` on top of it. (The "originDeviceId-keyed lookup for this phone's
+      own race progress" originally itemized here turned out unnecessary — `current`/
+      `ProgressEntity`'s existing per-raceId storage already covers that; only the *forwarding*
+      inbox was actually new.)
+- [x] Wire extension: `ProgressPayload` (`MuleGattProfile.kt`) gained `targetDeviceId`/
+      `targetRaceLabel` (both null-default, every existing own-race delivery path untouched) —
+      on the payload type itself, not `PullRequest` (opposite direction — pulling records vs.
+      delivering progress, deliberately not conflated). `PeripheralSyncService.handleProgressPayload`
+      now branches: `targetDeviceId` set and not this device's own id → cache in the targeted
+      inbox (never adopted, never merged into this device's own race); set and matching → the
+      **adoption trigger** (see below); null → the original own-race path, unchanged.
+- [x] **Delivery/relay wiring** — new `MulePullClient.deliverTargetedProgress`/
+      `MuleRepository.deliverTargetedProgress` (a standalone connect→write→disconnect,
+      reusing the exact same `connectOrEvict`/`endConnection`/mutex machinery every other
+      connection in this file already uses — no bespoke ad-hoc GATT handling). New
+      `MuleSyncEngine.deliverTargetedProgressIfPending(advertisement, targetDeviceId, peerLabel)`
+      helper, called from three places: `refreshDeviceInfo` (first-sighting) and the periodic
+      loop's own direct-peer check (both: "is this peer itself a pending target?"), plus a new
+      loop over the periodic loop's own freshly-fetched `relayEntries` ("is any of *these*
+      origins a pending target?" — this is the actual mule-to-mule recursion: a further hop's own
+      identical logic keeps propagating it onward, with no hop-count limit needed, mirroring
+      exactly how record-relay chaining already has no hop limit either). Evicts on successful
+      handoff; a failed one is simply retried next tick.
+- [x] Adoption trigger + in-place migration: new `RaceRepository.adoptRaceIdentity(raceId,
+      raceLabel)`, generalizing `updateRaceDetails`/`RaceDao.updateDetails` (already
+      `(raceId, name, location, label)` post-Phase-1) to rewrite identity from an adopted
+      `raceLabel` (via `raceNameFromLabel`, the same helper Setup Race's online-pick path already
+      uses) rather than from operator-typed fields. Confirmed `HistoryLineEntity.raceId` is still
+      a stable Room FK post-Phase-1 (no migration needed) and that every screen still observes
+      race state reactively off `raceId` via Room `Flow`s (no per-screen wiring needed) — both
+      exactly as the plan assumed, not just re-asserted.
+- [x] Confirmed (not just assumed) `MuleRepository.pushToServer()` still reads each race's label
+      fresh from `RaceEntity` on every attempt post Phase 1/2 — adoption needs no new code to
+      reach the server once reachable.
+- [x] New tests: `ProgressRepositoryTest.kt` — targeted-inbox cache/read/replace/evict/staleness
+      (a real 10-day-old seeded row, not a same-millisecond race against the wall clock).
+      `RaceRepository`/`MuleSyncEngine`'s own new methods are *not* unit tested — matches this
+      codebase's already-established convention (no `RaceRepositoryTest.kt`/
+      `MuleSyncEngineTest.kt` exist for any of their existing DB/BLE-dependent methods either).
+- [x] **Verify (automated)**: `./gradlew testDebugUnitTest`, `./gradlew check`,
+      `./gradlew assembleDebug` (mobile) and `npm test` (web-app, 657/657 passing, up from 647)
+      all pass clean.
+- [~] **Verify (real multi-hop field test)**: genuinely NOT attempted, and could not honestly be —
+      this needs 3 physical phones in real Bluetooth proximity plus a real browser doing real Web
+      Bluetooth OS-level pairing, which isn't reliably automatable and can't be faked from
+      code-reading alone. What *was* done instead: installed the build on one real device
+      (`8a0f61d4`, already tested in phase 1) — launched clean, no crash (including surviving the
+      Room version 28→29 destructive-migration upgrade), confirmed via screenshot. The actual
+      multi-hop relay/adoption flow — a mule relaying through a second mule to a leaf device,
+      adopted from the web-app UI — is a genuine integration test that needs a human with
+      hardware and is left for that. Leaving this explicitly unchecked rather than claiming
+      confidence the code-level work doesn't actually support.
+- [x] Commit phase 3 (local only, no push).
 
 ### Phase 4 — bib/CP auto-expectation (mobile-only, depends on phases 1-3)
 

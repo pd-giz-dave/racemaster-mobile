@@ -91,6 +91,27 @@ class RaceRepository(
         raceDao.updateDetails(raceId, name, location, label)
     }
 
+    // Phase 3's adoption trigger: a device that broadcast a temporary, manually-typed race name
+    // (because it had no server reachable at Setup Race time — see SetupRaceViewModel's offline
+    // branch) is being told, via a targeted BLE progress delivery, which real server-side race it
+    // actually belongs to (see PeripheralSyncService.handleProgressPayload for where this is
+    // called). Rewrites the existing row in place — same [raceId], same
+    // SettingsRepository.activeRaceId pointer, same history — to [raceLabel]'s own identity
+    // instead of creating a new race the way [adoptRaceLabel] (Setup Race's online-pick path)
+    // does: unlike that path, this one must never lose already-recorded history, and
+    // [HistoryLineEntity.raceId] is a stable Room FK, never derived from name/label, so nothing
+    // downstream needs migrating — every screen already observes this race reactively off
+    // [raceId] via Room Flows, so the new identity reaches all of them on their very next
+    // emission. [raceLabel]'s own name portion (see [raceNameFromLabel] — the same helper
+    // [adoptRaceLabel] already uses) becomes this race's new name; location is left exactly as
+    // it was (this device's own physical station, unrelated to which race it now records). A
+    // no-op if [raceId] no longer exists (defensive — the race this delivery was addressed to
+    // could in principle have been deleted between the delivery being cached and this running).
+    suspend fun adoptRaceIdentity(raceId: Long, raceLabel: String) {
+        val race = raceDao.getById(raceId) ?: return
+        raceDao.updateDetails(raceId, raceNameFromLabel(raceLabel), race.location, raceLabel)
+    }
+
     fun observeRace(id: Long): Flow<RaceEntity?> = raceDao.observeById(id)
 
     suspend fun getRace(id: Long): RaceEntity? = raceDao.getById(id)

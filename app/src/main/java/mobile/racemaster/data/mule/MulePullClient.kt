@@ -355,6 +355,32 @@ class MulePullClient {
         }
     }
 
+    /** Phase 3's standalone targeted-relay delivery: connects, writes [payload] to the peer's
+     *  PROGRESS_CHARACTERISTIC_UUID, and disconnects — the counterpart to [readDeviceInfo]'s own
+     *  piggybacked [progressToDeliver], for a case where the caller already knows exactly who
+     *  this connection is with and doesn't need a fresh [DeviceInfo] read to decide anything
+     *  first (see [mobile.racemaster.data.mule.MuleSyncEngine]'s own call sites: the peer is
+     *  either proven to BE the payload's own target, or proven — via its own relay manifest — to
+     *  be able to reach it). Shares the same mutex/connect/settle/evict machinery as every other
+     *  connection this file makes (see [connectOrEvict]/[endConnection]'s own docs) rather than a
+     *  bespoke ad-hoc connect, which would risk reintroducing exactly the bugs those already
+     *  exist to prevent. Throws on failure (unlike [readDeviceInfo]'s own progress-delivery leg,
+     *  which is best-effort/swallowed inline) — the caller (MuleSyncEngine) is what decides
+     *  whether a failed handoff is fatal to anything, via its own runCatching. */
+    suspend fun deliverTargetedProgress(advertisement: Advertisement, payload: ProgressPayload) {
+        mutexFor(advertisement).withLock {
+            val peripheral = peripheralFor(advertisement)
+            connectOrEvict(advertisement, peripheral)
+            var succeeded = false
+            try {
+                withTimeout(PROGRESS_DELIVERY_TIMEOUT) { deliverProgressPayload(peripheral, payload) }
+                succeeded = true
+            } finally {
+                endConnection(advertisement, peripheral, succeeded)
+            }
+        }
+    }
+
     private suspend fun readDeviceInfoOnce(
         advertisement: Advertisement,
         pullerDeviceId: String?,

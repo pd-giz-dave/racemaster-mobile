@@ -85,6 +85,6 @@ class DefaultAppContainer(context: Context) : AppContainer {
     }
 
     override val progressRepository: ProgressRepository by lazy {
-        ProgressRepository(muleSyncClient, database.progressDao())
+        ProgressRepository(muleSyncClient, database.progressDao(), database.targetedProgressDao())
     }
 }

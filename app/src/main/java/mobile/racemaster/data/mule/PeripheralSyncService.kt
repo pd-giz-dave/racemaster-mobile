@@ -953,13 +953,42 @@ class PeripheralSyncService : Service() {
         // defense-in-depth against storing progress for literally nothing, not a security
         // boundary of its own.
         private suspend fun handleProgressPayload(bytes: ByteArray) {
-            val raceId = servingState.raceId ?: return
             val payload = runCatching { json.decodeFromString<ProgressPayload>(String(bytes, Charsets.UTF_8)) }.getOrNull()
             if (payload == null) {
                 Log.w(TAG, "progress write failed to decode (${bytes.size} bytes)")
                 return
             }
-            container.progressRepository.storeFromBle(raceId, servingState.raceLabel, payload)
+            // Phase 3 targeting (see ProgressPayload.targetDeviceId's own doc): non-null and not
+            // this device's own id means "forward this on, don't adopt it" — cached in the
+            // targeted-relay inbox rather than merged into this device's own race, since this
+            // device may hold no active race of its own at all (a pure-Mule intermediate hop) or
+            // may hold a completely unrelated one; either way this payload isn't for it.
+            val targetDeviceId = payload.targetDeviceId
+            if (targetDeviceId != null && targetDeviceId != deviceId) {
+                container.progressRepository.cacheTargetedProgress(targetDeviceId, payload)
+                Log.i(TAG, "progress cached for forwarding: targetDeviceId=$targetDeviceId generatedAt=${payload.generatedAt} entries=${payload.entries.size}")
+                return
+            }
+            val raceId = servingState.raceId ?: return
+            // Targeted at this device specifically, and naming a different race than the one
+            // it's currently recording under — the adoption signal (TODO.md's phase 3: "when
+            // the app receives a progress.json file via the mule, it is a signal ... that this
+            // phone should adopt the race"). Runs before storeFromBle below so the progress this
+            // same delivery carries lands under the newly-adopted identity, not the
+            // about-to-be-superseded old one.
+            val targetRaceLabel = payload.targetRaceLabel
+            var effectiveRaceLabel = servingState.raceLabel
+            if (targetDeviceId == deviceId && targetRaceLabel != null && targetRaceLabel != servingState.raceLabel) {
+                runCatching { container.raceRepository.adoptRaceIdentity(raceId, targetRaceLabel) }
+                    .onFailure { Log.w(TAG, "adoption failed: raceId=$raceId targetRaceLabel=$targetRaceLabel", it) }
+                    // observeServingState()'s own Room Flow collection updates servingState
+                    // asynchronously — using targetRaceLabel here directly, rather than waiting
+                    // on that emission, is what lets this same delivery's own storeFromBle call
+                    // below land under the identity it was just adopted into, not the
+                    // about-to-be-superseded one still cached in servingState for a few more ms.
+                    .onSuccess { effectiveRaceLabel = targetRaceLabel; Log.i(TAG, "adopted race identity: raceId=$raceId targetRaceLabel=$targetRaceLabel") }
+            }
+            container.progressRepository.storeFromBle(raceId, effectiveRaceLabel, payload)
             Log.i(TAG, "progress stored: raceId=$raceId generatedAt=${payload.generatedAt} entries=${payload.entries.size}")
         }
 

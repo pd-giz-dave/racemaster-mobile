@@ -525,4 +525,21 @@ data class ProgressPayload(
     val raceDate: String = "",
     val generatedAt: String = "",
     val entries: List<ProgressEntry> = emptyList(),
+    // Phase 3 (BT-mule-only adoption): null means "this device's own active race" — every
+    // existing delivery path (own-race progress, raceLabel-gated — see
+    // MulePullClient.shouldDeliverProgress) leaves this unset and is completely unaffected. Set,
+    // it addresses this payload at one specific device by [mobile.racemaster.data.settings.SettingsRepository.getOrCreateDeviceId],
+    // bypassing the raceLabel gate entirely: a receiver whose own deviceId doesn't match caches
+    // it in its targeted-relay inbox to forward on rather than adopting it (see
+    // PeripheralSyncService.handleProgressPayload); a receiver whose own deviceId DOES match
+    // treats it as the "adopt this race" signal instead (see [targetRaceLabel] and
+    // RaceRepository.adoptRaceIdentity), even if it arrived via one or more mule hops rather than
+    // a direct write from the racemaster web app.
+    val targetDeviceId: String? = null,
+    // The true server-side race label ([raceName]/[raceDate] alone don't carry the course suffix
+    // or exact registration date a label needs — see racemaster's own deriveRaceLabel) this
+    // payload belongs to — only ever set alongside [targetDeviceId], and only meaningful to the
+    // device whose own deviceId matches it (the adoption case above); an intermediate mule
+    // forwarding this on to someone else never reads it, just relays the whole payload verbatim.
+    val targetRaceLabel: String? = null,
 )

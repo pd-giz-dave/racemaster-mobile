@@ -6,7 +6,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.runTest
 import mobile.racemaster.data.db.dao.ProgressDao
+import mobile.racemaster.data.db.dao.TargetedProgressDao
 import mobile.racemaster.data.db.entity.ProgressEntity
+import mobile.racemaster.data.db.entity.TargetedProgressEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -31,13 +33,29 @@ private class FakeProgressDao : ProgressDao {
     }
 }
 
+// See FakeProgressDao's own doc for why this stand-in exists at all.
+private class FakeTargetedProgressDao : TargetedProgressDao {
+    private val rows = mutableMapOf<String, TargetedProgressEntity>()
+
+    override suspend fun upsert(entity: TargetedProgressEntity) {
+        rows[entity.targetDeviceId] = entity
+    }
+
+    override suspend fun getByTarget(targetDeviceId: String): TargetedProgressEntity? = rows[targetDeviceId]
+
+    override suspend fun deleteByTarget(targetDeviceId: String) {
+        rows.remove(targetDeviceId)
+    }
+}
+
 // refreshFromServer's own network leg (constructing a live MuleSyncClient call) is deliberately
 // not exercised here — same reasoning as before this class also covered persistence: no
 // MuleSyncClientTest.kt exists in this codebase either. storeFromBle already shares
 // refreshFromServer's own store() write-through, so this is exact coverage of that shared path.
 class ProgressRepositoryTest {
     private val dao = FakeProgressDao()
-    private val repository = ProgressRepository(MuleSyncClient(), dao)
+    private val targetedDao = FakeTargetedProgressDao()
+    private val repository = ProgressRepository(MuleSyncClient(), dao, targetedDao)
 
     private fun payload(generatedAt: String = "2026-08-23T10:00:00.000Z") = ProgressPayload(
         raceName = "Test Race", raceDate = "23/08/2026", generatedAt = generatedAt,
@@ -214,5 +232,57 @@ class ProgressRepositoryTest {
         val stored = repository.getStored(1L)
         assertEquals("2026-08-23T12:00:00.000Z", stored?.generatedAt)
         assertEquals(listOf(ProgressEntry(bibNumber = 1, name = "Dave", course = "Seniors")), stored?.entries)
+    }
+
+    // Phase 3: targeted-relay inbox — a payload this device holds only to forward on, never its
+    // own race's progress (see cacheTargetedProgress/pendingTargetedProgress/evictTargetedProgress's
+    // own docs).
+
+    @Test
+    fun cacheTargetedProgressThenPendingTargetedProgressReturnsItForThatTargetOnly() = runTest {
+        repository.cacheTargetedProgress("device-b", payload())
+
+        assertEquals(payload(), repository.pendingTargetedProgress("device-b", maxAgeDays = 2))
+        assertNull(repository.pendingTargetedProgress("device-c", maxAgeDays = 2))
+    }
+
+    @Test
+    fun cachingASecondTargetedPayloadForTheSameTargetReplacesTheFirst() = runTest {
+        repository.cacheTargetedProgress("device-b", payload("2020-01-01T00:00:00.000Z"))
+        repository.cacheTargetedProgress("device-b", payload("2026-08-23T10:00:00.000Z"))
+
+        assertEquals("2026-08-23T10:00:00.000Z", repository.pendingTargetedProgress("device-b", maxAgeDays = 2)?.generatedAt)
+    }
+
+    @Test
+    fun evictTargetedProgressRemovesTheCachedEntry() = runTest {
+        repository.cacheTargetedProgress("device-b", payload())
+
+        repository.evictTargetedProgress("device-b")
+
+        assertNull(repository.pendingTargetedProgress("device-b", maxAgeDays = 2))
+    }
+
+    @Test
+    fun pendingTargetedProgressReturnsNullOnceOlderThanMaxAgeDays() = runTest {
+        // Seeded directly (not via cacheTargetedProgress, which always stamps "now") with a
+        // receivedAtMillis from 10 days ago — a real wall-clock-based test rather than mocking
+        // isRaceStale's own clock, matching this codebase's existing staleness-test conventions.
+        targetedDao.upsert(
+            TargetedProgressEntity(
+                targetDeviceId = "device-b",
+                payloadJson = "{}",
+                receivedAtMillis = System.currentTimeMillis() - 10L * 24 * 60 * 60 * 1000,
+            ),
+        )
+
+        assertNull(repository.pendingTargetedProgress("device-b", maxAgeDays = 2))
+    }
+
+    @Test
+    fun evictingAnUncachedTargetIsANoOp() = runTest {
+        repository.evictTargetedProgress("never-cached")
+
+        assertNull(repository.pendingTargetedProgress("never-cached", maxAgeDays = 2))
     }
 }

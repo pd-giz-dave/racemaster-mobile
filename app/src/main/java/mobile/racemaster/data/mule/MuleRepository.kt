@@ -167,6 +167,21 @@ class MuleRepository(
     // full relay manifest, only worth calling once readDeviceInfo has shown relayCount > 0.
     suspend fun pullRelayManifest(advertisement: Advertisement): List<RelayManifestEntry> = pullClient.pullRelayManifest(advertisement)
 
+    // Phase 3: hands [payload] off to whoever's on the other end of [advertisement], tagged for
+    // [targetDeviceId] — see MulePullClient.deliverTargetedProgress's own doc for the connection
+    // this opens, and MuleSyncEngine's own call sites for how the caller already knows this
+    // connection is either directly with the target or with a peer proven (via its own relay
+    // manifest) to be able to reach it. Deliberately bypasses readDeviceInfo's own
+    // progressToDeliver/shouldDeliverProgress raceLabel-match gate entirely: this delivery is
+    // already addressed by device id, not race identity (see TODO.md's phase-3 "targeting model"
+    // decision — a device's self-reported raceLabel is exactly the thing that can't be trusted
+    // here). Stamps [targetDeviceId] onto the payload itself (overwriting whatever it already
+    // carried — a forwarding hop always addresses the next leg explicitly, never trusts an
+    // upstream sender's own copy of this field to already be correct for THIS hop).
+    suspend fun deliverTargetedProgress(advertisement: Advertisement, targetDeviceId: String, payload: ProgressPayload) {
+        pullClient.deliverTargetedProgress(advertisement, payload.copy(targetDeviceId = targetDeviceId))
+    }
+
     // The durable "seen devices" roster — see KnownDeviceEntity's own doc for how this differs
     // from MuleSyncEngine's own in-memory discoveredFlow.
     val knownDevices: Flow<List<KnownDeviceEntity>> = knownDeviceDao.observeAll()

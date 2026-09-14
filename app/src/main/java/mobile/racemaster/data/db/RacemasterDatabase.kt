@@ -9,12 +9,14 @@ import mobile.racemaster.data.db.dao.LineSyncDao
 import mobile.racemaster.data.db.dao.ProgressDao
 import mobile.racemaster.data.db.dao.PulledRecordDao
 import mobile.racemaster.data.db.dao.RaceDao
+import mobile.racemaster.data.db.dao.TargetedProgressDao
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.KnownDeviceEntity
 import mobile.racemaster.data.db.entity.LineSyncEntity
 import mobile.racemaster.data.db.entity.ProgressEntity
 import mobile.racemaster.data.db.entity.PulledRecordEntity
 import mobile.racemaster.data.db.entity.RaceEntity
+import mobile.racemaster.data.db.entity.TargetedProgressEntity
 
 @Database(
     entities = [
@@ -24,8 +26,9 @@ import mobile.racemaster.data.db.entity.RaceEntity
         LineSyncEntity::class,
         KnownDeviceEntity::class,
         ProgressEntity::class,
+        TargetedProgressEntity::class,
     ],
-    version = 28,
+    version = 29,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -36,4 +39,5 @@ abstract class RacemasterDatabase : RoomDatabase() {
     abstract fun lineSyncDao(): LineSyncDao
     abstract fun knownDeviceDao(): KnownDeviceDao
     abstract fun progressDao(): ProgressDao
+    abstract fun targetedProgressDao(): TargetedProgressDao
 }
