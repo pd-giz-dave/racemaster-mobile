@@ -3,6 +3,7 @@ package mobile.racemaster.ui.racehistory
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -40,6 +41,10 @@ fun RaceHistoryScreen(
     onRaceSelected: (Long) -> Unit,
     onMuleSourceSelected: (raceLabel: String, sourceDeviceId: String) -> Unit,
     onProgressSelected: (raceId: Long) -> Unit,
+    // Called right after switching this device's active race back to a resumed one — see
+    // RaceHistoryViewModel.resumeRace's own doc. The caller decides where that lands (the Mode
+    // Picker, so the operator picks whichever mode it was recording in).
+    onRaceResumed: () -> Unit,
     viewModel: RaceHistoryViewModel = viewModel(factory = RaceHistoryViewModel.Factory),
 ) {
     val items by viewModel.historyItems.collectAsStateWithLifecycle()
@@ -118,23 +123,38 @@ fun RaceHistoryScreen(
                                 }
                             },
                             trailingContent = {
-                                // An active race routes to the force-reset dialog instead of
-                                // straight to delete-confirmation — RaceRepository.deleteRace
-                                // still refuses it as a backstop either way, but the button stays
-                                // tappable rather than dangling disabled with no way forward: the
-                                // mode that's actually still active may no longer be reachable
-                                // from its own screen at all (see forceResetActiveModes' own doc
-                                // for the scenario this fixes).
-                                IconButton(
-                                    onClick = withClickSound {
-                                        if (item.isActive) pendingForceReset = item else pendingDelete = item
-                                    },
-                                ) {
-                                    Icon(
-                                        Icons.Filled.Delete,
-                                        contentDescription = "Delete race",
-                                        tint = MaterialTheme.colorScheme.error,
-                                    )
+                                Row {
+                                    // Offered only for a race that's still active (an un-Reset
+                                    // started mode) but isn't this device's current one any
+                                    // more — see HistoryItemUi.LocalRace.isCurrentActiveRace's
+                                    // own doc for exactly why: this is the "accidentally
+                                    // stopped, still runners on course" recovery path.
+                                    if (item.isActive && !item.isCurrentActiveRace) {
+                                        TextButton(
+                                            onClick = withClickSound {
+                                                viewModel.resumeRace(item.id)
+                                                onRaceResumed()
+                                            },
+                                        ) { Text("Resume") }
+                                    }
+                                    // An active race routes to the force-reset dialog instead of
+                                    // straight to delete-confirmation — RaceRepository.deleteRace
+                                    // still refuses it as a backstop either way, but the button
+                                    // stays tappable rather than dangling disabled with no way
+                                    // forward: the mode that's actually still active may no
+                                    // longer be reachable from its own screen at all (see
+                                    // forceResetActiveModes' own doc for the scenario this fixes).
+                                    IconButton(
+                                        onClick = withClickSound {
+                                            if (item.isActive) pendingForceReset = item else pendingDelete = item
+                                        },
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Delete,
+                                            contentDescription = "Delete race",
+                                            tint = MaterialTheme.colorScheme.error,
+                                        )
+                                    }
                                 }
                             },
                             modifier = Modifier.clickable(onClick = withClickSound { onRaceSelected(item.id) }),

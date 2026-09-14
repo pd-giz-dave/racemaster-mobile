@@ -164,43 +164,88 @@ lineNumber) — progress needs the same treatment before phase 3's relay work ca
       merge function, two transports).
 - [ ] Unit tests for the new merge/diff logic on both sides.
 
-### Phase 1 — mobile race setup simplification (mobile-only)
+### Phase 1 — mobile race setup simplification (mobile-only) — DONE 2026-09-14
 
-- [ ] Add `SETUP_RACE` route/button to `SetupDeviceScreen.kt` (`navigation/Routes.kt`,
-      `RacemasterNavHost.kt` ~line 103-111), alongside Setup Name / Setup Server / Options.
-- [ ] New `ui/racesetup/SetupRaceScreen.kt` + `SetupRaceViewModel.kt` (model on
+- [x] Add `SETUP_RACE` route/button to `SetupDeviceScreen.kt` (`navigation/Routes.kt`,
+      `RacemasterNavHost.kt`), alongside Setup Name / Setup Server / Options.
+- [x] New `ui/racesetup/SetupRaceScreen.kt` + `SetupRaceViewModel.kt` (modelled on
       `NameDeviceScreen.kt`/`NameDeviceViewModel.kt`): race name (free text incl. seniors/juniors
-      suffix, reuse `isValidRaceName`) + location (existing field/validation). No course chips,
-      no first-bib/runner-count fields.
-- [ ] `SetupRaceViewModel.save()` calls `RaceRepository.startNewRace(name, course = "", location, ...)`
-      directly — no course resolution step, no `courses`/`bibsRangeStart`/`bibsRangeCount`
-      populated.
-- [ ] Remove `RaceRepository.resolveCourseRace()`, `cloneTemplate()`'s course-switch use,
-      `ui/components/CoursePickerDialog.kt` and its 3 Start-button call sites
-      (`TimeModeScreen.kt:123`, `BibsModeScreen.kt:113`, `CpModeScreen.kt:113`).
-- [ ] Remove the "End recording" choice in `StopOrResetButton.kt` (~line 97),
-      `RaceRepository.endRecordingForCourse()`, and its 3 call sites (`TimeModeViewModel.kt:255`,
-      `BibsModeViewModel.kt:405`, `CpModeViewModel.kt:354`). Update `HelpScreen.kt` (~line 127,
-      194) which documents "End recording" to operators.
-- [ ] Keep the resume-in-place check (`if (target.xModeStartedAtMillis != null) resumeXMode(id)
-      else startXMode(id)`, e.g. `BibsModeViewModel.kt:279`) — re-home it so pressing Start on
-      the device's current active race (no dialog) goes through this check directly.
-- [ ] New "Resume" action on `RaceHistoryScreen.kt`'s `LocalRace` rows for a non-active, stopped
-      (not reset) past race on this device → `RaceRepository.switchActiveRace(raceId)` then the
-      resume-or-start check on next Start press.
-- [ ] Narrow `RaceDetailsScreen`/`RaceDetailsViewModel` to a rename-only "edit this race" screen
-      (name + location only), reusing `identityFieldsEnabled`/`updateRaceDetails()`.
-- [ ] Add the device-file-write-on-setup-complete call site in `SetupRaceViewModel.save()` (built
-      together with phase 2's actual push implementation, see below — this checkbox is the hook,
-      phase 2 is the mechanism).
-- [ ] Leave `RaceEntity.course`/`courses`/`bibsRangeStart`/`bibsRangeCount` columns in place,
-      unpopulated (Room migration deferred to end of phase 4).
-- [ ] Grep for any remaining `resolveCourseRace`/`cloneTemplate`/`endRecordingForCourse`/
-      `CoursePickerDialog` references before considering this phase done.
-- [ ] **Verify**: `./gradlew testDebugUnitTest`/`./gradlew check` pass; manually verify Setup
-      Race → Start → Stop → Race History "Resume" → Start again resumes mid-segment (not a fresh
-      start) for all three modes.
-- [ ] Commit phase 1 (local only, no push).
+      suffix, reuse `isValidRaceName`) + location (existing field/validation, no CP-specific
+      pattern enforced here — see next bullet). No course chips, no first-bib/runner-count
+      fields. Disabled (with explanatory text) while a race is already active, same guard
+      `NameDeviceScreen` uses for renaming.
+- [x] `SetupRaceViewModel.save()` calls `RaceRepository.startNewRace(name, course = "", location)`
+      directly, then `switchActiveRace()` — no course resolution step, no `courses`/
+      `bibsRangeStart`/`bibsRangeCount` populated.
+- [x] Remove `RaceRepository.resolveCourseRace()`, `cloneTemplate()`, `ui/components/CoursePickerDialog.kt`
+      and its 3 Start-button call sites (Time/Bibs/CpModeScreen.kt) — `startXMode` now always
+      resolves against the device's single active race directly, no course dialog.
+- [x] Remove the "End recording" choice in `StopOrResetButton.kt` (now a plain single-choice
+      Reset confirm dialog), `RaceRepository.endRecordingForCourse()`, and its 3 call sites
+      (`endRecording()` removed from Time/Bibs/CpModeViewModel.kt). Rewrote `HelpScreen.kt`'s
+      Setup Race / Time Mode / Bibs Mode (starting a race, duplicates, stop and reset) / CP Mode
+      / Setup Device / General sections accordingly.
+- [x] Keep the resume-in-place check (`if (target.xModeStartedAtMillis != null) resumeXMode(id)
+      else startXMode(id)`) — re-homed directly into each mode's `startXMode()`/`startXxxxMode()`
+      function so pressing Start on the device's current active race (no dialog) always goes
+      through it.
+- [x] New "Resume" action on `RaceHistoryScreen.kt`'s `LocalRace` rows, offered when a race
+      `isActive` (an un-Reset started mode) but is **not** the device's current
+      `activeRaceId` (added `isCurrentActiveRace` to `HistoryItemUi.LocalRace`, sourced from
+      `SettingsRepository.activeRaceId`, now a `RaceHistoryViewModel` dependency) →
+      `RaceRepository.switchActiveRace(raceId)` (`RaceHistoryViewModel.resumeRace`), landing back
+      on the Mode Picker; the resume-or-start check above then does the rest on next Start press.
+- [x] Narrow `RaceDetailsScreen`/`RaceDetailsViewModel` to a rename-only "This Race" screen (name
+      + location only, `existingRaceId` now non-nullable — no more create path), reusing
+      `identityFieldsEnabled`/`updateRaceDetails()`. Dropped "Clear race" too (Race History's own
+      delete, with its force-reset backstop, already covers this — keeping a second deletion path
+      on a screen now named for renaming only added scope, not safety). `RaceDao.updateDetails`
+      narrowed to `(raceId, name, location, label)` — course/courses/bib-range columns are simply
+      left alone by this query now, not re-written with stale values.
+- [x] Device-file-write-on-setup: implemented for real (not just a hook) — `SetupRaceViewModel.save()`
+      calls new `MuleRepository.announceRaceSetup(raceLabel)`, a best-effort, silently-swallowed
+      explicit empty-record push via the existing `MuleSyncClient.pushRecords`. Necessary because
+      `pushToServer()`'s own regular reconciliation loop skips any race with zero activity at all
+      (its own staleness rule), so a brand-new race would otherwise never get a device file until
+      the first real split — confirmed by reading that function before assuming it could just be
+      called directly. Offline/not-logged-in is a silent no-op; the BT-mule broadcast side of this
+      signal is genuinely phase 3's job, not built here.
+- [x] Leave `RaceEntity.course`/`courses`/`bibsRangeStart`/`bibsRangeCount` columns in place,
+      unpopulated (Room migration deferred to end of phase 4). Also removed now-dead
+      `RaceDao.setCourseAndLabel`, `SettingsRepository.courseHistory`/`addCourseToHistory`/
+      `DEFAULT_COURSES`/`Keys.COURSE_HISTORY`, and `isValidCourseName` — all had no remaining
+      caller once the course-chips UI was gone (kept `bibsRangeStart`/`bibsRangeCount`/`courses`
+      *columns* per the plan; only the now-orphaned course-history/validation code was removed).
+- [x] Fixed a latent bug this phase's own change would otherwise have introduced:
+      `RaceRepository.switchActiveRace()`'s "delete the old race if it was just clutter" cleanup
+      used to key off `old.course.isBlank()` — harmless when course was sometimes non-blank, but
+      with course *always* blank now, that condition would have deleted the previous active race
+      on every single switch, even ones with substantial real history. Now keyed off whether the
+      old race has ever recorded any history line at all
+      (`observeLastActivityAtMillis(oldRaceId).first() != null`), which is what the condition was
+      actually trying to mean.
+- [x] Added CP-location-format enforcement (`isValidCpLocation`) at CP Mode's own Start button
+      instead — the old race-details form enforced this at creation time, but Setup Race no
+      longer knows the mode at setup time to do the same. Blocks Start with an inline error
+      pointing at "This Race" until fixed, rather than silently dropping the check. Not itemized
+      in this checklist originally — added while implementing CP Mode's screen changes, since
+      dropping a correctness check silently seemed worse than a small, scoped addition.
+- [x] `ModePickerScreen.kt`'s `handleModeTap`: a mode tap with no active race now navigates
+      straight to Setup Race (`onSetupRaceNeeded`) instead of the old `RaceDetailsScreen` create
+      flow — mirrors the existing "Mule Mode off routes through Options first" precedent already
+      in this file, rather than adding a separate error dialog.
+- [x] `ModeScreenTopBar.kt`: dropped the "New Race" button entirely (starting over now means
+      going back to Setup Device) — kept "This Race" (→ the narrowed rename screen) and "Mode".
+- [x] Grepped for remaining `resolveCourseRace`/`cloneTemplate`/`endRecordingForCourse`/
+      `CoursePickerDialog`/`onNewRace`/`newRaceEnabled`/`coursePickerOptions`/`DEFAULT_COURSES`/
+      `courseHistory` references across `app/src/main` and `app/src/test` — none left.
+- [x] **Verify (automated)**: `./gradlew testDebugUnitTest`, `./gradlew check` (lint included),
+      and `./gradlew assembleDebug` all pass clean.
+- [ ] **Verify (manual, on-device)**: not done — this environment has no emulator/physical
+      device attached, so Setup Race → Start → Stop → Race History "Resume" → Start again
+      resuming mid-segment (all three modes), and CP Mode's new location-validity gate, still
+      need an actual on-device pass before this is fully trusted. Leaving unchecked deliberately.
+- [x] Commit phase 1 (local only, no push).
 
 ### Phase 2 — internet-mode workflow (both repos)
 

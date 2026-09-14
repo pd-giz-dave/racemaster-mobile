@@ -17,8 +17,9 @@ class Converters {
     @TypeConverter
     fun toHistoryAction(value: String): HistoryAction = HistoryAction.valueOf(value)
 
-    // Comma-joined — safe because course names are restricted to [a-zA-Z0-9-] (see
-    // isValidCourseName), so a comma can never appear inside one to collide with the separator.
+    // Comma-joined — backs RaceEntity.courses, always an empty list for every race created now
+    // (see that field's own doc), kept only so its column doesn't need its own separate Room
+    // migration until phase 4 drops it entirely.
     @TypeConverter
     fun fromStringList(value: List<String>): String = value.joinToString(",")
 

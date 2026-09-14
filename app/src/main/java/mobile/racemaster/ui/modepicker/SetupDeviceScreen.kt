@@ -41,6 +41,7 @@ fun SetupDeviceScreen(
     onSetupName: () -> Unit,
     onSetupServer: () -> Unit,
     onOptions: () -> Unit,
+    onSetupRace: () -> Unit,
     connectivityViewModel: MuleModeViewModel = viewModel(factory = MuleModeViewModel.Factory),
 ) {
     val uiState by connectivityViewModel.uiState.collectAsStateWithLifecycle()
@@ -86,6 +87,17 @@ fun SetupDeviceScreen(
                 ),
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Options") }
+            // Below Options, per TODO.md's phase 1 — the one place a race now gets created,
+            // reachable before any mode is selected so the device file can reach the server (or
+            // a mule) as soon as setup is done, independent of mode selection.
+            Button(
+                onClick = withClickSound(onSetupRace),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondary,
+                    contentColor = MaterialTheme.colorScheme.onSecondary,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Setup Race") }
             ConnectivityStatusText(uiState)
         }
     }

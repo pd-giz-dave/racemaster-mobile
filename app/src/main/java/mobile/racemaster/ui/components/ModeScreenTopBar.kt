@@ -24,21 +24,22 @@ val CompactTopAppBarHeight: Dp = 48.dp
 @Composable
 fun ModeScreenTopBar(
     title: String,
-    newRaceEnabled: Boolean,
     thisRaceEnabled: Boolean,
-    onNewRace: () -> Unit,
     onThisRace: () -> Unit,
     onChangeMode: () -> Unit,
 ) {
     // The persistent AppBanner (above this bar) already reserves space for the status
     // bar, so this bar must not also apply it — otherwise the two stack and leave a gap.
+    // No "New Race" button any more — a device now records against exactly one race for its
+    // whole lifetime (set up via Setup Device > Setup Race); starting over means going back
+    // there, not swapping races mid-mode. See Race History's own "Resume" action for the one
+    // remaining case that used to route through here (an accidentally-stopped race).
     TopAppBar(
         title = { Text(title) },
         actions = {
             // This Race stays enabled even once the race has stopped — editing a typo in the
-            // name/course shouldn't require never having finished logging.
+            // name/location shouldn't require never having finished logging.
             TextButton(onClick = withClickSound(onThisRace), enabled = thisRaceEnabled) { Text("This Race") }
-            TextButton(onClick = withClickSound(onNewRace), enabled = newRaceEnabled) { Text("New Race") }
             TextButton(onClick = withClickSound(onChangeMode)) { Text("Mode") }
         },
         expandedHeight = CompactTopAppBarHeight,

@@ -25,7 +25,6 @@ import mobile.racemaster.data.repository.lineSyncState
 import mobile.racemaster.data.repository.linesWithAnySync
 import mobile.racemaster.data.repository.outstandingBibs
 import mobile.racemaster.data.repository.rangeWarningMessage
-import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.di.applicationContext
@@ -210,54 +209,23 @@ class CpModeViewModel(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CpModeUiState())
 
-    // See TimeModeViewModel's own identical trio for the full doc — same course-resolution
-    // flow, just calling CP's own reset/start pair instead of Time's.
-    private val _coursePickerOptions = MutableStateFlow<List<String>?>(null)
-    val coursePickerOptions: StateFlow<List<String>?> = _coursePickerOptions
-
-    // See TimeModeViewModel's own identical trio for the full doc.
-    private val _coursePickerPreviousCourse = MutableStateFlow<String?>(null)
-    val coursePickerPreviousCourse: StateFlow<String?> = _coursePickerPreviousCourse
-    private var lastEndedCourse: String? = null
-
+    // A device now records against exactly one race for its whole lifetime (see TODO.md's
+    // phase 1 — the course concept is gone), so Start no longer needs to resolve WHICH row to
+    // record into — it's always this device's own active race. Already started means this race
+    // was previously Stopped, not Reset (Reset already clears cpModeStartedAtMillis, so this
+    // branch is never taken right after one) — resume exactly where it left off rather than
+    // starting a fresh segment; see CpModeRepository.resumeCpMode's own doc. This is also the
+    // path Race History's own "Resume" action relies on: switching activeRaceId back to a
+    // previously-stopped race, then pressing Start here, picks up exactly where it left off.
     fun startCpMode() {
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch {
             val race = raceRepository.getRace(raceId) ?: return@launch
-            val onlyCourse = race.courses.singleOrNull()
-            if (onlyCourse != null) {
-                beginCourse(raceId, onlyCourse)
+            if (race.cpModeStartedAtMillis != null) {
+                cpModeRepository.resumeCpMode(raceId)
             } else {
-                _coursePickerPreviousCourse.value = race.course.ifBlank { null } ?: lastEndedCourse
-                _coursePickerOptions.value = race.courses
+                cpModeRepository.startCpMode(raceId)
             }
-        }
-    }
-
-    fun onCoursePicked(course: String) {
-        val raceId = raceIdFlow.value ?: return
-        _coursePickerOptions.value = null
-        _coursePickerPreviousCourse.value = null
-        viewModelScope.launch { beginCourse(raceId, course) }
-    }
-
-    fun dismissCoursePicker() {
-        _coursePickerOptions.value = null
-        _coursePickerPreviousCourse.value = null
-    }
-
-    private suspend fun beginCourse(raceId: Long, course: String) {
-        val targetId = raceRepository.resolveCourseRace(raceId, course, AppMode.CP.name)
-        if (targetId != raceId) raceRepository.switchActiveRace(targetId)
-        val target = requireNotNull(raceRepository.getRace(targetId)) { "Race $targetId not found" }
-        // Already started means this course was previously ended via "End recording" (never
-        // Reset — Reset already clears cpModeStartedAtMillis, so this branch is never taken
-        // right after one) — resume exactly where it left off rather than starting a fresh
-        // segment; see CpModeRepository.resumeCpMode's own doc.
-        if (target.cpModeStartedAtMillis != null) {
-            cpModeRepository.resumeCpMode(targetId)
-        } else {
-            cpModeRepository.startCpMode(targetId)
         }
     }
 
@@ -343,17 +311,6 @@ class CpModeViewModel(
     fun resetCpMode() {
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch { cpModeRepository.resetCpMode(raceId) }
-    }
-
-    // See TimeModeViewModel.endRecording's own doc — same StopOrResetButton confirm choice,
-    // this course's checkpoint entries left exactly as recorded.
-    fun endRecording() {
-        val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch {
-            lastEndedCourse = raceRepository.getRace(raceId)?.course?.ifBlank { null }
-            val newRaceId = raceRepository.endRecordingForCourse(raceId, AppMode.CP.name)
-            raceRepository.switchActiveRace(newRaceId)
-        }
     }
 
     override fun onCleared() {

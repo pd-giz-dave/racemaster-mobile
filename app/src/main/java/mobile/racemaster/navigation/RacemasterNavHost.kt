@@ -35,6 +35,7 @@ import mobile.racemaster.ui.racehistory.MuleSourceDetailScreen
 import mobile.racemaster.ui.racehistory.ProgressDetailScreen
 import mobile.racemaster.ui.racehistory.RaceHistoryDetailScreen
 import mobile.racemaster.ui.racehistory.RaceHistoryScreen
+import mobile.racemaster.ui.racesetup.SetupRaceScreen
 import mobile.racemaster.ui.timemode.EditSplitScreen
 import mobile.racemaster.ui.timemode.TimeModeScreen
 import java.net.URLDecoder
@@ -89,7 +90,7 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                                 popUpTo(Routes.MODE_PICKER) { inclusive = false }
                             }
                         },
-                        onNewRaceNeeded = { mode -> navController.navigate(Routes.raceDetails(mode, raceId = null)) },
+                        onSetupRaceNeeded = { navController.navigate(Routes.SETUP_RACE) },
                         onMuleModeSelected = { navController.navigate(Routes.MULE_MODE) },
                         onMuleSetupNeeded = { navController.navigate(Routes.SETUP_OPTIONS) },
                         onReviewPastRaces = { navController.navigate(Routes.RACE_HISTORY) },
@@ -106,10 +107,14 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                         onSetupName = { navController.navigate(Routes.NAME_DEVICE) },
                         onSetupServer = { navController.navigate(Routes.MULE_SERVER_SETUP) },
                         onOptions = { navController.navigate(Routes.SETUP_OPTIONS) },
+                        onSetupRace = { navController.navigate(Routes.SETUP_RACE) },
                     )
                 }
                 composable(Routes.NAME_DEVICE) {
                     NameDeviceScreen(onDone = { navController.popBackStack() })
+                }
+                composable(Routes.SETUP_RACE) {
+                    SetupRaceScreen(onDone = { navController.popBackStack() })
                 }
                 composable(
                     route = Routes.SETUP_OPTIONS_PATTERN,
@@ -139,24 +144,21 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                 composable(Routes.TIME_MODE) {
                     TimeModeScreen(
                         onChangeMode = { navController.navigateToModePicker() },
-                        onNewRace = { navController.navigate(Routes.raceDetails(AppMode.TIME, raceId = null)) },
-                        onEditRace = { raceId -> navController.navigate(Routes.raceDetails(AppMode.TIME, raceId)) },
+                        onEditRace = { raceId -> navController.navigate(Routes.raceDetails(raceId)) },
                         onEditSplit = { splitId -> navController.navigate(Routes.editSplit(splitId)) },
                     )
                 }
                 composable(Routes.BIBS_MODE) {
                     BibsModeScreen(
                         onChangeMode = { navController.navigateToModePicker() },
-                        onNewRace = { navController.navigate(Routes.raceDetails(AppMode.BIBS, raceId = null)) },
-                        onEditRace = { raceId -> navController.navigate(Routes.raceDetails(AppMode.BIBS, raceId)) },
+                        onEditRace = { raceId -> navController.navigate(Routes.raceDetails(raceId)) },
                         onEditEntry = { entryId -> navController.navigate(Routes.editEntry(AppMode.BIBS, entryId)) },
                     )
                 }
                 composable(Routes.CP_MODE) {
                     CpModeScreen(
                         onChangeMode = { navController.navigateToModePicker() },
-                        onNewRace = { navController.navigate(Routes.raceDetails(AppMode.CP, raceId = null)) },
-                        onEditRace = { raceId -> navController.navigate(Routes.raceDetails(AppMode.CP, raceId)) },
+                        onEditRace = { raceId -> navController.navigate(Routes.raceDetails(raceId)) },
                         onEditEntry = { entryId -> navController.navigate(Routes.editEntry(AppMode.CP, entryId)) },
                     )
                 }
@@ -200,21 +202,12 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                 }
                 composable(
                     route = Routes.RACE_DETAILS,
-                    arguments = listOf(
-                        navArgument("mode") { type = NavType.StringType },
-                        navArgument("raceId") { type = NavType.LongType },
-                    ),
+                    arguments = listOf(navArgument("raceId") { type = NavType.LongType }),
                 ) { backStackEntry ->
-                    val mode = AppMode.valueOf(backStackEntry.arguments?.getString("mode") ?: return@composable)
-                    val raceIdArg = backStackEntry.arguments?.getLong("raceId") ?: -1L
+                    val raceId = backStackEntry.arguments?.getLong("raceId") ?: return@composable
                     RaceDetailsScreen(
-                        mode = mode,
-                        existingRaceId = raceIdArg.takeIf { it >= 0 },
-                        onSaved = {
-                            navController.navigate(mode.toRoute()) {
-                                popUpTo(Routes.MODE_PICKER) { inclusive = false }
-                            }
-                        },
+                        existingRaceId = raceId,
+                        onSaved = { navController.popBackStack() },
                         onCancel = { navController.popBackStack() },
                     )
                 }
@@ -226,6 +219,11 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                             navController.navigate(Routes.muleSourceDetail(raceLabel, sourceDeviceId))
                         },
                         onProgressSelected = { raceId -> navController.navigate(Routes.progressDetail(raceId)) },
+                        // Resuming a past race lands back on the Mode Picker (not straight into
+                        // a mode) — the operator picks whichever mode that race was recording
+                        // in, same as landing there for any other already-active race; see
+                        // RaceHistoryViewModel.resumeRace's own doc.
+                        onRaceResumed = { navController.popBackStack(Routes.MODE_PICKER, false) },
                     )
                 }
                 composable(

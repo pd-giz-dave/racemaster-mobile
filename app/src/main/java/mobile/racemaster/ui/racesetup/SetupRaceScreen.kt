@@ -1,4 +1,4 @@
-package mobile.racemaster.ui.racedetails
+package mobile.racemaster.ui.racesetup
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,7 +18,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,49 +36,38 @@ import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.ui.components.HistoryTextField
 import mobile.racemaster.util.withClickSound
 
-/** "This Race" — a rename-only editor for the device's already-created race (see
- *  RaceDetailsViewModel's own doc: creation itself moved to Setup Race, and course/bib-range
- *  fields are gone entirely). Reached from any mode screen's own top bar. */
+/** Sets up the one race this device will record against — name and location only (see
+ *  TODO.md's phase 1: course/first-bib/runner-count are gone). The seniors/juniors suffix the
+ *  web app expects is just typed as part of the race name now — e.g. "Pontesbury-Seniors" —
+ *  rather than picked from a separate menu. Reached from Setup Device, before any mode is
+ *  selected. Disabled while a race is already active, same as NameDeviceScreen's own guard for
+ *  renaming — see SetupRaceViewModel's own doc. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RaceDetailsScreen(
-    existingRaceId: Long,
-    onSaved: () -> Unit,
-    onCancel: () -> Unit,
-    viewModel: RaceDetailsViewModel = viewModel(factory = RaceDetailsViewModel.factory(existingRaceId)),
+fun SetupRaceScreen(
+    onDone: () -> Unit,
+    viewModel: SetupRaceViewModel = viewModel(factory = SetupRaceViewModel.Factory),
 ) {
-    val existingRace by viewModel.existingRace.collectAsStateWithLifecycle()
-    val raceIsActive by viewModel.raceIsActive.collectAsStateWithLifecycle()
-    val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
+    val hasActiveRace by viewModel.hasActiveRace.collectAsStateWithLifecycle()
     val raceNameHistory by viewModel.raceNameHistory.collectAsStateWithLifecycle()
     val locationHistory by viewModel.locationHistory.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
     var name by remember { mutableStateOf("") }
-    var location by remember { mutableStateOf("") }
-    // Pre-fill exactly once from the loaded race — later emissions (e.g. a Mule pull touching
-    // this race elsewhere) must not stomp on what the operator is typing.
-    var prefilled by remember { mutableStateOf(false) }
+    // "Finish" out of the box, same default RaceDetailsScreen's own Location field used to
+    // have — most stations recording a race are at the finish line.
+    var location by remember { mutableStateOf("Finish") }
     var isSaving by remember { mutableStateOf(false) }
 
-    LaunchedEffect(existingRace) {
-        val race = existingRace ?: return@LaunchedEffect
-        if (prefilled) return@LaunchedEffect
-        name = race.name
-        location = race.location
-        prefilled = true
-    }
-
-    val identityFieldsEnabled = prefilled && !raceIsActive
     val nameValid = isValidRaceName(name)
-    val canSave = prefilled && !isSaving && identityFieldsEnabled && name.isNotBlank() && nameValid && location.isNotBlank()
+    val canSave = !hasActiveRace && !isSaving && name.isNotBlank() && nameValid && location.isNotBlank()
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("This Race") },
-                navigationIcon = { TextButton(onClick = withClickSound(onCancel)) { Text("Cancel") } },
+                title = { Text("Setup Race") },
+                navigationIcon = { TextButton(onClick = withClickSound(onDone)) { Text("Cancel") } },
                 actions = { HideKeyboardButton() },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
@@ -94,17 +82,22 @@ fun RaceDetailsScreen(
                 .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (!deviceName.isNullOrBlank()) {
-                Text("Device name: $deviceName", style = MaterialTheme.typography.labelMedium)
+            if (hasActiveRace) {
+                Text(
+                    "Can't set up a new race while one is already active — stop and reset it " +
+                        "first, or go to Progress (Races) to resume a previously stopped one.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
             HistoryTextField(
                 value = name,
                 onValueChange = { name = it },
                 label = "Race name (letters, numbers, - only)",
                 history = raceNameHistory,
-                enabled = identityFieldsEnabled,
+                enabled = !hasActiveRace,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                 keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
                 modifier = Modifier.fillMaxWidth(),
@@ -121,29 +114,22 @@ fun RaceDetailsScreen(
                 onValueChange = { location = it },
                 label = "Location (e.g. Finish, CP1, CP2, et al)",
                 history = locationHistory,
-                enabled = identityFieldsEnabled,
+                enabled = !hasActiveRace,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                 modifier = Modifier.fillMaxWidth(),
             )
-            if (raceIsActive) {
-                Text(
-                    "Race name and location are locked because this race has already started — " +
-                        "set up a new race (Setup Device > Setup Race) for a different name or location.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
             Button(
                 onClick = withClickSound {
                     isSaving = true
                     scope.launch {
                         viewModel.save(name, location)
-                        onSaved()
+                        onDone()
                     }
                 },
                 enabled = canSave,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Save") }
+            ) { Text("Create") }
         }
     }
 }

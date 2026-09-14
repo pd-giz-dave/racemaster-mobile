@@ -9,16 +9,15 @@ data class RaceEntity(
     // Raw user-entered fields, kept separately from the computed label below so a race's
     // details can be re-edited later without having to parse them back out of it.
     val name: String = "",
-    // Blank until a mode's own Start button actually picks one from [courses] below — see
-    // RaceRepository.resolveCourseRace. A race details form no longer locks a single course in
-    // at creation time; this field (and `label`, which stays a placeholder without a course
-    // segment — see buildRaceLabel) is only ever written once, atomically with that race
-    // actually starting to record something.
+    // The notion of a "course" distinct from the race itself has been dropped (see TODO.md's
+    // phase 1) — a race is now just a name (which may, by convention, carry its own Seniors/
+    // Juniors suffix as plain text) and a location. This field (and `courses` below) is kept in
+    // the schema, always blank/empty for every race Setup Race creates from here on, purely so
+    // dropping the column entirely can wait for one clean Room migration at the end of phase 4
+    // rather than needing two separate ones. `label` (see buildRaceLabel) already tolerates a
+    // blank course by omitting that segment entirely.
     val course: String = "",
-    // The menu of course names offered for this race, set on the race details screen (its
-    // "Courses" field — a multi-pick list, not a single value) and copied onto every sibling
-    // row [resolveCourseRace] creates under the same name, so the Start-time course picker
-    // always has the right options regardless of which course-specific row is currently active.
+    // See `course`'s own doc above — always empty for every race created from here on.
     val courses: List<String> = emptyList(),
     // Which physical point on the course this device's own records represent (e.g. "Finish",
     // "Start", "Checkpoint 2") — lets more than one device contribute different stations'

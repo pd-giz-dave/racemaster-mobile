@@ -35,7 +35,7 @@ import mobile.racemaster.util.withClickSound
 @Composable
 fun ModePickerScreen(
     onModeSelected: (AppMode) -> Unit,
-    onNewRaceNeeded: (AppMode) -> Unit,
+    onSetupRaceNeeded: () -> Unit,
     onMuleModeSelected: () -> Unit,
     onMuleSetupNeeded: () -> Unit,
     onReviewPastRaces: () -> Unit,
@@ -49,11 +49,15 @@ fun ModePickerScreen(
     val muleSyncEnabled by viewModel.muleSyncEnabled.collectAsStateWithLifecycle()
     val modeSwitchError by viewModel.modeSwitchError.collectAsStateWithLifecycle()
 
+    // A device now records against exactly one race, set up up front via Setup Device > Setup
+    // Race (see TODO.md's phase 1) — there's no more "create one for this mode" fallback here,
+    // so a mode tap with nothing set up yet routes straight there instead, the same way an
+    // off Mule Mode routes through Options first (see the Mule ModeButton's own doc below).
     fun handleModeTap(mode: AppMode) {
         if (hasActiveRace) {
             viewModel.selectModeForExistingRace(mode) { onModeSelected(mode) }
         } else {
-            onNewRaceNeeded(mode)
+            onSetupRaceNeeded()
         }
     }
 

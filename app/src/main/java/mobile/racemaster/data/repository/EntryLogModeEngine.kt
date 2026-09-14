@@ -257,15 +257,15 @@ internal class EntryLogModeEngine(
         }
     }
 
-    // Resumes logging in place after "End recording" picks this same course again (see
-    // RaceRepository.endRecordingForCourse/resolveCourseRace's own docs) — writes nothing to
-    // history and touches no counter, unlike stop()/reset(). Picking the same course again
-    // after ending it means "I'm not done after all" (there are still runners out, or it was
-    // ended by mistake), not "start a new segment": split numbers and the permanent line
-    // history should read exactly as if the Stop had never happened, the same place
-    // undoMostRecent's own STOP branch would leave things, just without the explicit
-    // "Undo L{n}" annotation a manual undo adds — the operator never touched Undo, they just
-    // picked the course again.
+    // Resumes logging in place after Start is pressed again on an already-started (Stopped, not
+    // Reset) race — see each *ModeViewModel's own startXMode doc, and Race History's own
+    // "Resume" action (RaceRepository.switchActiveRace) for the case where that race wasn't
+    // even this device's active one any more. Writes nothing to history and touches no counter,
+    // unlike stop()/reset(): pressing Start again means "I'm not done after all" (there are
+    // still runners out, or it was stopped by mistake), not "start a new segment" — split
+    // numbers and the permanent line history should read exactly as if the Stop had never
+    // happened, the same place undoMostRecent's own STOP branch would leave things, just
+    // without the explicit "Undo L{n}" annotation a manual undo adds.
     suspend fun resume(raceId: Long) {
         columns.clearStoppedAt(raceId)
     }

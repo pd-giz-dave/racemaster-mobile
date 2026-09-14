@@ -14,6 +14,7 @@ import mobile.racemaster.data.mule.isRaceStale
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.activeModeLabels
 import mobile.racemaster.data.repository.isRaceActive
+import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.SharingStarted
@@ -49,6 +50,16 @@ sealed interface HistoryItemUi {
         // still blocking deletion without this.
         val activeModeLabels: List<String>,
         val serverSyncSkippedAsStale: Boolean,
+        // Whether this race is the device's own current SettingsRepository.activeRaceId — a
+        // race can be [isActive] (still has an un-Reset started mode) without being this any
+        // more, e.g. after Setup Race created a fresh one while an older race sat merely
+        // Stopped-not-Reset (see RaceRepository.switchActiveRace's own doc). That's exactly the
+        // "accidentally stopped, still runners on course" case the "Resume" action (see
+        // resumeRace below) exists to recover — offered only for a race that's [isActive] but
+        // NOT this one, since resuming the already-current race is just what pressing Start
+        // does. Defaults false so existing test call sites that construct this directly don't
+        // need updating.
+        val isCurrentActiveRace: Boolean = false,
     ) : HistoryItemUi
     // A race pulled via Mule from a genuinely different physical device — this device's own
     // data is never staged into that same table at all (see PulledRecordEntity's own doc), so
@@ -122,6 +133,7 @@ private data class HistorySources(
     val lastTouchedAtMillis: Map<String, Long>,
     val maxAgeDays: Int,
     val progressFiles: List<StoredProgress>,
+    val activeRaceId: Long?,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -129,6 +141,7 @@ class RaceHistoryViewModel(
     private val raceRepository: RaceRepository,
     private val muleRepository: MuleRepository,
     private val progressRepository: ProgressRepository,
+    private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
     val historyItems: StateFlow<List<HistoryItemUi>> = combine(
@@ -136,11 +149,16 @@ class RaceHistoryViewModel(
         muleRepository.sourceSummaries,
         muleRepository.raceLabelLastTouchedAtMillis,
         muleRepository.raceStaleAfterDays,
-        progressRepository.observeStored(),
-    ) { races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, progressFiles ->
-        HistorySources(races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, progressFiles)
+        // Paired rather than added as the combine's own 6th argument — kotlinx coroutines'
+        // typed combine() overloads only go up to 5, same reason BibsModeViewModel/
+        // CpModeViewModel's own RaceContext combines already pair theirs.
+        combine(progressRepository.observeStored(), settingsRepository.activeRaceId) { progressFiles, activeRaceId ->
+            progressFiles to activeRaceId
+        },
+    ) { races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, (progressFiles, activeRaceId) ->
+        HistorySources(races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, progressFiles, activeRaceId)
     }
-        .flatMapLatest { (races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, progressFiles) ->
+        .flatMapLatest { (races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, progressFiles, activeRaceId) ->
             val muleItems = sourceSummaries.map {
                 HistoryItemUi.MuleSource(
                     raceLabel = it.sourceRaceLabel,
@@ -176,6 +194,7 @@ class RaceHistoryViewModel(
                                 isActive = isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.cpModeStartedAtMillis),
                                 activeModeLabels = activeModeLabels(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.cpModeStartedAtMillis),
                                 serverSyncSkippedAsStale = isSkippedAsStale(lastActivityAtMillis, maxAgeDays),
+                                isCurrentActiveRace = race.id == activeRaceId,
                             )
                         }
                     },
@@ -183,6 +202,18 @@ class RaceHistoryViewModel(
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    // Switches this device's active race back to [raceId] — see
+    // RaceRepository.switchActiveRace's own doc — for the "go back to a previously stopped race
+    // and restart it" recovery path (TODO.md's phase 1: an accidental Stop with runners still
+    // out on course). Whichever mode this race was recording in then resumes exactly where it
+    // left off the next time that mode's own Start button is pressed (see each *ModeViewModel's
+    // startXMode — the same in-place resume check an already-current race's Start already goes
+    // through). Offered on Race History's LocalRace rows only when isActive && !isCurrentActiveRace
+    // (see that field's own doc).
+    fun resumeRace(raceId: Long) {
+        viewModelScope.launch { raceRepository.switchActiveRace(raceId) }
+    }
 
     // Permanently erases a local race — see RaceRepository.deleteRace's own doc. Irreversible;
     // RaceHistoryScreen only calls this after its own confirmation dialog (and never offers it
@@ -237,7 +268,12 @@ class RaceHistoryViewModel(
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val container = appContainer()
-                RaceHistoryViewModel(container.raceRepository, container.muleRepository, container.progressRepository)
+                RaceHistoryViewModel(
+                    container.raceRepository,
+                    container.muleRepository,
+                    container.progressRepository,
+                    container.settingsRepository,
+                )
             }
         }
     }

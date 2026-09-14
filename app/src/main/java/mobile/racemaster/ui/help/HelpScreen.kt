@@ -100,19 +100,16 @@ fun HelpScreen(onBack: () -> Unit) {
                     "— see \"External triggers\" below.",
             )
             HelpSection(
-                title = "Race details — Courses",
-                body = "The race details form's Courses field (defaulting to Seniors/Juniors/" +
-                    "Mixed) is a menu, not a single fixed value — pick every course this race " +
-                    "might record, and add more by typing a name and tapping Add. Which course " +
-                    "a given recording session actually is isn't chosen here: it's asked the " +
-                    "moment Start is pressed on Time/Bibs/CP Mode's own screen, via a small " +
-                    "\"Which course?\" picker listing whatever's ticked here (skipped " +
-                    "automatically if only one is). Picking a course already used today (by " +
-                    "this device, in any mode) resumes that same file with a fresh segment; " +
-                    "picking one that hasn't been started yet creates its own separate file " +
-                    "under the same race name and details — so recording Juniors, then later " +
-                    "swapping to Seniors, then back to Juniors again for stragglers, never " +
-                    "needs a new race defining, just a different pick at Start each time.",
+                title = "Setup Race",
+                body = "A device records against exactly one race for as long as it's set up — " +
+                    "there's no separate \"course\" to pick any more. Setup Race (reached from " +
+                    "\"Setup: <device name>\" on the Mode Picker, below Options) just asks for " +
+                    "the race name and location; if this race has its own Seniors/Juniors " +
+                    "suffix, type it straight into the name (e.g. \"Pontesbury-Seniors\") the " +
+                    "same way the web app already names its own per-course files. Setup Race is " +
+                    "disabled while a race is already active — stop and reset it first, or use " +
+                    "Progress (Races)'s own \"Resume\" action if it was only stopped by " +
+                    "mistake (see \"General\" below).",
             )
             HelpSection(
                 title = "Time Mode",
@@ -120,29 +117,24 @@ fun HelpScreen(onBack: () -> Unit) {
                     "SPLIT records the current time every time it's tapped — two fast taps always " +
                     "produce two separate splits. STOP freezes the clock and records a \"Stop\" marker " +
                     "(shown as S– — a boundary marker, not a numbered split); undoing that Stop marker " +
-                    "resumes the clock with no time lost. Once stopped, the same button becomes RESET, " +
-                    "which asks \"Reset course\" (adds a reset marker and starts a fresh S0 count — " +
-                    "nothing is deleted, every split stays in Race History regardless; genuine deletion " +
-                    "only ever happens explicitly, from the Races list — this is for a new operator's " +
-                    "own practice attempt, not for ending a course for real) or \"End recording\" (the " +
-                    "normal way a course finishes — leaves every split exactly as recorded and returns " +
-                    "to the pre-start screen ready for a fresh Start-time course pick; see \"Race " +
-                    "details — Courses\" above). Picking a different course there starts a genuine new " +
-                    "segment; picking this same course instead — there are still runners out, or it was " +
-                    "ended by mistake — carries straight on exactly where it left off: no new Start " +
-                    "marker, no split renumbering, Undo last still reaches back before the Stop. Undo " +
-                    "last removes only the most recent split. Tap any split row to give it a short " +
-                    "label.",
+                    "resumes the clock with no time lost. Once stopped, the same button becomes RESET " +
+                    "(after a confirm) — adds a reset marker and starts a fresh S0 count; nothing is " +
+                    "deleted, every split stays in Race History regardless, genuine deletion only ever " +
+                    "happens explicitly from the Races list. If Stop was pressed by mistake while " +
+                    "runners are still out, don't Reset — press START again instead (picks straight " +
+                    "back up where it left off, no new Start marker, no renumbering, Undo last still " +
+                    "reaches back before the Stop), or, if something else has happened since, use " +
+                    "Progress (Races)'s own \"Resume\" action to switch back to this race first (see " +
+                    "\"General\" below). Undo last removes only the most recent split. Tap any split " +
+                    "row to give it a short label.",
             )
             HelpSection(
                 title = "Bibs Mode — starting a race",
-                body = "New Race asks for the race name, the first bib number, and how many runners " +
-                    "there are — together these define the legal bib range for the race. A bib " +
-                    "outside that range is allowed but flagged (see \"Bibs Mode — duplicates\" below) " +
-                    "rather than rejected, the same way a duplicate is. A fixed \"Clock\" marker is " +
-                    "automatically recorded as split S0. If the first bib number is below 100, bibs " +
-                    "in Bibs/CP Mode must still be typed as 3 digits with leading zeros (e.g. \"007\") " +
-                    "— see \"Bibs Mode — logging\" below for why.",
+                body = "Once a race is set up (see \"Setup Race\" above) and Bibs Mode is selected, " +
+                    "START records a fixed \"Clock\" marker as split S0 and opens the keypad. There's " +
+                    "no bib range to configure any more — every bib is accepted; if the first bib " +
+                    "you'll ever log is below 100, still type it as 3 digits with leading zeros " +
+                    "(e.g. \"007\") — see \"Bibs Mode — logging\" below for why.",
             )
             HelpSection(
                 title = "Bibs Mode — logging",
@@ -165,15 +157,13 @@ fun HelpScreen(onBack: () -> Unit) {
                     "on) the next entry will get.",
             )
             HelpSection(
-                title = "Bibs Mode — duplicates and out-of-range bibs",
+                title = "Bibs Mode — duplicates",
                 body = "Entering the same bib number for the same event twice (e.g. two Finishes for " +
                     "bib 101) is still allowed — it's flagged as \"dup of S1\", referencing the other " +
                     "matching row, and a running dup count appears at the top right of the \"Next\" " +
                     "line. A Start and a Finish for the same bib is normal and never counts as a " +
-                    "duplicate. A bib outside the race's configured range is logged the same way, " +
-                    "flagged inline as \"not in range M to N\" rather than being blocked. Tap any row " +
-                    "to correct its bib number or event type — if that resolves the duplicate or range " +
-                    "flag, it disappears immediately.",
+                    "duplicate. Tap any row to correct its bib number or event type — if that " +
+                    "resolves the duplicate, the flag disappears immediately.",
             )
             HelpSection(
                 title = "Bibs Mode — editing rows",
@@ -185,19 +175,16 @@ fun HelpScreen(onBack: () -> Unit) {
             )
             HelpSection(
                 title = "Bibs Mode — stop and reset",
-                body = "STOP freezes logging (the keypad and Event are disabled) and frees up New " +
-                    "Race — this records a \"Stop\" marker (shown as S–, not a numbered split) that can " +
-                    "be undone to resume logging. Once stopped, the same button becomes RESET, which " +
-                    "asks \"Reset course\" (adds a reset marker and starts a fresh count from it — " +
-                    "nothing is deleted, every entry stays in Race History regardless; genuine deletion " +
-                    "only ever happens explicitly, from the Races list — this is for a new operator's " +
-                    "own practice attempt, not for ending a course for real) or \"End recording\" (the " +
-                    "normal way a course finishes — leaves every entry exactly as recorded and returns " +
-                    "to the same Start-button screen ready for a fresh Start-time course pick; see " +
-                    "\"Race details — Courses\" above). Picking a different course there starts a " +
-                    "genuine new segment; picking this same course instead — there are still runners " +
-                    "out, or it was ended by mistake — carries straight on exactly where it left off: " +
-                    "no new Clock marker, no renumbering, Undo last still reaches back before the Stop.",
+                body = "STOP freezes logging (the keypad and Event are disabled) — this records a " +
+                    "\"Stop\" marker (shown as S–, not a numbered split) that can be undone to resume " +
+                    "logging. Once stopped, the same button becomes RESET (after a confirm) — adds a " +
+                    "reset marker and starts a fresh count from it; nothing is deleted, every entry " +
+                    "stays in Race History regardless, genuine deletion only ever happens explicitly " +
+                    "from the Races list. If Stop was pressed by mistake while runners are still out, " +
+                    "don't Reset — press START again instead (carries straight on exactly where it " +
+                    "left off: no new Clock marker, no renumbering, Undo last still reaches back before " +
+                    "the Stop), or use Progress (Races)'s own \"Resume\" action first if something else " +
+                    "has happened since (see \"General\" below).",
             )
             HelpSection(
                 title = "CP Mode",
@@ -214,10 +201,12 @@ fun HelpScreen(onBack: () -> Unit) {
                     "can flip it back and forth as many times as needed; the field keeps showing that " +
                     "bib rather than clearing. Tap any row to correct it, and STOP/RESET/Undo last " +
                     "all work exactly as in Bibs Mode — Undo last brings whatever's now on top back " +
-                    "into the field the same way. The race's Location on the race details screen must " +
-                    "be \"CP\" followed by a number from 1 upwards, with " +
-                    "an optional \"-name\" suffix (e.g. \"CP1\", \"CP2-Bridge\") so its entries can be " +
-                    "told apart from other stations recording the same race.",
+                    "into the field the same way. CP Mode needs its race's Location to be \"CP\" " +
+                    "followed by a number from 1 upwards, with an optional \"-name\" suffix (e.g. " +
+                    "\"CP1\", \"CP2-Bridge\") so its entries can be told apart from other stations " +
+                    "recording the same race — checked when START is pressed (Setup Race itself " +
+                    "doesn't know the mode yet, so it can't enforce this); if it's wrong, fix it via " +
+                    "\"This Race\" on this screen's own top bar.",
             )
             HelpSection(
                 title = "Mule Mode",
@@ -272,7 +261,9 @@ fun HelpScreen(onBack: () -> Unit) {
                     "checking the server on or off without affecting device-to-device sync), Force " +
                     "sync now (triggers an immediate pull-and-push cycle instead of waiting for the " +
                     "automatic few-second tick), and Stop auto-sync/Resume auto-sync (pauses or " +
-                    "resumes that background cycle). These apply the same way regardless of " +
+                    "resumes that background cycle). Below Options, Setup Race is where the device's " +
+                    "one race actually gets created (see \"Setup Race\" above) — it, like Setup Name, " +
+                    "is reachable before any mode is selected. These apply the same way regardless of " +
                     "recording mode: a phone still pushes its own recorded data to the server on the " +
                     "same schedule either way, it just never pulls from other phones unless muling " +
                     "is turned on for it too. Once a server is configured, every mode's " +
@@ -310,24 +301,32 @@ fun HelpScreen(onBack: () -> Unit) {
             )
             HelpSection(
                 title = "General",
-                body = "New Race starts a fresh race under the current mode (disabled while a race is " +
-                    "in progress, to avoid losing it). Time/Bibs/CP are mutually exclusive for a race " +
-                    "— only one can be active at once, and picking a different one while another is " +
-                    "still active (Started but not yet Stopped and Reset) is blocked with a \"Can't " +
-                    "switch mode\" dialog rather than performed. The Mode Picker marks whichever one " +
-                    "is holding it \"- active\" right on its own button, alongside the race-in-progress " +
-                    "card lower down. Muling on/off is separate (see Mule Mode above) and unaffected " +
-                    "by any of this. Progress on the mode picker opens the Races page, listing every " +
-                    "previously recorded race, read-only — each row shows the wall-clock time " +
-                    "(HH:MM) it was recorded, alongside its line/split number, event, bib, and " +
-                    "elapsed time. The same page also lists any progress files this device has " +
-                    "received (marked with their own icon so they're easy to tell apart from races) " +
-                    "— race-wide bib/course/status data pulled from the server or delivered by the " +
-                    "racemaster web app over Bluetooth; tap one to see every entry, or delete it to " +
-                    "remove it from this device only (it can always be fetched or delivered again " +
-                    "later). Button presses play a short click sound at full volume, regardless of " +
-                    "the phone's own volume/Touch sounds setting, so it's audible at a noisy finish " +
-                    "line.",
+                body = "A device records against exactly one race at a time, set up via Setup Race " +
+                    "(see above) — there's no separate \"New Race\" inside a mode any more; starting " +
+                    "over means going back to Setup Device. \"This Race\" on each mode's own top bar " +
+                    "opens a rename-only editor for the current race's name/location (locked once it's " +
+                    "actually started — see each mode's own Stop/Reset section above). Time/Bibs/CP " +
+                    "are mutually exclusive for a race — only one can be active at once, and picking " +
+                    "a different one while another is still active (Started but not yet Stopped and " +
+                    "Reset) is blocked with a \"Can't switch mode\" dialog rather than performed. The " +
+                    "Mode Picker marks whichever one is holding it \"- active\" right on its own " +
+                    "button, alongside the race-in-progress card lower down. Muling on/off is separate " +
+                    "(see Mule Mode above) and unaffected by any of this. Progress on the mode picker " +
+                    "opens the Races page, listing every previously recorded race, alongside a " +
+                    "\"Resume\" action on any race that's still active (an un-Reset started mode) but " +
+                    "isn't this device's current one — the recovery path for a Stop pressed by " +
+                    "mistake after something else has happened since (a new Setup Race, say): tap " +
+                    "Resume, then press START again in whichever mode it was recording, to carry on " +
+                    "exactly where it left off. Tap a race (not its Resume button) to see its full " +
+                    "history read-only — each row shows the wall-clock time (HH:MM) it was recorded, " +
+                    "alongside its line/split number, event, bib, and elapsed time. The same page also " +
+                    "lists any progress files this device has received (marked with their own icon so " +
+                    "they're easy to tell apart from races) — race-wide bib/status data pulled from " +
+                    "the server or delivered by the racemaster web app over Bluetooth; tap one to see " +
+                    "every entry, or delete it to remove it from this device only (it can always be " +
+                    "fetched or delivered again later). Button presses play a short click sound at " +
+                    "full volume, regardless of the phone's own volume/Touch sounds setting, so it's " +
+                    "audible at a noisy finish line.",
             )
         }
     }

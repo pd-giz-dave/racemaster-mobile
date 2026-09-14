@@ -28,7 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.data.mule.BtPollingStatus
-import mobile.racemaster.ui.components.CoursePickerDialog
+import mobile.racemaster.data.repository.isValidCpLocation
 import mobile.racemaster.ui.components.DigitKeypad
 import mobile.racemaster.ui.components.EntryLogList
 import mobile.racemaster.ui.components.EntryModeHeaderInfo
@@ -56,7 +56,6 @@ private val BUTTON_ROW_CONTENT_PADDING = PaddingValues(horizontal = 4.dp, vertic
 @Composable
 fun CpModeScreen(
     onChangeMode: () -> Unit,
-    onNewRace: () -> Unit,
     onEditRace: (raceId: Long) -> Unit,
     onEditEntry: (entryId: Long) -> Unit,
     viewModel: CpModeViewModel = viewModel(factory = CpModeViewModel.Factory),
@@ -64,8 +63,6 @@ fun CpModeScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     val btPollingStatus by viewModel.btPollingStatus.collectAsStateWithLifecycle()
-    val coursePickerOptions by viewModel.coursePickerOptions.collectAsStateWithLifecycle()
-    val coursePickerPreviousCourse by viewModel.coursePickerPreviousCourse.collectAsStateWithLifecycle()
 
     // No external HID trigger here (unlike Time Mode) — entry is now bib-driven/auto-saving
     // rather than a single "log a Pass" action a volume button could stand in for.
@@ -74,9 +71,7 @@ fun CpModeScreen(
         topBar = {
             ModeScreenTopBar(
                 title = "CP Mode",
-                newRaceEnabled = !uiState.raceInProgress,
                 thisRaceEnabled = uiState.raceId != null,
-                onNewRace = onNewRace,
                 onThisRace = { uiState.raceId?.let(onEditRace) },
                 onChangeMode = onChangeMode,
             )
@@ -97,7 +92,6 @@ fun CpModeScreen(
             onRetire = viewModel::toggleLastRetag,
             onStop = viewModel::stopCpMode,
             onReset = viewModel::resetCpMode,
-            onEndRecording = viewModel::endRecording,
             onUndo = viewModel::undoLast,
             onEditEntry = onEditEntry,
             modifier = Modifier
@@ -105,16 +99,6 @@ fun CpModeScreen(
                 .fillMaxSize()
                 .imePadding()
                 .padding(horizontal = 12.dp, vertical = 6.dp),
-        )
-    }
-
-    // See TimeModeScreen's own identical block for the full doc.
-    coursePickerOptions?.let { options ->
-        CoursePickerDialog(
-            options = options,
-            previousCourse = coursePickerPreviousCourse,
-            onSelect = viewModel::onCoursePicked,
-            onDismiss = viewModel::dismissCoursePicker,
         )
     }
 }
@@ -131,7 +115,6 @@ private fun CpModeContent(
     onRetire: () -> Unit,
     onStop: () -> Unit,
     onReset: () -> Unit,
-    onEndRecording: () -> Unit,
     onUndo: () -> Unit,
     onEditEntry: (entryId: Long) -> Unit,
     modifier: Modifier = Modifier,
@@ -170,6 +153,21 @@ private fun CpModeContent(
                     btPollingStatus = btPollingStatus,
                 )
                 if (!uiState.started) {
+                    // Setup Race no longer knows the mode at setup time (see TODO.md's phase
+                    // 1), so it can't enforce CP's own location format the way the old race
+                    // details form used to — checked here instead, the one place CP Mode
+                    // actually needs it: a station's entries are told apart by this location,
+                    // so a wrongly-shaped one is caught before Start rather than after.
+                    val locationValid = isValidCpLocation(uiState.raceLocation)
+                    if (uiState.raceId != null && !locationValid) {
+                        Text(
+                            "This race's location (\"${uiState.raceLocation}\") isn't a valid CP " +
+                                "location yet — it must look like CP1, CP2-Bridge, etc. Fix it via " +
+                                "\"This Race\" before starting.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                     // Nothing recorded yet for this segment (a fresh race, a race switched
                     // into from a different mode, or one just Reset) — side-effect-free to
                     // just look at, exactly like Time/Bibs Mode's own pre-Start state. Unlike
@@ -177,7 +175,7 @@ private fun CpModeContent(
                     // CpModeRepository.startCpMode's own doc.
                     Button(
                         onClick = withClickSound(onStart),
-                        enabled = uiState.raceId != null,
+                        enabled = uiState.raceId != null && locationValid,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(96.dp),
@@ -221,10 +219,8 @@ private fun CpModeContent(
                         StopOrResetButton(
                             isStopped = uiState.stopped,
                             resetDescription = "Adds a reset marker and starts a fresh count from scratch — nothing is deleted, every checkpoint entry stays in Race History.",
-                            endRecordingDescription = "Keeps every checkpoint entry exactly as recorded — pick a different course to start fresh, or this same one to carry straight on where you left off.",
                             onStop = onStop,
                             onReset = onReset,
-                            onEndRecording = onEndRecording,
                             enabled = uiState.raceId != null,
                             contentPadding = BUTTON_ROW_CONTENT_PADDING,
                             modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),

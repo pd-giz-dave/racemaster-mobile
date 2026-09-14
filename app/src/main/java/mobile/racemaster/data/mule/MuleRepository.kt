@@ -375,6 +375,27 @@ class MuleRepository(
         return if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed else "https://$trimmed"
     }
 
+    /** Announces a freshly set-up race to the server immediately — an explicit push of an empty
+     *  record set for just this device+race, called once from Setup Race right after the local
+     *  race is created (see TODO.md's phase 1: "the device file is written to the server ...
+     *  as soon as setup is complete ... independent of any mode selection"). This deliberately
+     *  bypasses [pushToServer]'s own regular reconciliation loop rather than just calling it:
+     *  that loop skips any race with no activity at all yet (see its own doc's staleness rule),
+     *  which a brand-new race always is — routing through it here would mean the device file
+     *  never actually appears until the first real split/entry, defeating the point. Writing
+     *  `deviceName.json` (even with zero records in it) is exactly the signal the web app's
+     *  Mobile Files page already reads a device's presence from (file mtime). A no-op (silently
+     *  swallowed, never thrown) when not logged in to a server, or when the push itself fails —
+     *  the phone may be offline at setup time, in which case there's nothing to announce to yet;
+     *  the ordinary pushToServer loop will pick this race up on its own once it has real
+     *  activity, same as always. */
+    suspend fun announceRaceSetup(raceLabel: String) {
+        val baseUrl = settingsRepository.serverBaseUrl.first() ?: return
+        val token = settingsRepository.authToken.first() ?: return
+        val myDeviceName = settingsRepository.getOrCreateDeviceName()
+        runCatching { syncClient.pushRecords(baseUrl, token, raceLabel, mapOf(myDeviceName to emptyList<SyncRecord>())) }
+    }
+
     /** Pushes on to the server everything this device knows about for every race label it has
      *  any connection to — its own local races (built fresh from [RaceRepository]'s own
      *  [mobile.racemaster.data.db.entity.HistoryLineEntity] rows on every single attempt, no

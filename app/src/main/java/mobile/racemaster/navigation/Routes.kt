@@ -12,10 +12,15 @@ object Routes {
     const val RACE_HISTORY_DETAIL = "race_history_detail/{raceId}"
     const val MULE_SOURCE_DETAIL = "mule_source_detail/{raceLabel}/{sourceDeviceId}"
     const val PROGRESS_DETAIL = "progress_detail/{raceId}"
-    const val RACE_DETAILS = "race_details/{mode}/{raceId}"
+    // Rename-only now (see RaceDetailsScreen's own doc — course/bib fields dropped, creation
+    // moved to Setup Race) — always an existing race, no more `mode`/nullable-raceId sentinel.
+    const val RACE_DETAILS = "race_details/{raceId}"
     const val HELP = "help"
     const val SETUP_DEVICE = "setup_device"
     const val NAME_DEVICE = "name_device"
+    // Below Setup Device's own Options button (see TODO.md's phase 1) — the one place a race
+    // now gets created, independent of mode selection.
+    const val SETUP_RACE = "setup_race"
     const val MULE_SERVER_SETUP = "mule_server_setup"
 
     // Bare path — every existing caller that just wants plain Options (Setup Device's own
@@ -61,8 +66,5 @@ object Routes {
         "mule_source_detail/${java.net.URLEncoder.encode(raceLabel, "UTF-8")}/" +
             java.net.URLEncoder.encode(sourceDeviceId, "UTF-8")
 
-    // raceId of -1 is the "new race" sentinel — Nav Compose's Long arg type doesn't support
-    // nullable values, so this avoids a second parallel route just for "no existing race".
-    fun raceDetails(mode: AppMode, raceId: Long?) =
-        "race_details/${mode.name}/${raceId ?: -1L}"
+    fun raceDetails(raceId: Long) = "race_details/$raceId"
 }

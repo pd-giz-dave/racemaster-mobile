@@ -39,7 +39,6 @@ import mobile.racemaster.data.db.entity.formatSplitRef
 import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.ui.components.BtPollingStatusLine
-import mobile.racemaster.ui.components.CoursePickerDialog
 import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.ServerStatusLine
 import mobile.racemaster.ui.components.SplitRow
@@ -54,7 +53,6 @@ import mobile.racemaster.util.withClickSound
 @Composable
 fun TimeModeScreen(
     onChangeMode: () -> Unit,
-    onNewRace: () -> Unit,
     onEditRace: (raceId: Long) -> Unit,
     onEditSplit: (splitId: Long) -> Unit,
     viewModel: TimeModeViewModel = viewModel(factory = TimeModeViewModel.Factory),
@@ -62,8 +60,6 @@ fun TimeModeScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     val btPollingStatus by viewModel.btPollingStatus.collectAsStateWithLifecycle()
-    val coursePickerOptions by viewModel.coursePickerOptions.collectAsStateWithLifecycle()
-    val coursePickerPreviousCourse by viewModel.coursePickerPreviousCourse.collectAsStateWithLifecycle()
 
     // Registers this screen's main action as the target for an external USB/Bluetooth trigger
     // (see MainActivity.onExternalSplitTrigger) while it's on screen — mirrors the big on-screen
@@ -85,9 +81,7 @@ fun TimeModeScreen(
         topBar = {
             ModeScreenTopBar(
                 title = "Time Mode",
-                newRaceEnabled = !uiState.raceInProgress,
                 thisRaceEnabled = uiState.raceId != null,
-                onNewRace = onNewRace,
                 onThisRace = { uiState.raceId?.let(onEditRace) },
                 onChangeMode = onChangeMode,
             )
@@ -106,7 +100,6 @@ fun TimeModeScreen(
             onSplit = viewModel::recordSplit,
             onStop = viewModel::stopStopwatch,
             onReset = viewModel::resetStopwatch,
-            onEndRecording = viewModel::endRecording,
             onUndo = viewModel::undoLast,
             onEditSplit = onEditSplit,
             modifier = Modifier
@@ -114,17 +107,6 @@ fun TimeModeScreen(
                 .fillMaxSize()
                 .imePadding()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-        )
-    }
-
-    // Shown from viewModel.startStopwatch whenever the active race offers more than one course
-    // — see CoursePickerDialog/RaceRepository.resolveCourseRace's own docs.
-    coursePickerOptions?.let { options ->
-        CoursePickerDialog(
-            options = options,
-            previousCourse = coursePickerPreviousCourse,
-            onSelect = viewModel::onCoursePicked,
-            onDismiss = viewModel::dismissCoursePicker,
         )
     }
 }
@@ -138,7 +120,6 @@ private fun TimeModeContent(
     onSplit: () -> Unit,
     onStop: () -> Unit,
     onReset: () -> Unit,
-    onEndRecording: () -> Unit,
     onUndo: () -> Unit,
     onEditSplit: (splitId: Long) -> Unit,
     modifier: Modifier = Modifier,
@@ -237,10 +218,8 @@ private fun TimeModeContent(
                         StopOrResetButton(
                             isStopped = uiState.stopwatchStopped,
                             resetDescription = "Adds a reset marker and starts a fresh count from scratch (under the same race name) — nothing is deleted, every split stays in Race History.",
-                            endRecordingDescription = "Keeps every split exactly as recorded — pick a different course to start fresh, or this same one to carry straight on where you left off.",
                             onStop = onStop,
                             onReset = onReset,
-                            onEndRecording = onEndRecording,
                             modifier = Modifier.weight(1f),
                         )
                         UndoLastButton(
