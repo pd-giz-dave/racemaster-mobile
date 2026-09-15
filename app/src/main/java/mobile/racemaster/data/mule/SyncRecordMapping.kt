@@ -19,9 +19,19 @@ import mobile.racemaster.util.formatElapsedSplitTime
  * rather than sent once. No device name is attached here — the caller already knows (and
  * separately threads through) which device this batch of records belongs to; see [SyncRecord]'s
  * own doc for why that's not repeated per line either.
+ *
+ * MODE_START is the one Time-mode row whose `splitTime` deliberately isn't a real elapsed time:
+ * it's written at the exact same instant as the real Start marker right after it (see
+ * TimeModeRepository.startStopwatch), so a naive elapsed calculation would also come out
+ * "00:00:00" — indistinguishable on the wire from a genuine Start. It sends `"n/a"` instead,
+ * mirroring the same sentinel Bibs/CP's own non-bib markers already use for `bibNumber` — a
+ * consumer already told to skip a blank/`"n/a"` split time (the same convention this mirrors)
+ * naturally never mistakes this boundary marker for a real split.
  */
 fun HistoryLineEntity.toSyncRecord(raceStartedAtMillis: Long?, location: String = "Finish"): SyncRecord {
-    val splitTime = if (mode == HistoryMode.TIME) {
+    val splitTime = if (mode == HistoryMode.TIME && action == HistoryAction.MODE_START) {
+        "n/a"
+    } else if (mode == HistoryMode.TIME) {
         val elapsedMillis = raceStartedAtMillis?.let { timestampMillis - it } ?: 0L
         formatElapsedSplitTime(elapsedMillis)
     } else {

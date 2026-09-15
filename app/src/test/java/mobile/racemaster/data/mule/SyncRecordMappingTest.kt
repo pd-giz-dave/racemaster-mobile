@@ -132,6 +132,20 @@ class SyncRecordMappingTest {
         assertEquals("Undo", line(HistoryMode.TIME, HistoryAction.UNDO, 1, 0L).toSyncRecord(0L).action)
     }
 
+    @Test
+    fun timeModeModeStartSendsNAAsSplitTimeNotZeroElapsed() {
+        // MODE_START is written at the exact same instant as the real Start marker right after
+        // it, so a naive elapsed calculation would also read "00:00:00" — indistinguishable on
+        // the wire from a genuine Start. It must send "n/a" instead (mirroring the same sentinel
+        // Bibs/CP's own non-bib markers already use for bibNumber), never a real-looking time.
+        val modeStart = line(HistoryMode.TIME, HistoryAction.MODE_START, splitNumber = 0, timestampMillis = 5_000L).toSyncRecord(raceStartedAtMillis = 5_000L)
+        assertEquals("n/a", modeStart.splitTime)
+        // The real Start marker immediately after it, at the same timestamp, still reports a
+        // genuine elapsed "00:00:00" — only MODE_START gets the sentinel.
+        val start = line(HistoryMode.TIME, HistoryAction.START, splitNumber = 0, timestampMillis = 5_000L).toSyncRecord(raceStartedAtMillis = 5_000L)
+        assertEquals("00:00:00", start.splitTime)
+    }
+
     // Bibs-mode HistoryLineEntity.toSyncRecord
 
     @Test
