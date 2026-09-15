@@ -276,6 +276,19 @@ class SyncRecordMappingTest {
     }
 
     @Test
+    fun setupMarkerRoundTripsThroughTheWireCarryingOnlyLocation() {
+        // HistoryMode.ANY/HistoryAction.SETUP — Setup Race's own location-announcement marker
+        // (see RaceRepository.recordSetupMarker). No bib, no split time, just an honest "Setup"
+        // action and whatever location the race was set up with.
+        val record = line(HistoryMode.ANY, HistoryAction.SETUP, splitNumber = 0, timestampMillis = 0L).toSyncRecord(null, location = "CP2")
+        assertEquals("Setup", record.action)
+        assertNull(record.bibNumber)
+        assertNull(record.splitTime)
+        assertEquals("CP2", record.location)
+        assertEquals(HistoryAction.SETUP, record.toHistoryAction())
+    }
+
+    @Test
     fun roundTripsEveryBibsModeActionThroughTheWireAndBack() {
         assertEquals(HistoryAction.FINISH, bibEntry(101, HistoryAction.FINISH, 1, 0L).toSyncRecord(null).toHistoryAction())
         assertEquals(HistoryAction.START, bibEntry(101, HistoryAction.START, 1, 0L).toSyncRecord(null).toHistoryAction())

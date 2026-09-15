@@ -65,6 +65,10 @@ private fun HistoryAction.toServerAction(): String = when (this) {
     // tell this boundary marker apart from a mode's own real Start/Clock row (see
     // HistoryAction.MODE_START's own doc), even though both show as "Start" in this app's UI.
     HistoryAction.MODE_START -> "ModeStart"
+    // See HistoryAction.SETUP's own doc — the only wire content this marker carries that
+    // matters is `location` (set on every SyncRecord regardless of action), but it still needs
+    // its own honest, distinct action string like every other row.
+    HistoryAction.SETUP -> "Setup"
 }
 
 /**
@@ -94,6 +98,7 @@ fun SyncRecord.toHistoryAction(): HistoryAction = when (action) {
     "Reset" -> HistoryAction.RESET
     "Undo" -> HistoryAction.UNDO
     "ModeStart" -> HistoryAction.MODE_START
+    "Setup" -> HistoryAction.SETUP
     // An unrecognized wire value - should not get here
     else -> HistoryAction.IGNORE
 }

@@ -38,6 +38,18 @@ enum class HistoryAction {
     // TimeModeRepository's own current-segment queries) and only ever shows up in Race History's
     // full chronology.
     MODE_START,
+
+    // HistoryMode.ANY only — RaceRepository.recordSetupMarker's own single row, written once at
+    // Setup Race time before any mode has been chosen. Unlike MODE_START (shared with a real
+    // family, so it needs an explicit action-based exclusion from that family's own live view),
+    // this needs no such exclusion: mode = ANY already keeps it out of every per-family SQL query
+    // (see HistoryMode.ANY's own doc). It carries only `location` (via SyncRecordMapping's own
+    // location = race.location on every outgoing record) — the whole point of this marker is
+    // letting the web app see where this device is stationed as soon as it's set up, before the
+    // first real split. Has a real toServerAction()/toHistoryAction() wire mapping (see
+    // SyncRecordMapping.kt) since — unlike a wire-only marker would have been — this is a genuine
+    // persisted row that gets pulled/relayed over BLE like any other.
+    SETUP,
 }
 
 /** Actions that carry a real bib number and participate in range/duplicate checks. */

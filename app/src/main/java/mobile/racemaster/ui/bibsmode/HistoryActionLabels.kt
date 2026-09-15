@@ -22,6 +22,10 @@ fun HistoryAction.displayName(): String = when (this) {
     // doc) — same "Start" text its own real Start/Clock marker already shows there, just on
     // its own separate boundary-marker row.
     HistoryAction.MODE_START -> "Start"
+    // Race History is the only place this is ever shown too (see HistoryAction.SETUP's own
+    // doc) — HistoryMode.ANY keeps it out of every per-mode live screen already, so this label
+    // only ever needs to read sensibly in the unified cross-mode chronology.
+    HistoryAction.SETUP -> "Setup"
 }
 
 // Deliberately excludes every marker action (CLOCK/STOP/RESET/UNDO, plus the Time-only SPLIT,

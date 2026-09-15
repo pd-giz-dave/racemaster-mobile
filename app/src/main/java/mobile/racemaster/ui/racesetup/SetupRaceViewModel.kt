@@ -75,11 +75,14 @@ class SetupRaceViewModel(
     val locationHistory: StateFlow<List<String>> = settingsRepository.locationHistory
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** Creates a new race under [name]/[location], makes it this device's active race, and
-     *  (best-effort — see MuleRepository.announceRaceSetup's own doc) announces it to the
-     *  server immediately if already logged in, independent of any mode selection. The manual
-     *  (offline, or online-but-not-picking-a-scanned-race) path — see [pickAvailableRace] for
-     *  the online branch that adopts an exact existing server race instead. */
+    /** Creates a new race under [name]/[location], makes it this device's active race, records
+     *  its own setup marker (see [RaceRepository.recordSetupMarker]'s own doc — this is what lets
+     *  the web app see this device's location as soon as it's set up, over either transport, not
+     *  just once the first real split lands), and (best-effort — see
+     *  MuleRepository.announceRaceSetup's own doc) announces it to the server immediately if
+     *  already logged in, independent of any mode selection. The manual (offline, or
+     *  online-but-not-picking-a-scanned-race) path — see [pickAvailableRace] for the online
+     *  branch that adopts an exact existing server race instead. */
     suspend fun save(name: String, location: String) {
         val trimmedName = name.trim()
         val trimmedLocation = location.trim()
@@ -87,7 +90,8 @@ class SetupRaceViewModel(
         settingsRepository.addLocationToHistory(trimmedLocation)
         val newRaceId = raceRepository.startNewRace(trimmedName, location = trimmedLocation)
         raceRepository.switchActiveRace(newRaceId)
-        raceRepository.getRace(newRaceId)?.label?.let { muleRepository.announceRaceSetup(it) }
+        raceRepository.recordSetupMarker(newRaceId)
+        muleRepository.announceRaceSetup()
     }
 
     private val _availableRaces = MutableStateFlow<AvailableRacesState>(AvailableRacesState.NotChecked)
@@ -116,22 +120,23 @@ class SetupRaceViewModel(
     }
 
     /** Adopts [race] exactly — see [RaceRepository.adoptRaceLabel]'s own doc for why this can't
-     *  just be [save] with a different name — makes it this device's active race, then
-     *  immediately pulls whatever progress the server already has for it (race-id-then-progress
-     *  sequencing: the local race row must exist first, since [ProgressRepository]'s own storage
-     *  is keyed by local raceId, not raceLabel) and announces the device file the same way
-     *  [save]'s manual path does. */
+     *  just be [save] with a different name — makes it this device's active race, records its
+     *  own setup marker (see [save]'s own doc), then immediately pulls whatever progress the
+     *  server already has for it (race-id-then-progress sequencing: the local race row must
+     *  exist first, since [ProgressRepository]'s own storage is keyed by local raceId, not
+     *  raceLabel) and announces the device file the same way [save]'s manual path does. */
     suspend fun pickAvailableRace(race: AvailableRace, location: String) {
         val trimmedLocation = location.trim()
         settingsRepository.addLocationToHistory(trimmedLocation)
         val newRaceId = raceRepository.adoptRaceLabel(race.raceLabel, trimmedLocation)
         raceRepository.switchActiveRace(newRaceId)
+        raceRepository.recordSetupMarker(newRaceId)
         val baseUrl = settingsRepository.serverBaseUrl.first()
         val token = settingsRepository.authToken.first()
         if (baseUrl != null && token != null) {
             progressRepository.refreshFromServer(baseUrl, token, newRaceId, race.raceLabel)
         }
-        muleRepository.announceRaceSetup(race.raceLabel)
+        muleRepository.announceRaceSetup()
     }
 
     companion object {

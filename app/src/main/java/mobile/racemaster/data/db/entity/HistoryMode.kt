@@ -9,7 +9,15 @@ package mobile.racemaster.data.db.entity
 // `action`. CP is otherwise structured just like BIBS (its own current-segment/undo-stack/
 // counters, independent of a Bibs device recording the same race from a different station) —
 // see EntryLogModeEngine, which both BIBS and CP repositories are built on.
-enum class HistoryMode { TIME, BIBS, CP }
+// ANY is not a fourth recording family — it's the placeholder for a row written before any
+// family has even been chosen (Setup Race's own location-announcement marker, see
+// HistoryAction.SETUP's own doc and RaceRepository.recordSetupMarker). Every per-family query
+// (HistoryLineDao.observeCurrentSegment et al.) is SQL-filtered on `mode = :thisSpecificMode`,
+// so an ANY row is structurally invisible to Time/Bibs/CP's own live screens without needing a
+// separate exclusion list — it only ever surfaces in Race History's own unified cross-mode
+// chronology, and in the raceId-scoped (not mode-scoped) sync/relay queries that don't care
+// which family a row belongs to.
+enum class HistoryMode { TIME, BIBS, CP, ANY }
 
 // Used only by Race History's own MODE_START boundary-marker row (see HistoryAction.MODE_START's
 // own doc) to name which mode started, in place of a split number it never had.
@@ -17,6 +25,7 @@ fun HistoryMode.displayName(): String = when (this) {
     HistoryMode.TIME -> "Time"
     HistoryMode.BIBS -> "Bibs"
     HistoryMode.CP -> "CP"
+    HistoryMode.ANY -> "Setup"
 }
 
 // Every history line is now shown in one rationalized column format regardless of mode — a

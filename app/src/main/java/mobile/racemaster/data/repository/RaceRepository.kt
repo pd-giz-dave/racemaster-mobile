@@ -61,6 +61,36 @@ class RaceRepository(
             ),
         )
 
+    // Setup Race's own "this device is in the field" signal (see MuleRepository.announceRaceSetup)
+    // — a single HistoryMode.ANY/HistoryAction.SETUP marker, written right after the race is
+    // created/adopted, before any mode has been chosen. Follows the exact same
+    // read-nextLineNumber/insert/increment shape TimeModeRepository.startStopwatch's own
+    // MODE_START row uses, so this row consumes a real, permanent, never-reused lineNumber like
+    // every other row — no synthetic/reserved-only numbering scheme needed. mode = ANY (not one
+    // of TIME/BIBS/CP) is what keeps it out of every mode's own live current-segment queries for
+    // free (those are SQL-filtered on `mode = :thisMode`, see HistoryLineDao.observeCurrentSegment)
+    // without needing an action-based exclusion list the way MODE_START needs one within its own
+    // shared family. It's still a completely real, synced, permanent row — it flows through
+    // RaceRepository.getHistorySinceLineNumber/observeLastActivityAtMillis (both raceId-scoped,
+    // not mode-scoped) exactly like any other, which is what lets MuleRepository.pushToServer and
+    // PeripheralSyncService's own pull-serving pick it up with no transport-specific code of their
+    // own — see HistoryAction.SETUP's own doc.
+    suspend fun recordSetupMarker(raceId: Long, timestampMillis: Long = System.currentTimeMillis()) {
+        val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+        historyLineDao.insert(
+            HistoryLineEntity(
+                raceId = raceId,
+                mode = HistoryMode.ANY,
+                action = HistoryAction.SETUP,
+                bibNumber = null,
+                splitNumber = null,
+                lineNumber = race.nextLineNumber,
+                timestampMillis = timestampMillis,
+            ),
+        )
+        raceDao.incrementLineNumber(raceId)
+    }
+
     // The date portion of the label is rebuilt from the race's original createdAtMillis, not
     // the edit time — the date is always auto-derived and fixed once the race is created.
     // name/location genuinely can change here now — RaceDetailsScreen only locks them once the
@@ -216,6 +246,11 @@ class RaceRepository(
             HistoryMode.TIME -> raceDao.resetTimeMode(raceId)
             HistoryMode.BIBS -> raceDao.resetBibsMode(raceId)
             HistoryMode.CP -> raceDao.resetCpMode(raceId)
+            // Never actually reachable — forceResetActiveModes (this function's only caller)
+            // only ever passes TIME/BIBS/CP, gated on that mode's own *ModeStartedAtMillis.
+            // HistoryMode.ANY never starts (it's Setup Race's own one-off marker, not a
+            // recording mode an operator can reset) — see HistoryMode.ANY's own doc.
+            HistoryMode.ANY -> error("HistoryMode.ANY is never an active mode to reset")
         }
     }
 
