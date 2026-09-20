@@ -8,51 +8,76 @@ import org.junit.Test
 
 class PeripheralSyncServiceTest {
 
-    // sinkConfirmedUuids — the decision behind PeripheralSyncService.markSynced's own green
-    // threshold: which uuids in an ack actually count as reaching a genuine sink.
+    // sinkConfirmedOrigins — the decision behind PeripheralSyncService.markSynced's own green
+    // threshold: which origin-grouped line numbers in an ack actually count as reaching a
+    // genuine sink. Grouped by origin (not a flat set) so a mixed-origin ack — this device's own
+    // race plus zero or more relayed legs, all pulled in one round trip — can still be routed to
+    // the correct table/source afterward; see AckedOrigin's own doc.
 
     @Test
-    fun aNonSinkAckConfirmsNothingFromItsOwnRecordUuids() {
-        val ack = AckPayload(deviceId = "mule-a", recordUuids = listOf("u1", "u2"), isSink = false)
+    fun aNonSinkAckConfirmsNothingFromItsOwnAckedOrigins() {
+        val ack = AckPayload(deviceId = "mule-a", ackedOrigins = listOf(AckedOrigin(lineNumbers = listOf(1L, 2L))), isSink = false)
 
-        assertEquals(emptySet<String>(), sinkConfirmedUuids(ack))
+        assertEquals(emptyList<AckedOrigin>(), sinkConfirmedOrigins(ack))
     }
 
     @Test
-    fun aSinkAckConfirmsEveryRecordUuidItJustPulled() {
-        val ack = AckPayload(deviceId = "racemaster-web", recordUuids = listOf("u1", "u2"), isSink = true)
+    fun aSinkAckConfirmsEveryLineItJustPulled() {
+        val ack = AckPayload(deviceId = "racemaster-web", ackedOrigins = listOf(AckedOrigin(lineNumbers = listOf(1L, 2L))), isSink = true)
 
-        assertEquals(setOf("u1", "u2"), sinkConfirmedUuids(ack))
+        assertEquals(listOf(AckedOrigin(lineNumbers = listOf(1L, 2L))), sinkConfirmedOrigins(ack))
     }
 
     @Test
-    fun sinkConfirmedRecordUuidsAlwaysCountRegardlessOfIsSink() {
+    fun sinkConfirmedOriginsAlwaysCountRegardlessOfIsSink() {
         // These are already confirmed by definition — relayed here from further along an N-hop
         // mule chain — so they count whether or not the immediate acker is itself a sink.
-        val nonSinkAck = AckPayload(deviceId = "mule-a", recordUuids = emptyList(), isSink = false, sinkConfirmedRecordUuids = listOf("older-1"))
-        assertEquals(setOf("older-1"), sinkConfirmedUuids(nonSinkAck))
+        val nonSinkAck = AckPayload(deviceId = "mule-a", ackedOrigins = emptyList(), isSink = false, sinkConfirmedOrigins = listOf(AckedOrigin(lineNumbers = listOf(99L))))
+        assertEquals(listOf(AckedOrigin(lineNumbers = listOf(99L))), sinkConfirmedOrigins(nonSinkAck))
 
-        val sinkAck = AckPayload(deviceId = "racemaster-web", recordUuids = emptyList(), isSink = true, sinkConfirmedRecordUuids = listOf("older-1"))
-        assertEquals(setOf("older-1"), sinkConfirmedUuids(sinkAck))
+        val sinkAck = AckPayload(deviceId = "racemaster-web", ackedOrigins = emptyList(), isSink = true, sinkConfirmedOrigins = listOf(AckedOrigin(lineNumbers = listOf(99L))))
+        assertEquals(listOf(AckedOrigin(lineNumbers = listOf(99L))), sinkConfirmedOrigins(sinkAck))
     }
 
     @Test
-    fun combinesBothSourcesIntoOneDedupedSet() {
+    fun combinesBothSourcesIntoOneDedupedGroupForTheSameOrigin() {
         val ack = AckPayload(
             deviceId = "racemaster-web",
-            recordUuids = listOf("u1", "shared"),
+            ackedOrigins = listOf(AckedOrigin(lineNumbers = listOf(1L, 5L))),
             isSink = true,
-            sinkConfirmedRecordUuids = listOf("older-1", "shared"),
+            sinkConfirmedOrigins = listOf(AckedOrigin(lineNumbers = listOf(99L, 5L))),
         )
 
-        assertEquals(setOf("u1", "shared", "older-1"), sinkConfirmedUuids(ack))
+        assertEquals(listOf(AckedOrigin(lineNumbers = listOf(1L, 5L, 99L))), sinkConfirmedOrigins(ack))
     }
 
     @Test
     fun emptyAckConfirmsNothing() {
-        val ack = AckPayload(deviceId = "mule-a", recordUuids = emptyList())
+        val ack = AckPayload(deviceId = "mule-a", ackedOrigins = emptyList())
 
-        assertEquals(emptySet<String>(), sinkConfirmedUuids(ack))
+        assertEquals(emptyList<AckedOrigin>(), sinkConfirmedOrigins(ack))
+    }
+
+    // The correctness property AckedOrigin grouping exists for: a single ack spanning this
+    // device's own race (null origin) AND a genuinely different relayed origin at once must
+    // route each to the right place afterward, not get flattened together the way a bare
+    // line-number list would (CP1's own line 5 and CP2's own line 5 are unrelated records).
+    @Test
+    fun keepsDifferentOriginsAsSeparateGroupsRatherThanMergingThem() {
+        val ack = AckPayload(
+            deviceId = "mule-a",
+            ackedOrigins = listOf(
+                AckedOrigin(originDeviceId = null, originRaceLabel = null, lineNumbers = listOf(5L)),
+                AckedOrigin(originDeviceId = "cp2-phone", originRaceLabel = "race-a", lineNumbers = listOf(5L)),
+            ),
+            isSink = true,
+        )
+
+        val confirmed = sinkConfirmedOrigins(ack)
+
+        assertEquals(2, confirmed.size)
+        assertEquals(listOf(5L), confirmed.first { it.originDeviceId == null }.lineNumbers)
+        assertEquals(listOf(5L), confirmed.first { it.originDeviceId == "cp2-phone" }.lineNumbers)
     }
 
     // cacheAfterAnswering — the two purely defensive backstops (an absolute age ceiling and a

@@ -17,7 +17,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
 data class MulePulledRecordUi(
-    val recordUuid: String,
     val action: HistoryAction,
     val bibNumber: Int?,
     val splitNumber: Int?,
@@ -77,7 +76,11 @@ class MuleSourceDetailViewModel(
                 refLineNumberOf = { it.record.refLineNumber },
                 isUndoMarker = { it.record.toHistoryAction() == HistoryAction.UNDO },
                 isSegmentBoundary = { it.record.toHistoryAction().let { a -> a == HistoryAction.RESET || a == HistoryAction.LOCATION } },
-                keyOf = { it.record.recordUuid },
+                // lineNumber alone is already unique here — this list is already scoped to one
+                // (raceLabel, sourceDeviceId) pair (see observeRecordsForSource above), the same
+                // scope a device's own lineNumber sequence is unique within (see SyncRecord's
+                // own doc).
+                keyOf = { it.record.lineNumber },
                 // Wire bibNumber is a String ("101"/"n/a"/null — see SyncRecord's own doc);
                 // toIntOrNull() collapses both "n/a" and a genuinely absent value back to the
                 // same null this function (and the rest of the app) already treats as "no bib".
@@ -90,7 +93,6 @@ class MuleSourceDetailViewModel(
                 deviceName = records.lastOrNull()?.deviceName.orEmpty(),
                 records = records.map {
                     MulePulledRecordUi(
-                        recordUuid = it.record.recordUuid,
                         action = it.record.toHistoryAction(),
                         bibNumber = it.record.bibNumber?.toIntOrNull(),
                         splitNumber = it.record.splitNumber,
@@ -103,7 +105,7 @@ class MuleSourceDetailViewModel(
                         isTimeRecord = it.record.splitTime != null,
                         isUndoMarker = it.record.toHistoryAction() == HistoryAction.UNDO,
                         editedFromLineNumber = it.record.refLineNumber,
-                        dupSplitRefs = dupRefs[it.record.recordUuid].orEmpty(),
+                        dupSplitRefs = dupRefs[it.record.lineNumber].orEmpty(),
                     )
                 },
             )

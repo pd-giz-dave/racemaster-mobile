@@ -43,8 +43,9 @@ data class RaceLabelActivity(val sourceRaceLabel: String, val lastTouchedAtMilli
 
 @Dao
 interface PulledRecordDao {
-    // IGNORE + the unique index on recordUuid makes re-pulling the same record from a
-    // phone (e.g. after a dropped connection retry) a no-op rather than a duplicate row.
+    // IGNORE + the unique index on (sourceDeviceId, sourceRaceLabel, lineNumber) makes
+    // re-pulling the same record from a phone (e.g. after a dropped connection retry) a no-op
+    // rather than a duplicate row.
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAll(records: List<PulledRecordEntity>)
 
@@ -104,30 +105,33 @@ interface PulledRecordDao {
     @Query("SELECT MAX(syncedAtMillis) FROM pulled_records")
     fun observeLastSyncedAtMillis(): Flow<Long?>
 
-    @Query("UPDATE pulled_records SET syncedAtMillis = :syncedAtMillis, syncedTargetName = :targetName WHERE recordUuid IN (:recordUuids)")
-    suspend fun markSynced(recordUuids: List<String>, syncedAtMillis: Long, targetName: String? = null)
+    @Query(
+        "UPDATE pulled_records SET syncedAtMillis = :syncedAtMillis, syncedTargetName = :targetName " +
+            "WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel AND lineNumber IN (:lineNumbers)",
+    )
+    suspend fun markSynced(sourceDeviceId: String, sourceRaceLabel: String, lineNumbers: List<Long>, syncedAtMillis: Long, targetName: String? = null)
 
     // Everything held for [sourceDeviceId]/[sourceRaceLabel] up to and including
     // [sinceLineNumber] that's never been confirmed reaching a sink — the relay-leg counterpart
-    // to HistoryLineDao's own getUnsyncedRecordUuidsUpTo; see
+    // to HistoryLineDao's own getUnsyncedLineNumbersUpTo; see
     // PeripheralSyncService.backfillSinkAck's own doc for why a relay pull's own sinceLineNumber
     // is itself proof of this, inclusive.
     @Query(
-        "SELECT recordUuid FROM pulled_records WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel " +
+        "SELECT lineNumber FROM pulled_records WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel " +
             "AND lineNumber <= :sinceLineNumber AND syncedAtMillis IS NULL",
     )
-    suspend fun getUnsyncedRecordUuidsUpTo(sourceDeviceId: String, sourceRaceLabel: String, sinceLineNumber: Long): List<String>
+    suspend fun getUnsyncedLineNumbersUpTo(sourceDeviceId: String, sourceRaceLabel: String, sinceLineNumber: Long): List<Long>
 
     // The delta-sync cutoff for the next pull from this specific device/race — null (treated
     // as "nothing pulled yet, request everything") the first time.
     @Query("SELECT MAX(lineNumber) FROM pulled_records WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel")
     suspend fun getLastPulledLineNumber(sourceDeviceId: String, sourceRaceLabel: String): Long?
 
-    // Every recordUuid this device is holding on [sourceDeviceId]/[sourceRaceLabel]'s behalf
+    // Every lineNumber this device is holding on [sourceDeviceId]/[sourceRaceLabel]'s behalf
     // that's confirmed reaching a sink (syncedAtMillis set — see markSynced above) but hasn't
     // yet actually been told back to that source (confirmationRelayedAtMillis still null — see
     // markConfirmationRelayed below). Called right before acking a pull FROM that same source
-    // device, so this device's own ack can piggyback these as AckPayload.sinkConfirmedRecordUuids
+    // device, so this device's own ack can piggyback these as one of AckPayload.sinkConfirmedOrigins
     // — the mechanism that lets a sink confirmation climb back up an N-hop mule chain to the
     // device that originally recorded these lines. See MuleRepository.pullFrom.
     //
@@ -142,17 +146,19 @@ interface PulledRecordDao {
     // to let a confirmation get marked "told" on this side before the peripheral had actually
     // durably processed it.
     @Query(
-        "SELECT recordUuid FROM pulled_records WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel " +
+        "SELECT lineNumber FROM pulled_records WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel " +
             "AND syncedAtMillis IS NOT NULL AND confirmationRelayedAtMillis IS NULL",
     )
-    suspend fun getUnrelayedSinkConfirmedRecordUuidsForSource(sourceDeviceId: String, sourceRaceLabel: String): List<String>
+    suspend fun getUnrelayedSinkConfirmedLineNumbersForSource(sourceDeviceId: String, sourceRaceLabel: String): List<Long>
 
-    // Marks [recordUuids] as told back to their source — called only once the ack write that
-    // actually carried them has succeeded, which (thanks to PeripheralSyncService's deferred
-    // GATT response — see its own doc) now genuinely means the peripheral finished applying it,
-    // not just that the bytes arrived. Never called optimistically before the write completes,
-    // so a failed/dropped write leaves these rows eligible to be picked up and resent by
-    // getUnrelayedSinkConfirmedRecordUuidsForSource on the very next tick rather than lost.
+    // Marks [lineNumbers] (scoped to [sourceDeviceId]/[sourceRaceLabel] — a bare lineNumber
+    // isn't unique across different sources) as told back to their source — called only once
+    // the ack write that actually carried them has succeeded, which (thanks to
+    // PeripheralSyncService's deferred GATT response — see its own doc) now genuinely means the
+    // peripheral finished applying it, not just that the bytes arrived. Never called
+    // optimistically before the write completes, so a failed/dropped write leaves these rows
+    // eligible to be picked up and resent by getUnrelayedSinkConfirmedLineNumbersForSource on
+    // the very next tick rather than lost.
     //
     // Only ever called by MuleRepository.pullFrom for a *direct* pull (the peripheral just acked
     // IS sourceDeviceId itself), never for a relay pull to some other intermediate mule — see
@@ -162,8 +168,11 @@ interface PulledRecordDao {
     // relayed after merely telling the *other* mule, the confirmation could get "used up" between
     // them and never reach the leaf that actually recorded the line, even though both mules'
     // own bookkeeping showed it as sink-confirmed.
-    @Query("UPDATE pulled_records SET confirmationRelayedAtMillis = :relayedAtMillis WHERE recordUuid IN (:recordUuids)")
-    suspend fun markConfirmationRelayed(recordUuids: List<String>, relayedAtMillis: Long)
+    @Query(
+        "UPDATE pulled_records SET confirmationRelayedAtMillis = :relayedAtMillis " +
+            "WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel AND lineNumber IN (:lineNumbers)",
+    )
+    suspend fun markConfirmationRelayed(sourceDeviceId: String, sourceRaceLabel: String, lineNumbers: List<Long>, relayedAtMillis: Long)
 
     // Purely a relayed copy of a genuinely different device's data — the real ground truth
     // still lives on the originating device. Deleting it here is always safe to offer, at any

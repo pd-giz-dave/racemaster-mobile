@@ -39,8 +39,6 @@ class BibsModeRepository(
 
     fun observeLastSyncedAtMillis(raceId: Long): Flow<Long?> = engine.observeLastSyncedAtMillis(raceId)
 
-    suspend fun getLineNumbersForUuids(recordUuids: List<String>): List<Long> = engine.getLineNumbersForUuids(recordUuids)
-
     // The Clock marker is a fixed split #0 outside the normal 1,2,3... sequence (see
     // CLOCK_SPLIT_NUMBER), so it doesn't consume the display counter — it still consumes a
     // permanent line number, same as every other row. Deliberately a separate, explicit action

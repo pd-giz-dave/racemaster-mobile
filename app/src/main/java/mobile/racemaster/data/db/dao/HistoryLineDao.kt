@@ -101,11 +101,12 @@ interface HistoryLineDao {
     @Query("SELECT MAX(timestampMillis) FROM history_lines WHERE raceId = :raceId")
     fun observeLastActivityAtMillis(raceId: Long): Flow<Long?>
 
-    // Keyed by recordUuid, not local id or mode: that's the identifier a BLE ack (or this
-    // device's own self-push confirmation) carries back, and a batch of confirmed uuids is
-    // inherently already scoped to whatever was actually sent, regardless of mode.
-    @Query("UPDATE history_lines SET syncedAtMillis = :syncedAtMillis WHERE recordUuid IN (:recordUuids)")
-    suspend fun markSynced(recordUuids: List<String>, syncedAtMillis: Long)
+    // Keyed by raceId + lineNumber, not local id or mode: that's the identity a BLE ack (or this
+    // device's own self-push confirmation) carries back for its own-race case (see AckedOrigin's
+    // own doc) — raceId is required alongside lineNumber since a device's own lineNumber
+    // sequence restarts at 1 for every race it's ever recorded, not just its current one.
+    @Query("UPDATE history_lines SET syncedAtMillis = :syncedAtMillis WHERE raceId = :raceId AND lineNumber IN (:lineNumbers)")
+    suspend fun markSynced(raceId: Long, lineNumbers: List<Long>, syncedAtMillis: Long)
 
     // Everything for [raceId] up to and including [sinceLineNumber] this device's own
     // bookkeeping never got an explicit ack for — see PeripheralSyncService.backfillSinkAck's
@@ -114,13 +115,8 @@ interface HistoryLineDao {
     // getSinceLineNumber query — "lineNumber > :sinceLineNumber" — already treats as already
     // possessed), even absent an ack (a dropped connection between the puller durably storing
     // the data and it writing the ack back loses the ack, not the data).
-    @Query("SELECT recordUuid FROM history_lines WHERE raceId = :raceId AND lineNumber <= :sinceLineNumber AND syncedAtMillis IS NULL")
-    suspend fun getUnsyncedRecordUuidsUpTo(raceId: Long, sinceLineNumber: Long): List<String>
-
-    // lineNumbers for a batch of confirmed recordUuids — used to attribute a confirmation to
-    // specific history lines for per-line "synced to" bookkeeping (see LineSyncEntity).
-    @Query("SELECT lineNumber FROM history_lines WHERE recordUuid IN (:recordUuids)")
-    suspend fun getLineNumbersForUuids(recordUuids: List<String>): List<Long>
+    @Query("SELECT lineNumber FROM history_lines WHERE raceId = :raceId AND lineNumber <= :sinceLineNumber AND syncedAtMillis IS NULL")
+    suspend fun getUnsyncedLineNumbersUpTo(raceId: Long, sinceLineNumber: Long): List<Long>
 
     // The location a delta batch (getSinceLineNumber's own result) should start being resolved
     // from — see SyncRecordMapping.withResolvedLocations' own doc for why a flat race.location

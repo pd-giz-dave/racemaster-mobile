@@ -274,7 +274,7 @@ class MulePullClient {
     // failing (or not) on its own genuine merits, independently, is what a device with a
     // basically-fine connect but an occasionally-slow read (or vice versa) actually needs.
     //
-    // [sinkConfirmedRecordUuids] (default empty — every existing caller's own behavior is
+    // [sinkConfirmedOrigins] (default empty — every existing caller's own behavior is
     // unchanged) lets a caller that's about to connect anyway for a routine DeviceInfo refresh
     // also deliver an already-owed confirmation in that exact same connection, instead of a
     // separate relayConfirmationOnly call reconnecting moments later. That separate-reconnect
@@ -286,7 +286,7 @@ class MulePullClient {
     // (or won't) accept a second incoming connection from the same central right after the
     // previous one from it just disconnected. Doing both under the one connection this pairs
     // into sidesteps that regardless of its exact cause. [pullerDeviceId] is required whenever
-    // [sinkConfirmedRecordUuids] is non-empty (asserted, not silently ignored, so a caller
+    // [sinkConfirmedOrigins] is non-empty (asserted, not silently ignored, so a caller
     // wiring this up wrong fails loudly rather than the confirmation silently never going out).
     // Retries the whole connect+read(+ack) sequence a couple of times, in-line, before this
     // call gives up — this is the read MuleSyncEngine's markUnreachable reacts to, and without
@@ -308,10 +308,10 @@ class MulePullClient {
         advertisement: Advertisement,
         pullerDeviceId: String? = null,
         pullerDeviceName: String = "",
-        sinkConfirmedRecordUuids: List<String> = emptyList(),
+        sinkConfirmedOrigins: List<AckedOrigin> = emptyList(),
         // Progress this device is holding (see ProgressRepository) that it wants to propagate on
         // to whichever peer this connection is with — piggybacked onto this same connection
-        // exactly like sinkConfirmedRecordUuids above, and for the identical reason (see this
+        // exactly like sinkConfirmedOrigins above, and for the identical reason (see this
         // function's own doc on why a separate reconnect for that failed 100% of the time
         // against a real device). Only actually written if this read's own freshly-decoded
         // DeviceInfo.raceLabel matches [progressRaceLabel] and its own progressGeneratedAt
@@ -320,7 +320,7 @@ class MulePullClient {
         // beyond the DeviceInfo read this connection was already making.
         progressToDeliver: ProgressPayload? = null,
         progressRaceLabel: String? = null,
-        onConfirmationsRelayed: suspend (List<String>) -> Unit = {},
+        onConfirmationsRelayed: suspend (List<AckedOrigin>) -> Unit = {},
         // Fires (with a short, [describeConnectFailure]-style reason) whenever the best-effort
         // ack write below fails/times out — see that call site's own doc for why this can't just
         // be a Log.w the way every other best-effort fallback in this file already is: unlike
@@ -330,15 +330,15 @@ class MulePullClient {
         // Same idea as [onAckFailure], for the progress-delivery write above.
         onProgressDeliveryFailure: suspend (String) -> Unit = {},
     ): DeviceInfo {
-        require(sinkConfirmedRecordUuids.isEmpty() || pullerDeviceId != null) {
-            "pullerDeviceId is required when sinkConfirmedRecordUuids is non-empty"
+        require(sinkConfirmedOrigins.isEmpty() || pullerDeviceId != null) {
+            "pullerDeviceId is required when sinkConfirmedOrigins is non-empty"
         }
         return mutexFor(advertisement).withLock {
             var lastError: Throwable? = null
             for (attempt in 1..READ_DEVICE_INFO_ATTEMPTS) {
                 try {
                     return@withLock readDeviceInfoOnce(
-                        advertisement, pullerDeviceId, pullerDeviceName, sinkConfirmedRecordUuids,
+                        advertisement, pullerDeviceId, pullerDeviceName, sinkConfirmedOrigins,
                         progressToDeliver, progressRaceLabel, onConfirmationsRelayed, onAckFailure, onProgressDeliveryFailure,
                     )
                 } catch (e: CancellationException) {
@@ -385,10 +385,10 @@ class MulePullClient {
         advertisement: Advertisement,
         pullerDeviceId: String?,
         pullerDeviceName: String,
-        sinkConfirmedRecordUuids: List<String>,
+        sinkConfirmedOrigins: List<AckedOrigin>,
         progressToDeliver: ProgressPayload?,
         progressRaceLabel: String?,
-        onConfirmationsRelayed: suspend (List<String>) -> Unit,
+        onConfirmationsRelayed: suspend (List<AckedOrigin>) -> Unit,
         onAckFailure: suspend (String) -> Unit,
         onProgressDeliveryFailure: suspend (String) -> Unit,
     ): DeviceInfo = coroutineScope {
@@ -448,7 +448,7 @@ class MulePullClient {
                 throw MulePhaseTimeoutException("reading", e)
             }
             val info = json.decodeFromString<DeviceInfo>(String(bytes, Charsets.UTF_8))
-            if (sinkConfirmedRecordUuids.isNotEmpty()) {
+            if (sinkConfirmedOrigins.isNotEmpty()) {
                 val ackCharacteristic = characteristicOf(
                     service = MuleGattProfile.SERVICE_UUID.toKotlinUuid(),
                     characteristic = MuleGattProfile.ACK_CHARACTERISTIC_UUID.toKotlinUuid(),
@@ -484,7 +484,7 @@ class MulePullClient {
                 // already-owed sink confirmation onto a connection that's already delivered its
                 // real payload (the DeviceInfo just decoded into [info]) — see this function's
                 // caller-facing doc for why it's bundled in here at all. Since a device is never
-                // dropped from PulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource's
+                // dropped from PulledRecordDao.getUnrelayedSinkConfirmedLineNumbersForSource's
                 // own owed set until its ack genuinely lands, failing to relay one here is always
                 // safely retried on a later reconnect (exactly like pull()'s own ack failure is
                 // already treated) — there's no correctness reason a stuck ack write should cost
@@ -497,7 +497,7 @@ class MulePullClient {
                 // becomes invisible instead of merely non-fatal (confirmed live: exactly this gap
                 // is why the confirmation stopped reaching leaf devices with no visible sign once
                 // the failure here was first made best-effort).
-                for (batch in ackBatches(pullerDeviceId!!, pullerDeviceName, emptyList(), sinkConfirmedRecordUuids) { json.encodeToString(it) }) {
+                for (batch in ackBatches(pullerDeviceId!!, pullerDeviceName, emptyList(), sinkConfirmedOrigins) { json.encodeToString(it) }) {
                     try {
                         withTimeout(ACK_WRITE_TIMEOUT) {
                             peripheral.write(ackCharacteristic, json.encodeToString(batch).toByteArray(Charsets.UTF_8), WriteType.WithResponse)
@@ -517,8 +517,8 @@ class MulePullClient {
                         onAckFailure(reason)
                         break
                     }
-                    if (batch.sinkConfirmedRecordUuids.isNotEmpty()) {
-                        onConfirmationsRelayed(batch.sinkConfirmedRecordUuids)
+                    if (batch.sinkConfirmedOrigins.isNotEmpty()) {
+                        onConfirmationsRelayed(batch.sinkConfirmedOrigins)
                     }
                 }
             }
@@ -559,18 +559,20 @@ class MulePullClient {
     /** Connects, requests every line after [sinceLineNumber] (delta-sync — 0 requests the
      *  device's entire history), reassembles the chunked/notified record stream, hands the
      *  records to [onReceived] to persist, and — only once that returns successfully — acks
-     *  back the received `recordUuid`s (tagged with [pullerDeviceId]/[pullerDeviceName]) so
+     *  back the received lines' own `lineNumber`s, grouped under this pull's own origin (tagged
+     *  with [pullerDeviceId]/[pullerDeviceName]) so
      *  the peripheral can attribute and mark them relayed. Acking is deliberately gated on
      *  [onReceived] completing without throwing: if it throws (a failed local insert, a
      *  mid-write disconnect,
      *  cancellation, ...), the peripheral never hears about these records and will still offer
      *  them again on the next pull — the safe failure mode is a harmless redundant re-pull
-     *  (records are deduped by `recordUuid` on the way in), not the source silently marking
-     *  data synced that the mule never actually captured.
+     *  (records are deduped by `lineNumber` — scoped to this one origin — on the way in), not the
+     *  source silently marking data synced that the mule never actually captured.
      *
-     *  [sinkConfirmedRecordUuids] piggybacks a *separate* set of recordUuids this caller already
-     *  knows are confirmed at a genuine sink but hasn't yet told this specific source about — see
-     *  AckPayload's own doc, and PulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource
+     *  [sinkConfirmedOrigins] piggybacks a *separate* set of origin-grouped line numbers this
+     *  caller already knows are confirmed at a genuine sink but hasn't yet told this specific
+     *  source about — see AckPayload's own doc, and
+     *  PulledRecordDao.getUnrelayedSinkConfirmedLineNumbersForSource
      *  for why this is scoped to *un*relayed ones only (a bounded delta of what's genuinely new,
      *  not this source's entire ever-growing confirmed history — required for a large race, e.g.
      *  300 runners, where the full set would otherwise be re-sent every tick forever). Included
@@ -598,9 +600,9 @@ class MulePullClient {
         // behalf of another device instead — see PullRequest's own doc.
         originDeviceId: String? = null,
         originRaceLabel: String? = null,
-        sinkConfirmedRecordUuids: List<String> = emptyList(),
+        sinkConfirmedOrigins: List<AckedOrigin> = emptyList(),
         onReceived: suspend (List<SyncRecord>) -> Unit,
-        onConfirmationsRelayed: suspend (List<String>) -> Unit = {},
+        onConfirmationsRelayed: suspend (List<AckedOrigin>) -> Unit = {},
     ): Unit = mutexFor(advertisement).withLock {
         coroutineScope {
             val peripheral = peripheralFor(advertisement)
@@ -629,7 +631,7 @@ class MulePullClient {
                 }
                 // Split across as many separate, independently-complete ack writes as needed —
                 // see ackBatches' own doc for why a single unchunked write can't safely carry
-                // this, especially sinkConfirmedRecordUuids, which could otherwise cover a large
+                // this, especially sinkConfirmedOrigins, which could otherwise cover a large
                 // race's entire backlog at once (see AckPayload's own doc). Unlike
                 // readDeviceInfo's own ack write, this one is deliberately NOT best-effort/
                 // swallowed on failure — this function's own doc already explains why a thrown
@@ -637,7 +639,8 @@ class MulePullClient {
                 // so there's no correctness reason to hide it from the caller the way
                 // readDeviceInfo's ack (which was masking an already-successful read) needed to
                 // be. Still phase-tagged for the same diagnostic value as everything else here.
-                val ackBatchesToSend = ackBatches(pullerDeviceId, pullerDeviceName, records.map { it.recordUuid }, sinkConfirmedRecordUuids) { json.encodeToString(it) }
+                val ackedOrigins = if (records.isEmpty()) emptyList() else listOf(AckedOrigin(originDeviceId, originRaceLabel, records.map { it.lineNumber }))
+                val ackBatchesToSend = ackBatches(pullerDeviceId, pullerDeviceName, ackedOrigins, sinkConfirmedOrigins) { json.encodeToString(it) }
                 // Same settle gap as readDeviceInfoOnce's own INTER_OPERATION_SETTLE_DELAY, and
                 // for the same reason — confirmed live (TODO.md's Sony-Mule investigation) as the
                 // same underlying issue, not something specific to a read preceding a write: this
@@ -645,8 +648,8 @@ class MulePullClient {
                 // wait with no gap at all, and it started timing out ("Auto-pull failed: timed
                 // out acking") the same way readDeviceInfoOnce's ack once did, once that one was
                 // fixed and traffic moved on to exercising this one. Guarded on there actually
-                // being a batch to send — ackBatches returns empty when both recordUuids and
-                // sinkConfirmedRecordUuids are empty, in which case this loop does nothing and
+                // being a batch to send — ackBatches returns empty when both ackedOrigins and
+                // sinkConfirmedOrigins are empty, in which case this loop does nothing and
                 // the delay would be pure waste.
                 if (ackBatchesToSend.isNotEmpty()) delay(INTER_OPERATION_SETTLE_DELAY)
                 for (batch in ackBatchesToSend) {
@@ -662,8 +665,8 @@ class MulePullClient {
                     } catch (e: TimeoutCancellationException) {
                         throw MulePhaseTimeoutException("acking", e)
                     }
-                    if (batch.sinkConfirmedRecordUuids.isNotEmpty()) {
-                        onConfirmationsRelayed(batch.sinkConfirmedRecordUuids)
+                    if (batch.sinkConfirmedOrigins.isNotEmpty()) {
+                        onConfirmationsRelayed(batch.sinkConfirmedOrigins)
                     }
                 }
                 succeeded = true
@@ -885,25 +888,28 @@ internal fun shouldDeliverProgress(peerRaceLabel: String, peerProgressGeneratedA
  * independent key — each still needs its own real stream + ack cycle regardless of how often
  * the underlying data happens to repeat; this is responder-side work-avoidance for repeats of
  * the *same* ask, not cross-requester data dedup (that's already fully handled elsewhere by
- * `recordUuid` + the per-origin `MuleRepository.lastPulledLineNumber` delta cursor).
+ * `lineNumber` + the per-origin `MuleRepository.lastPulledLineNumber` delta cursor).
  */
 internal fun computeRequestKey(pullerDeviceId: String, originDeviceId: String?, originRaceLabel: String?, sinceLineNumber: Long): String =
     "$pullerDeviceId:${originDeviceId ?: "self"}:${originRaceLabel.orEmpty()}:$sinceLineNumber"
 
 /**
- * Splits [recordUuids] and [sinkConfirmedRecordUuids] across as many separate [AckPayload]s as
+ * Splits [ackedOrigins] and [sinkConfirmedOrigins] across as many separate [AckPayload]s as
  * needed to keep every one of them under [maxEncodedBytes] once JSON-encoded. An
  * ack has no chunking of its own the way the (notify-based) DATA stream does, so an unbounded
- * uuid list has nowhere else to go. [sinkConfirmedRecordUuids] is kept bounded to a genuine delta
- * (see `PulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource`'s own doc), but a source
- * that's been offline a while, or a mule freshly reconnecting after a large backlog piled up
- * (e.g. a 300-runner race), can still owe it more confirmations at once than fit in a single
- * write. Each resulting batch is a fully valid,
+ * line-number list has nowhere else to go. Each origin group's own lineNumbers can be split
+ * across more than one batch if needed (flattened to individual (origin, lineNumber) entries and
+ * regrouped per batch) — a single origin owing more confirmations than fit in one write is
+ * exactly the large-backlog case this exists for. [sinkConfirmedOrigins] is kept bounded to a
+ * genuine delta (see `PulledRecordDao.getUnrelayedSinkConfirmedLineNumbersForSource`'s own doc),
+ * but a source that's been offline a while, or a mule freshly reconnecting after a large backlog
+ * piled up (e.g. a 300-runner race), can still owe it more confirmations at once than fit in a
+ * single write. Each resulting batch is a fully valid,
  * self-contained [AckPayload] — `PeripheralSyncService.markSynced` already applies every ack as
  * an independent, idempotent update, so sending N small acks instead of one changes nothing
  * about correctness, only how many separate GATT writes it costs. Batch sizing is done by
  * actually encoding each candidate (via [encode]) rather than guessing a safe fixed
- * uuids-per-batch count, since device names have no enforced length limit (see
+ * entries-per-batch count, since device names have no enforced length limit (see
  * NameDeviceScreen) and are part of every batch's fixed overhead.
  *
  * [maxEncodedBytes] defaults to [MuleGattProfile.MAX_SAFE_CHUNK_SIZE_BYTES] (509) — Android
@@ -929,29 +935,41 @@ internal fun computeRequestKey(pullerDeviceId: String, originDeviceId: String?, 
 internal fun ackBatches(
     deviceId: String,
     deviceName: String,
-    recordUuids: List<String>,
-    sinkConfirmedRecordUuids: List<String>,
+    ackedOrigins: List<AckedOrigin>,
+    sinkConfirmedOrigins: List<AckedOrigin>,
     maxEncodedBytes: Int = MuleGattProfile.MAX_SAFE_CHUNK_SIZE_BYTES,
     encode: (AckPayload) -> String,
 ): List<AckPayload> {
-    fun chunksOf(uuids: List<String>, toPayload: (List<String>) -> AckPayload): List<AckPayload> {
-        if (uuids.isEmpty()) return emptyList()
+    // (originDeviceId, originRaceLabel, lineNumber) — flat so batching can split across origins
+    // exactly the same way it used to split across a flat uuid list, regrouped back into
+    // AckedOrigin groups (preserving each origin's own first-seen order) once a batch's own
+    // membership is settled.
+    fun regroup(flat: List<Triple<String?, String?, Long>>): List<AckedOrigin> {
+        val grouped = LinkedHashMap<Pair<String?, String?>, MutableList<Long>>()
+        for ((originDeviceId, originRaceLabel, lineNumber) in flat) {
+            grouped.getOrPut(originDeviceId to originRaceLabel) { mutableListOf() }.add(lineNumber)
+        }
+        return grouped.map { (key, lineNumbers) -> AckedOrigin(key.first, key.second, lineNumbers) }
+    }
+    fun chunksOf(origins: List<AckedOrigin>, toPayload: (List<AckedOrigin>) -> AckPayload): List<AckPayload> {
+        val flat = origins.flatMap { o -> o.lineNumbers.map { Triple(o.originDeviceId, o.originRaceLabel, it) } }
+        if (flat.isEmpty()) return emptyList()
         val batches = mutableListOf<AckPayload>()
-        var current: List<String> = emptyList()
-        for (uuid in uuids) {
-            val candidate = current + uuid
-            if (current.isNotEmpty() && encode(toPayload(candidate)).toByteArray(Charsets.UTF_8).size > maxEncodedBytes) {
-                batches += toPayload(current)
-                current = listOf(uuid)
+        var current: List<Triple<String?, String?, Long>> = emptyList()
+        for (entry in flat) {
+            val candidate = current + entry
+            if (current.isNotEmpty() && encode(toPayload(regroup(candidate))).toByteArray(Charsets.UTF_8).size > maxEncodedBytes) {
+                batches += toPayload(regroup(current))
+                current = listOf(entry)
             } else {
                 current = candidate
             }
         }
-        batches += toPayload(current)
+        batches += toPayload(regroup(current))
         return batches
     }
-    return chunksOf(recordUuids) { AckPayload(deviceId = deviceId, recordUuids = it, deviceName = deviceName) } +
-        chunksOf(sinkConfirmedRecordUuids) {
-            AckPayload(deviceId = deviceId, recordUuids = emptyList(), deviceName = deviceName, sinkConfirmedRecordUuids = it)
+    return chunksOf(ackedOrigins) { AckPayload(deviceId = deviceId, ackedOrigins = it, deviceName = deviceName) } +
+        chunksOf(sinkConfirmedOrigins) {
+            AckPayload(deviceId = deviceId, ackedOrigins = emptyList(), deviceName = deviceName, sinkConfirmedOrigins = it)
         }
 }

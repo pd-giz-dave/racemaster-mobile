@@ -46,6 +46,12 @@ data class HistoryLineEntity(
     val splitNumber: Int?,
     // Permanent, ascending, race-wide history position — see RaceEntity.nextLineNumber.
     // Assigned once at insert, immutable afterward, never reused even if this row is deleted.
+    // Doubles as this row's own sync/dedup identity once it leaves this device (see SyncRecord's
+    // own doc): unique only within this device's own race (every phone starts its own sequence
+    // at 1), which is exactly why a puller/relay/server always pairs it with whichever device
+    // context it's already carrying (DeviceInfo.deviceName, PulledRecordEntity.sourceDeviceId,
+    // or a server file already scoped to one device) rather than needing a separately-generated
+    // globally-unique id on every row.
     val lineNumber: Long,
     // Non-null means this row is either an edit-echo (a full copy of an earlier row with the
     // edited field(s) changed) or an undo-marker (action == UNDO) hiding its target — in both
@@ -57,10 +63,6 @@ data class HistoryLineEntity(
     // this same column via reserved strings; they now live in `action` instead.
     val note: String? = null,
     val timestampMillis: Long,
-    // Stable cross-device identifier: local `id` is Room-autoincrement and collides once
-    // records from multiple phones are merged by Mule, so this is what travels over BLE/HTTP
-    // and is used for sync dedup instead.
-    val recordUuid: String = java.util.UUID.randomUUID().toString(),
     // HistoryAction.LOCATION rows only — what to restore this mode's own display split counter
     // and RaceEntity.location back to if this marker is ever undone. Local-only bookkeeping,
     // deliberately never sent on the wire (not part of SyncRecord/SyncRecordMapping.toSyncRecord)

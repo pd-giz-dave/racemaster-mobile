@@ -63,7 +63,6 @@ fun HistoryLineEntity.toSyncRecord(raceStartedAtMillis: Long?, location: String 
     }
     val wireBibNumber = if (mode == HistoryMode.BIBS || mode == HistoryMode.CP) bibNumber?.toString() ?: "n/a" else null
     return SyncRecord(
-        recordUuid = recordUuid,
         action = action.toServerAction(),
         bibNumber = wireBibNumber,
         splitTime = splitTime,

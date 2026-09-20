@@ -1,7 +1,6 @@
 package mobile.racemaster.data.repository
 
 import androidx.room.withTransaction
-import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import mobile.racemaster.data.db.RacemasterDatabase
@@ -128,11 +127,6 @@ internal class EntryLogModeEngine(
 
     fun observeLastSyncedAtMillis(raceId: Long): Flow<Long?> = historyLineDao.observeLastSyncedAtMillis(raceId, mode)
 
-    // Resolves a batch of acked recordUuids back to their permanent lineNumbers — used to
-    // attribute a BLE ack to specific history lines for per-line "synced to" bookkeeping.
-    suspend fun getLineNumbersForUuids(recordUuids: List<String>): List<Long> =
-        if (recordUuids.isEmpty()) emptyList() else historyLineDao.getLineNumbersForUuids(recordUuids)
-
     suspend fun recordEntry(
         raceId: Long,
         action: HistoryAction,
@@ -191,7 +185,6 @@ internal class EntryLogModeEngine(
                     action = effectiveAction,
                     note = note,
                     refLineNumber = rootLineNumber,
-                    recordUuid = UUID.randomUUID().toString(),
                     syncedAtMillis = null,
                 ),
             )

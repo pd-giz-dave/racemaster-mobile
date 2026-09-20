@@ -7,7 +7,6 @@ import mobile.racemaster.data.db.dao.RaceDao
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
-import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -61,11 +60,6 @@ class TimeModeRepository(
     suspend fun getSplit(id: Long): HistoryLineEntity? = historyLineDao.getById(id)
 
     fun observeLastSyncedAtMillis(raceId: Long): Flow<Long?> = historyLineDao.observeLastSyncedAtMillis(raceId, HistoryMode.TIME)
-
-    // Resolves a batch of acked recordUuids back to their permanent lineNumbers — used to
-    // attribute a BLE ack to specific history lines for per-line "synced to" bookkeeping.
-    suspend fun getLineNumbersForUuids(recordUuids: List<String>): List<Long> =
-        if (recordUuids.isEmpty()) emptyList() else historyLineDao.getLineNumbersForUuids(recordUuids)
 
     // The start marker is a fixed split #0 outside the normal 1,2,3... sequence, so it
     // doesn't consume the display counter — it still consumes a permanent line number, same
@@ -168,7 +162,6 @@ class TimeModeRepository(
                     lineNumber = race.nextLineNumber,
                     note = trimmed,
                     refLineNumber = rootLineNumber,
-                    recordUuid = UUID.randomUUID().toString(),
                     syncedAtMillis = null,
                 ),
             )

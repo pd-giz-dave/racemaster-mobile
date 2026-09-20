@@ -384,27 +384,24 @@ class RaceRepository(
     val unsyncedHistoryCountAcrossAllRaces: Flow<Int> = historyLineDao.observeUnsyncedCountAcrossAllRaces()
     val lastHistorySyncedAtMillisAcrossAllRaces: Flow<Long?> = historyLineDao.observeLastSyncedAtMillisAcrossAllRaces()
 
-    // Mode-agnostic: a batch of confirmed recordUuids is inherently already scoped to whatever
+    // Mode-agnostic: a batch of confirmed lineNumbers is inherently already scoped to whatever
     // was actually sent, regardless of mode — see PeripheralSyncService.markSynced (a BLE ack
     // from a genuinely different Mule) and MuleRepository.pushToServer (this device's own
     // self-push, confirmed once the server's own status check reflects it — not merely handed
     // off locally, unlike the old self-mirrored-copy design).
-    suspend fun markHistorySyncedByUuid(recordUuids: List<String>, syncedAtMillis: Long = System.currentTimeMillis()) {
-        if (recordUuids.isEmpty()) return
-        historyLineDao.markSynced(recordUuids, syncedAtMillis)
+    suspend fun markHistorySyncedByLineNumber(raceId: Long, lineNumbers: List<Long>, syncedAtMillis: Long = System.currentTimeMillis()) {
+        if (lineNumbers.isEmpty()) return
+        historyLineDao.markSynced(raceId, lineNumbers, syncedAtMillis)
     }
 
-    suspend fun getHistoryLineNumbersForUuids(recordUuids: List<String>): List<Long> =
-        if (recordUuids.isEmpty()) emptyList() else historyLineDao.getLineNumbersForUuids(recordUuids)
-
     // See PeripheralSyncService.backfillSinkAck's own doc. Inclusive of sinceLineNumber itself.
-    suspend fun unsyncedRecordUuidsUpTo(raceId: Long, sinceLineNumber: Long): List<String> =
-        historyLineDao.getUnsyncedRecordUuidsUpTo(raceId, sinceLineNumber)
+    suspend fun unsyncedLineNumbersUpTo(raceId: Long, sinceLineNumber: Long): List<Long> =
+        historyLineDao.getUnsyncedLineNumbersUpTo(raceId, sinceLineNumber)
 
     // Per-line "synced to" feedback for a local race — see LineSyncEntity's own doc for what
     // isSink actually means (the red/orange/green threshold), and for why targetId/targetName
     // still only ever names the immediate hop that told this device, even for a confirmation
-    // that arrived via a downstream device's own relayed sinkConfirmedRecordUuids.
+    // that arrived via a downstream device's own relayed sinkConfirmedOrigins.
     fun observeLineSyncs(raceId: Long): Flow<List<LineSyncEntity>> = lineSyncDao.observeForRace(raceId)
 
     suspend fun recordLineSyncs(

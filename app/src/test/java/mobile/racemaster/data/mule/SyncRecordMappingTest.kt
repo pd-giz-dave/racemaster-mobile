@@ -29,7 +29,6 @@ class SyncRecordMappingTest {
         refLineNumber = refLineNumber,
         note = note,
         timestampMillis = timestampMillis,
-        recordUuid = "record-uuid",
     )
 
     private fun split(
@@ -90,9 +89,8 @@ class SyncRecordMappingTest {
     }
 
     @Test
-    fun finishSplitCarriesRecordUuidAndNoteThrough() {
+    fun finishSplitCarriesNoteThrough() {
         val record = split(splitNumber = 1, timestampMillis = 1_000L, note = "Checkpoint 1").toSyncRecord(0L)
-        assertEquals("record-uuid", record.recordUuid)
         assertEquals("Checkpoint 1", record.note)
     }
 
@@ -387,15 +385,15 @@ class SyncRecordMappingTest {
         // A Time split is sent as its own honest "Split" (see toServerAction's own doc), so
         // "Finish" on the wire now means exactly one thing — a genuine Bibs Finish — regardless
         // of whether `splitTime` happens to be set.
-        assertEquals(HistoryAction.SPLIT, SyncRecord(recordUuid = "u", action = "Split", bibNumber = null, splitTime = "00:00:00", location = "Finish", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
-        assertEquals(HistoryAction.FINISH, SyncRecord(recordUuid = "u", action = "Finish", bibNumber = "101", splitTime = null, location = "Finish", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
+        assertEquals(HistoryAction.SPLIT, SyncRecord(action = "Split", bibNumber = null, splitTime = "00:00:00", location = "Finish", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
+        assertEquals(HistoryAction.FINISH, SyncRecord(action = "Finish", bibNumber = "101", splitTime = null, location = "Finish", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
     }
 
     @Test
     fun unrecognizedWireActionFallsBackToIgnoreRatherThanThrowing() {
         assertEquals(
             HistoryAction.IGNORE,
-            SyncRecord(recordUuid = "u", action = "SomeFutureAction", bibNumber = null, splitTime = null, location = "Finish", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction(),
+            SyncRecord(action = "SomeFutureAction", bibNumber = null, splitTime = null, location = "Finish", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction(),
         )
     }
 }

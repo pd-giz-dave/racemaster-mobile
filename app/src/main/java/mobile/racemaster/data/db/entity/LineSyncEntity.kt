@@ -16,7 +16,7 @@ const val SERVER_TARGET_ID = "SERVER"
 // relay copy — the intermediate orange threshold (see HistoryLineEntity.syncedAtMillis's own
 // doc for how the two combine). A row's own [targetId]/[targetName] still only ever names the
 // immediate hop that told this device, even for a confirmation that itself arrived via
-// [mobile.racemaster.data.mule.AckPayload.sinkConfirmedRecordUuids] (i.e. one relayed here from
+// [mobile.racemaster.data.mule.AckPayload.sinkConfirmedOrigins] (i.e. one relayed here from
 // further up an N-hop mule chain) — the wire protocol carries no chain-of-custody field for the
 // true originating sink's own identity through arbitrary hop depth, so "Synced to: X" may name
 // an intermediate mule rather than the actual sink once data has crossed more than one hop.

@@ -130,33 +130,37 @@ class MuleRepository(
         // connection, piggybacked exactly like the sink confirmation above — see
         // MulePullClient.readDeviceInfo's own progressToDeliver/progressRaceLabel doc for why.
         // Forwarded straight through; both null (the default) is a no-op, same as
-        // sinkConfirmedRecordUuids ending up empty above.
+        // sinkConfirmedOrigins ending up empty above.
         progressToDeliver: ProgressPayload? = null,
         progressRaceLabel: String? = null,
         // Forwarded straight through to MulePullClient.readDeviceInfo's own param of the same
         // name — see its own doc. A no-op default, same as that one, for the common case (no
-        // caller cares, or sinkConfirmedRecordUuids ends up empty so it never fires anyway).
+        // caller cares, or sinkConfirmedOrigins ends up empty so it never fires anyway).
         onAckFailure: suspend (String) -> Unit = {},
         // Same idea as onAckFailure, for the progress-delivery write.
         onProgressDeliveryFailure: suspend (String) -> Unit = {},
     ): DeviceInfo {
-        val sinkConfirmedRecordUuids = if (sourceDeviceId != null && sourceRaceLabel != null) {
-            pulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource(sourceDeviceId, sourceRaceLabel)
+        val sinkConfirmedOrigins = if (sourceDeviceId != null && sourceRaceLabel != null) {
+            val lineNumbers = pulledRecordDao.getUnrelayedSinkConfirmedLineNumbersForSource(sourceDeviceId, sourceRaceLabel)
+            if (lineNumbers.isEmpty()) emptyList() else listOf(AckedOrigin(sourceDeviceId, sourceRaceLabel, lineNumbers))
         } else {
             emptyList()
         }
-        if (sinkConfirmedRecordUuids.isEmpty() && progressToDeliver == null) return pullClient.readDeviceInfo(advertisement)
+        if (sinkConfirmedOrigins.isEmpty() && progressToDeliver == null) return pullClient.readDeviceInfo(advertisement)
         val myDeviceId = settingsRepository.getOrCreateDeviceId()
         val myDeviceName = settingsRepository.getOrCreateDeviceName()
         return pullClient.readDeviceInfo(
             advertisement,
             myDeviceId,
             myDeviceName,
-            sinkConfirmedRecordUuids,
+            sinkConfirmedOrigins,
             progressToDeliver = progressToDeliver,
             progressRaceLabel = progressRaceLabel,
-            onConfirmationsRelayed = { relayedUuids ->
-                pulledRecordDao.markConfirmationRelayed(relayedUuids, System.currentTimeMillis())
+            onConfirmationsRelayed = { relayedOrigins ->
+                for (origin in relayedOrigins) {
+                    if (origin.originDeviceId == null || origin.originRaceLabel == null) continue
+                    pulledRecordDao.markConfirmationRelayed(origin.originDeviceId, origin.originRaceLabel, origin.lineNumbers, System.currentTimeMillis())
+                }
             },
             onAckFailure = onAckFailure,
             onProgressDeliveryFailure = onProgressDeliveryFailure,
@@ -225,14 +229,14 @@ class MuleRepository(
     // don't belong to this device's own pulled_records inbox at all (e.g. they're actually this
     // device's own directly-recorded lines) — see PeripheralSyncService.markSynced's own doc for
     // why that's always a harmless no-op rather than needing to be filtered out first.
-    suspend fun markRelayedRecordsSynced(recordUuids: List<String>, targetName: String) {
-        if (recordUuids.isEmpty()) return
-        pulledRecordDao.markSynced(recordUuids, System.currentTimeMillis(), targetName)
+    suspend fun markRelayedRecordsSynced(sourceDeviceId: String, sourceRaceLabel: String, lineNumbers: List<Long>, targetName: String) {
+        if (lineNumbers.isEmpty()) return
+        pulledRecordDao.markSynced(sourceDeviceId, sourceRaceLabel, lineNumbers, System.currentTimeMillis(), targetName)
     }
 
     // See PeripheralSyncService.backfillSinkAck's own doc. Inclusive of sinceLineNumber itself.
-    suspend fun unsyncedPulledRecordUuidsUpTo(sourceDeviceId: String, sourceRaceLabel: String, sinceLineNumber: Long): List<String> =
-        pulledRecordDao.getUnsyncedRecordUuidsUpTo(sourceDeviceId, sourceRaceLabel, sinceLineNumber)
+    suspend fun unsyncedPulledLineNumbersUpTo(sourceDeviceId: String, sourceRaceLabel: String, sinceLineNumber: Long): List<Long> =
+        pulledRecordDao.getUnsyncedLineNumbersUpTo(sourceDeviceId, sourceRaceLabel, sinceLineNumber)
 
     suspend fun setAutoSyncStopped(stopped: Boolean) {
         settingsRepository.setAutoSyncStopped(stopped)
@@ -253,11 +257,11 @@ class MuleRepository(
 
     // Lets MuleSyncEngine.pullAllVisibleDevices decide whether to reconnect to a source that has
     // no new lines to pull, purely to relay a sink confirmation it's already holding for that
-    // source (see pullFrom's own doc on sinkConfirmedRecordUuids) — without this, a source that's
+    // source (see pullFrom's own doc on sinkConfirmedOrigins) — without this, a source that's
     // already fully pulled would never get told its data has since reached a sink, since the
     // normal delta-driven pull would never fire again for it.
     suspend fun hasSinkConfirmationToRelay(sourceDeviceId: String, sourceRaceLabel: String): Boolean =
-        pulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource(sourceDeviceId, sourceRaceLabel).isNotEmpty()
+        pulledRecordDao.getUnrelayedSinkConfirmedLineNumbersForSource(sourceDeviceId, sourceRaceLabel).isNotEmpty()
 
     // count starts at 0 and is only ever set from inside pullClient.pull()'s onReceived
     // callback — which runs (and must complete, storing the records) strictly before pull()
@@ -289,10 +293,11 @@ class MuleRepository(
         // own doc) — everything already held for this exact source that's since become
         // sink-confirmed but not yet told back to it, so that confirmation keeps climbing back
         // toward wherever this source's data originally came from, one hop per sync tick — see
-        // getUnrelayedSinkConfirmedRecordUuidsForSource's own doc for why this is scoped to
+        // getUnrelayedSinkConfirmedLineNumbersForSource's own doc for why this is scoped to
         // unrelayed ones only (a bounded delta), and only trustworthy to mark relayed at all
         // because of PeripheralSyncService's deferred GATT response.
-        val sinkConfirmedRecordUuids = pulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource(sourceDeviceId, sourceRaceLabel)
+        val sinkConfirmedLineNumbers = pulledRecordDao.getUnrelayedSinkConfirmedLineNumbersForSource(sourceDeviceId, sourceRaceLabel)
+        val sinkConfirmedOrigins = if (sinkConfirmedLineNumbers.isEmpty()) emptyList() else listOf(AckedOrigin(sourceDeviceId, sourceRaceLabel, sinkConfirmedLineNumbers))
         pullClient.pull(
             advertisement,
             myDeviceId,
@@ -300,11 +305,11 @@ class MuleRepository(
             sinceLineNumber,
             requestOriginDeviceId,
             requestOriginRaceLabel,
-            sinkConfirmedRecordUuids,
+            sinkConfirmedOrigins,
             onReceived = { records ->
                 count = storePulledRecords(sourceRaceLabel, sourceDeviceId, sourceDeviceName, records)
             },
-            onConfirmationsRelayed = { relayedUuids ->
+            onConfirmationsRelayed = { relayedOrigins ->
                 // Only retire the "needs relaying" flag once this confirmation has actually
                 // reached [sourceDeviceId] itself — requestOriginDeviceId == null means the
                 // peripheral this pull just acked IS sourceDeviceId (a direct pull), not merely
@@ -314,11 +319,14 @@ class MuleRepository(
                 // mark a confirmation "relayed" the moment either told the *other* about it,
                 // never actually reaching the leaf that originally recorded the line — each
                 // mule's own bookkeeping believed it had already done its job. The
-                // sinkConfirmedRecordUuids are still included in a relay-pull's ack either way
+                // sinkConfirmedOrigins are still included in a relay-pull's ack either way
                 // (so the intermediate mule also learns/can itself relay it onward) — this only
                 // gates whether *this* device stops re-offering it.
                 if (requestOriginDeviceId == null) {
-                    pulledRecordDao.markConfirmationRelayed(relayedUuids, System.currentTimeMillis())
+                    for (origin in relayedOrigins) {
+                        if (origin.originDeviceId == null || origin.originRaceLabel == null) continue
+                        pulledRecordDao.markConfirmationRelayed(origin.originDeviceId, origin.originRaceLabel, origin.lineNumbers, System.currentTimeMillis())
+                    }
                 }
             },
         )
@@ -336,7 +344,6 @@ class MuleRepository(
         pulledRecordDao.insertAll(
             records.map { record ->
                 PulledRecordEntity(
-                    recordUuid = record.recordUuid,
                     sourceDeviceId = sourceDeviceId,
                     sourceRaceLabel = sourceRaceLabel,
                     lineNumber = record.lineNumber,
@@ -448,7 +455,7 @@ class MuleRepository(
      *  checks the server's own [MuleSyncClient.getSyncStatus] for this race and filters each
      *  device's records (self included) against its own already-stored `lineNumber`, so only
      *  the genuine delta gets sent rather than resending everything every tick — safe because
-     *  the server dedups by `recordUuid` as a backstop regardless, and because comparing
+     *  the server dedups by `lineNumber` as a backstop regardless, and because comparing
      *  directly against the server's own reported state (rather than trusting any local
      *  "already synced" flag) is exactly what lets this recover on its own if the server's
      *  copy is ever lost. Only marks a record synced once this same round's status check
@@ -567,30 +574,38 @@ class MuleRepository(
             // that silently failed to land stayed permanently stuck until something unrelated
             // (e.g. a stopwatch reset) created a new unsynced row and incidentally forced a
             // full re-check.
-            val justSentUuids = devicesToSend.values.flatten().map { it.recordUuid }.toSet()
+            // (deviceName, lineNumber) — a bare lineNumber isn't enough here since devicesToSend
+            // spans every device due for this one race label at once (see its own doc); pairing
+            // with the device name it actually came from is what SyncRecord's own dropped
+            // recordUuid field used to give us for free.
+            val justSent = devicesToSend.flatMap { (deviceName, records) -> records.map { deviceName to it.lineNumber } }.toSet()
             val now = System.currentTimeMillis()
 
-            val confirmedPulledRows = pulledForRace.filter { it.recordUuid !in justSentUuids }
+            val confirmedPulledRows = pulledForRace.filter { (it.deviceName to it.lineNumber) !in justSent }
             if (confirmedPulledRows.isNotEmpty()) {
                 // Same targetName as the self-originated LineSyncEntity tagging just below —
                 // the only destination a pulled record is ever pushed to from here is this
                 // server, so this is always accurate, and it's what lets Mule Source Detail
                 // show "Synced to: X" exactly like a local race's own history instead of just
-                // a bare color.
-                pulledRecordDao.markSynced(confirmedPulledRows.map { it.recordUuid }, now, targetName = baseUrl)
+                // a bare color. Grouped by sourceDeviceId — pulledForRace can span more than one
+                // genuinely different source device for this one race label (see this class's
+                // own doc), and markSynced is itself scoped to a single source.
+                for ((sourceDeviceId, rows) in confirmedPulledRows.groupBy { it.sourceDeviceId }) {
+                    pulledRecordDao.markSynced(sourceDeviceId, raceLabel, rows.map { it.lineNumber }, now, targetName = baseUrl)
+                }
             }
 
             if (localRace != null) {
-                val confirmedSelfRecords = selfRecords.filter { it.recordUuid !in justSentUuids }
+                val confirmedSelfRecords = selfRecords.filter { (myDeviceName to it.lineNumber) !in justSent }
                 if (confirmedSelfRecords.isNotEmpty()) {
-                    val confirmedUuids = confirmedSelfRecords.map { it.recordUuid }
                     // Same "confirmed by the server's own status check, not merely attempted"
                     // rule as the pulled-from-others rows above — this is what makes a local
                     // race's own sync dot (RaceHistoryDetailViewModel's `synced`) honest about
                     // having actually reached the server, not just having been handed to a
                     // local inbox the way the old mirrored-copy design used to mark it.
-                    raceRepository.markHistorySyncedByUuid(confirmedUuids, now)
-                    raceRepository.recordLineSyncs(localRace.id, confirmedSelfRecords.map { it.lineNumber }, SERVER_TARGET_ID, targetName = baseUrl, isSink = true, syncedAtMillis = now)
+                    val confirmedLineNumbers = confirmedSelfRecords.map { it.lineNumber }
+                    raceRepository.markHistorySyncedByLineNumber(localRace.id, confirmedLineNumbers, now)
+                    raceRepository.recordLineSyncs(localRace.id, confirmedLineNumbers, SERVER_TARGET_ID, targetName = baseUrl, isSink = true, syncedAtMillis = now)
                 }
             }
         }
@@ -608,7 +623,7 @@ class MuleRepository(
 // directly testable without standing up MuleRepository's full dependency graph.
 internal fun decodeSyncRecord(row: PulledRecordEntity, json: Json): SyncRecord? =
     runCatching { json.decodeFromString<SyncRecord>(row.payloadJson) }
-        .onFailure { Log.w(TAG, "Dropping unparseable pulled record ${row.recordUuid} — stale wire format?", it) }
+        .onFailure { Log.w(TAG, "Dropping unparseable pulled record ${row.sourceDeviceId}#${row.lineNumber} — stale wire format?", it) }
         .getOrNull()
 
 // null-safe maxOf for two independently-nullable timestamps, where "one side has no signal at

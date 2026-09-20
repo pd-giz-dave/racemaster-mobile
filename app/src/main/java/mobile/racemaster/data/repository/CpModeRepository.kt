@@ -48,8 +48,6 @@ class CpModeRepository(
 
     fun observeLastSyncedAtMillis(raceId: Long): Flow<Long?> = engine.observeLastSyncedAtMillis(raceId)
 
-    suspend fun getLineNumbersForUuids(recordUuids: List<String>): List<Long> = engine.getLineNumbersForUuids(recordUuids)
-
     // Immediately preceded by its own MODE_START boundary marker (see that action's own doc) —
     // a second, separate row purely for the web app's later benefit, never shown on any live
     // screen; the real Clock marker right after it is completely unaffected, exactly as it

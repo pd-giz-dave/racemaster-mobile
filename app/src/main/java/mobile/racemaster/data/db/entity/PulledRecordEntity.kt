@@ -12,19 +12,20 @@ import androidx.room.PrimaryKey
 // recreated race under the same label resent stale data alongside the new race's, since
 // nothing kept this table's copy in sync with the actual source of truth). Mule has no race of
 // its own, so this is a flat holding table rather than something hung off a RaceEntity —
-// payloadJson is already in the exact {recordUuid, action, bibNumber, splitTime, splitNumber,
-// note, timestampMillis} shape the server's mobile-append endpoint expects, so it can be pushed
-// on as-is with no further mapping.
+// payloadJson is already in the exact {action, bibNumber, splitTime, splitNumber, note,
+// timestampMillis, lineNumber, ...} shape the server's mobile-append endpoint expects, so it
+// can be pushed on as-is with no further mapping.
 @Entity(
     tableName = "pulled_records",
     indices = [
-        Index("recordUuid", unique = true),
-        Index("sourceDeviceId", "sourceRaceLabel"),
+        // A record's real identity once pulled from elsewhere — matches every other lookup in
+        // this table (see sourceDeviceId's own doc for why sourceRaceLabel is always paired
+        // with it too, not just lineNumber).
+        Index("sourceDeviceId", "sourceRaceLabel", "lineNumber", unique = true),
     ],
 )
 data class PulledRecordEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val recordUuid: String,
     // The specific physical phone this record was pulled from — distinct from
     // sourceRaceLabel (which only identifies a race, not a specific device): needed to look up
     // "the last line number already pulled from THIS device" for delta-sync, since line
@@ -32,7 +33,9 @@ data class PulledRecordEntity(
     val sourceDeviceId: String,
     val sourceRaceLabel: String,
     // The source device's own permanent line number for this record — see
-    // RaceEntity.nextLineNumber. Used to compute the delta to request on the next pull.
+    // RaceEntity.nextLineNumber. Used to compute the delta to request on the next pull, and
+    // (paired with sourceDeviceId/sourceRaceLabel above) this record's own dedup/ack identity —
+    // see SyncRecord's own doc for why no separately-generated id is needed for that.
     val lineNumber: Long,
     // Denormalized from the pulled SyncRecord's own deviceName at insert time (same
     // convention as RaceEntity.createdByDeviceName) — lets Race History's Mule-source list
@@ -48,8 +51,8 @@ data class PulledRecordEntity(
     val syncedTargetName: String? = null,
     // Set once this record's sink confirmation (syncedAtMillis above) has actually been handed
     // back to sourceDeviceId in an ack the peripheral has genuinely finished processing — see
-    // PulledRecordDao.getUnrelayedSinkConfirmedRecordUuidsForSource's own doc. Without this,
-    // MuleRepository.pullFrom recomputed "every uuid ever sink-confirmed for this source" fresh
+    // PulledRecordDao.getUnrelayedSinkConfirmedLineNumbersForSource's own doc. Without this,
+    // MuleRepository.pullFrom recomputed "every line ever sink-confirmed for this source" fresh
     // on every ~10s tick with no memory of what had already been sent, so the ack payload only
     // ever grew across a race's lifetime — fine for a handful of splits, but for a large race
     // (e.g. 300 runners) it re-transfers the whole ever-growing backlog every tick forever,

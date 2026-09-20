@@ -9,7 +9,6 @@ import org.junit.Test
 class MuleRepositoryTest {
 
     private fun timeRecord(lineNumber: Long) = SyncRecord(
-        recordUuid = "time-$lineNumber",
         action = "Finish",
         bibNumber = null,
         splitTime = "00:01:30.00",
@@ -21,7 +20,6 @@ class MuleRepositoryTest {
     )
 
     private fun bibRecord(lineNumber: Long) = SyncRecord(
-        recordUuid = "bib-$lineNumber",
         action = "Finish",
         bibNumber = "101",
         splitTime = null,
@@ -103,7 +101,6 @@ class MuleRepositoryTest {
     @Test
     fun aRowWithValidPayloadDecodesToTheMatchingRecord() {
         val row = PulledRecordEntity(
-            recordUuid = "uuid-1",
             sourceDeviceId = "device-a",
             sourceRaceLabel = "race-a",
             lineNumber = 1,

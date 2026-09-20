@@ -407,6 +407,20 @@ data class PullRequest(
     val isSink: Boolean = false,
 )
 
+/** One pull leg's worth of acked lines — [originDeviceId]/[originRaceLabel] null means this
+ *  device's own race (mirrors [PullRequest]'s own null-means-own-race convention); non-null
+ *  identifies one specific [RelayManifestEntry] leg. [lineNumbers] alone is enough to identify
+ *  a line *within* that one origin — a bare `Long`, not a UUID, is only safe to use this way
+ *  because it's always paired with the origin it came from, never flattened across origins into
+ *  one list (two different origins' own line 5 are unrelated records — see AckPayload's own
+ *  doc for why a flat list couldn't do this). */
+@Serializable
+data class AckedOrigin(
+    val originDeviceId: String? = null,
+    val originRaceLabel: String? = null,
+    val lineNumbers: List<Long>,
+)
+
 /** Written to [MuleGattProfile.ACK_CHARACTERISTIC_UUID] once a pulled stream is fully
  *  reassembled and durably stored, so the peripheral knows it's safe to mark those records
  *  synced. [deviceId] identifies the puller — lets the peripheral attribute each acked line
@@ -414,16 +428,26 @@ data class PullRequest(
  *  the puller's own memorable name, carried alongside so the "synced to" feedback shown in
  *  Race History can display something more useful than a raw UUID.
  *
- *  [isSink] and [sinkConfirmedRecordUuids] are what turn a plain "somebody took a copy" ack
+ *  [ackedOrigins]/[sinkConfirmedOrigins] are grouped by origin ([AckedOrigin]) rather than one
+ *  flat list of identifiers, because a single ack legitimately spans more than one origin device
+ *  at once — this device's own race plus zero or more relayed origins pulled in the same
+ *  round trip (see MulePullClient.pull) — and a bare line number is only unambiguous *within*
+ *  one origin's own sequence (two different phones' own line 5 are unrelated records). Grouping
+ *  also lets PeripheralSyncService.markSynced route each group straight at the one table it
+ *  actually belongs to (this device's own `history_lines` for a null origin, or `pulled_records`
+ *  scoped to that exact `sourceDeviceId`/`sourceRaceLabel` otherwise) instead of trying both
+ *  tables blindly the way a flat, un-scoped identifier used to require.
+ *
+ *  [isSink] and [sinkConfirmedOrigins] are what turn a plain "somebody took a copy" ack
  *  into "this data has genuinely reached a sink" — a real destination (the racemaster server,
  *  or a Bluetooth device that identifies as one, e.g. the racemaster web app's own BLE client),
  *  as opposed to just another relay mule. [isSink] is the acker's own identity: true only for
  *  a genuine sink, always false for an ordinary racemaster-mobile phone acting as Mule.
- *  [recordUuids] alone (isSink false) means "relayed to a mule, not yet sink-confirmed" — the
- *  new intermediate (orange) state; [recordUuids] with isSink true means those lines are fully
- *  confirmed (green) right now. [sinkConfirmedRecordUuids] is the separate back-channel that
+ *  [ackedOrigins] alone (isSink false) means "relayed to a mule, not yet sink-confirmed" — the
+ *  new intermediate (orange) state; [ackedOrigins] with isSink true means those lines are fully
+ *  confirmed (green) right now. [sinkConfirmedOrigins] is the separate back-channel that
  *  lets that confirmation climb back through however many mule hops separate a sink from the
- *  device that originally recorded a line: a mule piggybacks every recordUuid it has separately
+ *  device that originally recorded a line: a mule piggybacks every line it has separately
  *  learned is sink-confirmed (via its own successful server push, or a downstream device's own
  *  ack) onto its next routine ack to whoever it pulls from — see PeripheralSyncService.markSynced
  *  and MuleRepository.pullFrom for the two ends of this. Both new fields default so an ack from
@@ -433,16 +457,18 @@ data class PullRequest(
 @Serializable
 data class AckPayload(
     val deviceId: String,
-    val recordUuids: List<String>,
+    val ackedOrigins: List<AckedOrigin>,
     val deviceName: String = "",
     val isSink: Boolean = false,
-    val sinkConfirmedRecordUuids: List<String> = emptyList(),
+    val sinkConfirmedOrigins: List<AckedOrigin> = emptyList(),
 )
 
 /**
  * One transferable record — Time Mode splits and Bibs Mode entries both flatten into this
  * same shape. Lands in the racemaster server's own `mobile` array (kept distinct from its
- * existing `finishers` array, not merged into it) via `recordUuid` (for dedup). `splitTime`
+ * existing `finishers` array, not merged into it), deduped by `lineNumber` there — the
+ * server's own per-device file already makes that field unambiguous (see this class's own
+ * doc on why no `deviceName` rides along either). `splitTime`
  * (elapsed-since-race-start) is only meaningful for Time Mode splits — Bibs Mode has no
  * stopwatch of its own, so its records leave `splitTime` null and rely purely on
  * `timestampMillis`, the raw wall-clock instant the record was created.
@@ -470,7 +496,6 @@ data class AckPayload(
  */
 @Serializable
 data class SyncRecord(
-    val recordUuid: String,
     val action: String,
     val bibNumber: String?,
     val splitTime: String?,

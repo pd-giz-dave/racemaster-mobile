@@ -39,7 +39,6 @@ data class LoginResponse(val token: String, val username: String, val isAdmin: B
 // (especially once devices in different time zones are involved).
 @Serializable
 private data class ServerSyncRecord(
-    val recordUuid: String,
     val action: String,
     val bibNumber: String?,
     val splitTime: String?,
@@ -52,7 +51,6 @@ private data class ServerSyncRecord(
 )
 
 private fun SyncRecord.toServerSyncRecord() = ServerSyncRecord(
-    recordUuid = recordUuid,
     action = action,
     bibNumber = bibNumber,
     splitTime = splitTime,

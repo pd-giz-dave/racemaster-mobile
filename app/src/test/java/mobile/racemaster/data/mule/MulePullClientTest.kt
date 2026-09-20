@@ -8,11 +8,14 @@ import org.junit.Test
 class MulePullClientTest {
 
     // ackBatches — keeping every single GATT ack write under Android's hard 512-byte cap (see
-    // its own doc for the field bug this fixes: an unbatched, ever-growing sinkConfirmedRecordUuids
+    // its own doc for the field bug this fixes: an unbatched, ever-growing sinkConfirmedOrigins
     // list eventually throws on every subsequent pull from that source).
 
     private val json = Json { ignoreUnknownKeys = true }
     private fun encode(payload: AckPayload): String = json.encodeToString(payload)
+
+    private fun origin(vararg lineNumbers: Long, deviceId: String? = null, raceLabel: String? = null) =
+        AckedOrigin(originDeviceId = deviceId, originRaceLabel = raceLabel, lineNumbers = lineNumbers.toList())
 
     @Test
     fun emptyListsProduceNoBatchesAtAll() {
@@ -23,61 +26,83 @@ class MulePullClientTest {
 
     @Test
     fun smallListsEachFitInOneBatch() {
-        val batches = ackBatches("mule-a", "witty-warbler", listOf("r1", "r2"), listOf("c1", "c2"), encode = ::encode)
+        val batches = ackBatches("mule-a", "witty-warbler", listOf(origin(1L, 2L)), listOf(origin(10L, 20L)), encode = ::encode)
 
         assertEquals(2, batches.size)
-        assertEquals(listOf("r1", "r2"), batches[0].recordUuids)
-        assertEquals(emptyList<String>(), batches[0].sinkConfirmedRecordUuids)
-        assertEquals(emptyList<String>(), batches[1].recordUuids)
-        assertEquals(listOf("c1", "c2"), batches[1].sinkConfirmedRecordUuids)
+        assertEquals(listOf(origin(1L, 2L)), batches[0].ackedOrigins)
+        assertEquals(emptyList<AckedOrigin>(), batches[0].sinkConfirmedOrigins)
+        assertEquals(emptyList<AckedOrigin>(), batches[1].ackedOrigins)
+        assertEquals(listOf(origin(10L, 20L)), batches[1].sinkConfirmedOrigins)
     }
 
     @Test
     fun oneOfEachSkippedWhenItsOwnListIsEmpty() {
-        val batches = ackBatches("mule-a", "witty-warbler", listOf("r1"), emptyList(), encode = ::encode)
+        val batches = ackBatches("mule-a", "witty-warbler", listOf(origin(1L)), emptyList(), encode = ::encode)
 
         assertEquals(1, batches.size)
-        assertEquals(listOf("r1"), batches[0].recordUuids)
+        assertEquals(listOf(origin(1L)), batches[0].ackedOrigins)
     }
 
     @Test
     fun aLargeConfirmedListSplitsAcrossMultipleBatchesEachUnderTheCap() {
-        // Simulates the exact field failure: many already sink-confirmed uuids accumulated for
+        // Simulates the exact field failure: many already sink-confirmed lines accumulated for
         // one source, recomputed fresh (and unpruned) on every tick.
-        val manyUuids = (1..200).map { "550e8400-e29b-41d4-a716-4466554400%02d".format(it % 100) }
-        val maxBytes = 200
+        val manyLineNumbers = (1L..1000L).toList()
+        val maxBytes = 150
 
-        val batches = ackBatches("mule-a", "witty-warbler", emptyList(), manyUuids, maxEncodedBytes = maxBytes, encode = ::encode)
+        val batches = ackBatches("mule-a", "witty-warbler", emptyList(), listOf(AckedOrigin(lineNumbers = manyLineNumbers)), maxEncodedBytes = maxBytes, encode = ::encode)
 
-        assertTrue("expected more than one batch for $manyUuids uuids capped at $maxBytes bytes", batches.size > 1)
+        assertTrue("expected more than one batch for ${manyLineNumbers.size} line numbers capped at $maxBytes bytes", batches.size > 1)
         for (batch in batches) {
-            assertTrue("batch encoded over the cap: ${encode(batch).length}", encode(batch).toByteArray(Charsets.UTF_8).size <= maxBytes || batch.sinkConfirmedRecordUuids.size == 1)
-            assertTrue(batch.recordUuids.isEmpty())
+            val singleEntry = batch.sinkConfirmedOrigins.singleOrNull()?.lineNumbers?.size == 1
+            assertTrue("batch encoded over the cap: ${encode(batch).length}", encode(batch).toByteArray(Charsets.UTF_8).size <= maxBytes || singleEntry)
+            assertTrue(batch.ackedOrigins.isEmpty())
         }
-        // Every uuid survives the split, in order, with none dropped or duplicated.
-        assertEquals(manyUuids, batches.flatMap { it.sinkConfirmedRecordUuids })
+        // Every line number survives the split, in order, with none dropped or duplicated —
+        // regrouped back into a single logical origin once every batch is flattened.
+        assertEquals(manyLineNumbers, batches.flatMap { it.sinkConfirmedOrigins }.flatMap { it.lineNumbers })
     }
 
     @Test
     fun recordAndConfirmedBatchesNeverMixFieldsInTheSamePayload() {
-        val batches = ackBatches("mule-a", "witty-warbler", listOf("r1", "r2", "r3"), listOf("c1", "c2", "c3"), maxEncodedBytes = 90, encode = ::encode)
+        val batches = ackBatches("mule-a", "witty-warbler", listOf(origin(1L, 2L, 3L)), listOf(origin(10L, 20L, 30L)), maxEncodedBytes = 90, encode = ::encode)
 
         for (batch in batches) {
-            assertTrue(batch.recordUuids.isEmpty() || batch.sinkConfirmedRecordUuids.isEmpty())
+            assertTrue(batch.ackedOrigins.isEmpty() || batch.sinkConfirmedOrigins.isEmpty())
         }
-        assertEquals(listOf("r1", "r2", "r3"), batches.flatMap { it.recordUuids })
-        assertEquals(listOf("c1", "c2", "c3"), batches.flatMap { it.sinkConfirmedRecordUuids })
+        assertEquals(listOf(1L, 2L, 3L), batches.flatMap { it.ackedOrigins }.flatMap { it.lineNumbers })
+        assertEquals(listOf(10L, 20L, 30L), batches.flatMap { it.sinkConfirmedOrigins }.flatMap { it.lineNumbers })
     }
 
     @Test
     fun everyBatchCarriesTheSameDeviceIdentity() {
-        val batches = ackBatches("mule-a", "witty-warbler", listOf("r1"), listOf("c1"), encode = ::encode)
+        val batches = ackBatches("mule-a", "witty-warbler", listOf(origin(1L)), listOf(origin(10L)), encode = ::encode)
 
         for (batch in batches) {
             assertEquals("mule-a", batch.deviceId)
             assertEquals("witty-warbler", batch.deviceName)
             assertEquals(false, batch.isSink)
         }
+    }
+
+    // A single ack batch can legitimately span more than one origin at once (this device's own
+    // race plus a relayed leg, pulled in the same round trip) — ackBatches must keep them as
+    // separate AckedOrigin groups, not silently merge two different origins' own line numbers
+    // together the way a flat list used to risk.
+    @Test
+    fun keepsDistinctOriginsSeparateAcrossOneBatch() {
+        val batches = ackBatches(
+            "mule-a", "witty-warbler",
+            listOf(origin(5L), origin(5L, deviceId = "cp2-phone", raceLabel = "race-a")),
+            emptyList(),
+            encode = ::encode,
+        )
+
+        assertEquals(1, batches.size)
+        val groups = batches[0].ackedOrigins
+        assertEquals(2, groups.size)
+        assertEquals(listOf(5L), groups.first { it.originDeviceId == null }.lineNumbers)
+        assertEquals(listOf(5L), groups.first { it.originDeviceId == "cp2-phone" }.lineNumbers)
     }
 
     // computeRequestKey — deterministic, not random, so a repeated ask (same puller, same

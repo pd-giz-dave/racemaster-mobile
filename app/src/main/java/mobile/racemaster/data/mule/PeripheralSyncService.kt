@@ -864,7 +864,7 @@ class PeripheralSyncService : Service() {
                     Log.d(
                         TAG,
                         "ACK write: address=${device.address} decodedOk=${ack != null} rawLen=${value.size} " +
-                            "recordUuids=${ack?.recordUuids?.size} sinkConfirmed=${ack?.sinkConfirmedRecordUuids?.size} isSink=${ack?.isSink}",
+                            "ackedOrigins=${ack?.ackedOrigins?.size} sinkConfirmed=${ack?.sinkConfirmedOrigins?.size} isSink=${ack?.isSink}",
                     )
                     // Recorded synchronously, ahead of markSynced's own (deferred, timeout-guarded)
                     // DB work below — an ack write reaching this far already proves this
@@ -878,7 +878,7 @@ class PeripheralSyncService : Service() {
                     // GATT write-response, rather than firing the response immediately and
                     // processing in the background — the central (MulePullClient.pull) treats a
                     // successful write as license to stop re-offering this ack's
-                    // sinkConfirmedRecordUuids (see MuleRepository.pullFrom's
+                    // sinkConfirmedOrigins (see MuleRepository.pullFrom's
                     // markConfirmationRelayed). A response sent before markSynced even started
                     // left a window where a crash/disconnect right after could silently lose a
                     // confirmation the central had already marked told — confirmed as the root
@@ -1236,7 +1236,7 @@ class PeripheralSyncService : Service() {
     // silently losing just the ack write (data safely received and stored, only the "you can
     // mark this synced" confirmation lost) previously left those lines stuck red/orange
     // forever, since a fresh connection's next request only ever asks for what's still missing
-    // (past X), never re-requests X's own recordUuids for this to key an explicit ack off of.
+    // (past X), never re-requests X's own lineNumbers for this to key an explicit ack off of.
     // [originDeviceId]/
     // [originRaceLabel] null means this device's own race; non-null means a relayed leg for
     // that true origin, matching markSynced's own two-table split just below. Deliberately
@@ -1247,14 +1247,13 @@ class PeripheralSyncService : Service() {
         if (sinceLineNumber <= 0) return
         if (originDeviceId == null) {
             val raceId = servingState.raceId ?: return
-            val uuids = container.raceRepository.unsyncedRecordUuidsUpTo(raceId, sinceLineNumber)
-            if (uuids.isEmpty()) return
-            container.raceRepository.markHistorySyncedByUuid(uuids)
-            val lineNumbers = container.raceRepository.getHistoryLineNumbersForUuids(uuids)
+            val lineNumbers = container.raceRepository.unsyncedLineNumbersUpTo(raceId, sinceLineNumber)
+            if (lineNumbers.isEmpty()) return
+            container.raceRepository.markHistorySyncedByLineNumber(raceId, lineNumbers)
             container.raceRepository.recordLineSyncs(raceId, lineNumbers, WEB_APP_TARGET_ID, targetName = WEB_APP_TARGET_NAME, isSink = true)
         } else {
-            val uuids = container.muleRepository.unsyncedPulledRecordUuidsUpTo(originDeviceId, originRaceLabel.orEmpty(), sinceLineNumber)
-            container.muleRepository.markRelayedRecordsSynced(uuids, WEB_APP_TARGET_NAME)
+            val lineNumbers = container.muleRepository.unsyncedPulledLineNumbersUpTo(originDeviceId, originRaceLabel.orEmpty(), sinceLineNumber)
+            container.muleRepository.markRelayedRecordsSynced(originDeviceId, originRaceLabel.orEmpty(), lineNumbers, WEB_APP_TARGET_NAME)
         }
     }
 
@@ -1262,43 +1261,52 @@ class PeripheralSyncService : Service() {
     // puller is itself a genuine data sink, and what it separately already knows is
     // sink-confirmed further up an N-hop mule chain (see AckPayload's own doc).
     //
-    // The acked recordUuids can belong to either of two different tables on this device,
-    // depending on whether they're this device's own recorded lines or a relayed copy of some
-    // other, genuinely different device's data this Mule is holding on its behalf (see
-    // PulledRecordEntity's own doc) — an ack carries no field saying which, so both are tried;
-    // a given recordUuid only ever lives in one of the two, so an update against the wrong
-    // table for a given uuid always affects zero rows, never anything incorrect.
+    // Each AckedOrigin group routes straight at the one table it actually belongs to: a null
+    // originDeviceId means this device's own recorded lines (`history_lines`), scoped to
+    // [servingState.raceId]; a non-null one means a relayed copy of some other, genuinely
+    // different device's data this Mule is holding on its behalf (see PulledRecordEntity's own
+    // doc), scoped to that exact sourceDeviceId/sourceRaceLabel in `pulled_records`. Grouping by
+    // origin (rather than one flat, un-scoped identifier list) is what makes this routing
+    // possible at all — a bare lineNumber is only unambiguous within the one origin it's paired
+    // with, never across every origin an ack might cover at once (this device's own race plus
+    // zero or more relayed legs pulled in the same round trip).
     //
     // For this device's OWN race: a plain (not yet sink-confirmed) relay hop still gets a
     // LineSyncEntity row (isSink = false) so it's visible as "Synced to: X" — the new
-    // intermediate (orange) state — while [sinkConfirmedUuids] additionally get
+    // intermediate (orange) state — while [sinkConfirmedOrigins] additionally get
     // HistoryLineEntity.syncedAtMillis set (green) plus their own isSink = true row (see that
     // field's own doc for why it may name an intermediate mule rather than the true originating
     // sink once data has crossed more than one hop).
     //
     // For a RELAYED copy in pulled_records: there's no orange state to track there at all (Mule
     // Source Detail deliberately stays plain red/green — see MuleRepository.markRelayedRecordsSynced's
-    // own doc), so only [sinkConfirmedUuids] ever needs writing there.
+    // own doc), so only [sinkConfirmedOrigins] ever needs writing there.
     //
     // Unconditional — not scoped to servingState.mode, for the same reason as computeRecordsPayload: a
     // mixed-mode race's ack can cover rows from either family.
     private suspend fun markSynced(ack: AckPayload) {
         val raceId = servingState.raceId
-        val confirmedUuids = sinkConfirmedUuids(ack)
+        val confirmed = sinkConfirmedOrigins(ack)
+        val confirmedKeys = confirmed.map { it.originDeviceId to it.originRaceLabel }.toSet()
 
-        val plainRelayedUuids = ack.recordUuids.filterNot { it in confirmedUuids }
-        if (plainRelayedUuids.isNotEmpty() && raceId != null) {
-            val lineNumbers = container.raceRepository.getHistoryLineNumbersForUuids(plainRelayedUuids)
-            container.raceRepository.recordLineSyncs(raceId, lineNumbers, ack.deviceId, targetName = ack.deviceName, isSink = false)
+        val plainRelayed = ack.ackedOrigins.filterNot { (it.originDeviceId to it.originRaceLabel) in confirmedKeys }
+        for (origin in plainRelayed) {
+            // A plain (not-yet-confirmed) relay hop for someone else's data gets no write at all
+            // here — see this function's own doc on why pulled_records has no orange state.
+            if (origin.originDeviceId == null && raceId != null) {
+                container.raceRepository.recordLineSyncs(raceId, origin.lineNumbers, ack.deviceId, targetName = ack.deviceName, isSink = false)
+            }
         }
 
-        if (confirmedUuids.isNotEmpty()) {
-            if (raceId != null) {
-                container.raceRepository.markHistorySyncedByUuid(confirmedUuids.toList())
-                val lineNumbers = container.raceRepository.getHistoryLineNumbersForUuids(confirmedUuids.toList())
-                container.raceRepository.recordLineSyncs(raceId, lineNumbers, ack.deviceId, targetName = ack.deviceName, isSink = true)
+        for (origin in confirmed) {
+            if (origin.originDeviceId == null) {
+                if (raceId != null) {
+                    container.raceRepository.markHistorySyncedByLineNumber(raceId, origin.lineNumbers)
+                    container.raceRepository.recordLineSyncs(raceId, origin.lineNumbers, ack.deviceId, targetName = ack.deviceName, isSink = true)
+                }
+            } else {
+                container.muleRepository.markRelayedRecordsSynced(origin.originDeviceId, origin.originRaceLabel.orEmpty(), origin.lineNumbers, ack.deviceName)
             }
-            container.muleRepository.markRelayedRecordsSynced(confirmedUuids.toList(), ack.deviceName)
         }
     }
 
@@ -1453,17 +1461,28 @@ class PeripheralSyncService : Service() {
 }
 
 /**
- * Which recordUuids an [AckPayload] confirms as fully synced (reached a genuine sink) as
- * opposed to merely relayed to a mule. [AckPayload.recordUuids] (what the acker just pulled)
- * only counts once the acker's own [AckPayload.isSink] says it's a real destination;
- * [AckPayload.sinkConfirmedRecordUuids] always counts — those are already confirmed by
- * definition, relayed here from further along an N-hop mule chain. Pulled out as a top-level
- * pure function (matching MuleSyncEngine's own `relevantRelayEntries`/`dedupRelayRows`
- * precedent) so this decision is directly testable without PeripheralSyncService's live
- * BLE/Service dependencies.
+ * Which lines an [AckPayload] confirms as fully synced (reached a genuine sink) as opposed to
+ * merely relayed to a mule, grouped by origin (see [AckedOrigin]'s own doc for why a flat,
+ * un-scoped list can't safely represent this once more than one origin is in play).
+ * [AckPayload.ackedOrigins] (what the acker just pulled) only counts once the acker's own
+ * [AckPayload.isSink] says it's a real destination; [AckPayload.sinkConfirmedOrigins] always
+ * counts — those are already confirmed by definition, relayed here from further along an N-hop
+ * mule chain. Origin groups present in both are merged (lineNumbers unioned, not duplicated).
+ * Pulled out as a top-level pure function (matching MuleSyncEngine's own
+ * `relevantRelayEntries`/`dedupRelayRows` precedent) so this decision is directly testable
+ * without PeripheralSyncService's live BLE/Service dependencies.
  */
-internal fun sinkConfirmedUuids(ack: AckPayload): Set<String> =
-    (if (ack.isSink) ack.recordUuids.toSet() else emptySet()) + ack.sinkConfirmedRecordUuids
+internal fun sinkConfirmedOrigins(ack: AckPayload): List<AckedOrigin> {
+    val merged = LinkedHashMap<Pair<String?, String?>, MutableSet<Long>>()
+    fun add(origins: List<AckedOrigin>) {
+        for (origin in origins) {
+            merged.getOrPut(origin.originDeviceId to origin.originRaceLabel) { mutableSetOf() }.addAll(origin.lineNumbers)
+        }
+    }
+    if (ack.isSink) add(ack.ackedOrigins)
+    add(ack.sinkConfirmedOrigins)
+    return merged.map { (key, lineNumbers) -> AckedOrigin(key.first, key.second, lineNumbers.toList()) }
+}
 
 /** A CONTROL request's already-computed answer — see [PeripheralSyncService]'s `recentResponses`
  *  field doc for why this exists (replaying an answer to a repeated [PullRequest.requestKey]
