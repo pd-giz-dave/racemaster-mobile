@@ -50,6 +50,23 @@ enum class HistoryAction {
     // SyncRecordMapping.kt) since — unlike a wire-only marker would have been — this is a genuine
     // persisted row that gets pulled/relayed over BLE like any other.
     SETUP,
+
+    // Written once per currently-active mode whenever the operator relocates mid-race ("This
+    // Race"/Relocate screen, see RaceRepository.relocateActiveModes) — mode-scoped (never ANY),
+    // since HistoryMode.ANY would make it invisible to every per-family observeCurrentSegment
+    // query, defeating its whole purpose as a boundary marker. Carries the NEW location in `note`
+    // (mirrors SETUP's own convention). Unlike MODE_START/SETUP, this is deliberately NOT
+    // filtered out of the live current-segment view — it must stay visible and undoable (an
+    // operator relocating by mistake needs to be able to undo it), which is also why it is NOT
+    // added to observeCurrentSegment/getCurrentSegmentSnapshot's own resetAction boundary
+    // (RESET stays the only hard SQL segment boundary — see HistoryFold.sinceLastLocationMarker
+    // for the separate, additional slice this uses instead, applied only for duplicate-detection/
+    // bib-accounting purposes, never for live-view/undo visibility). HistoryLineEntity's own
+    // priorSplitCounter/previousLocation columns exist solely to let undoMostRecent restore this
+    // marker's mode-level split counter and RaceEntity.location exactly, since simply not
+    // decrementing (the way STOP/START are handled) isn't enough — the counter was reset to 1,
+    // not incremented, by this marker's own forward write.
+    LOCATION,
 }
 
 /** Actions that carry a real bib number and participate in range/duplicate checks. */

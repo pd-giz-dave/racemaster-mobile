@@ -37,9 +37,12 @@ fun ModeScreenTopBar(
     TopAppBar(
         title = { Text(title) },
         actions = {
-            // This Race stays enabled even once the race has stopped — editing a typo in the
-            // name/location shouldn't require never having finished logging.
-            TextButton(onClick = withClickSound(onThisRace), enabled = thisRaceEnabled) { Text("This Race") }
+            // Relocate stays enabled even once the race has stopped — editing a typo in the
+            // name/location shouldn't require never having finished logging. "Relocate" (not
+            // "This Race") since that screen's own new capability — editing location mid-race,
+            // which is what this button is mostly reached for now — is the more common reason to
+            // tap it than a pre-race rename.
+            TextButton(onClick = withClickSound(onThisRace), enabled = thisRaceEnabled) { Text("Relocate") }
             TextButton(onClick = withClickSound(onChangeMode)) { Text("Mode") }
         },
         expandedHeight = CompactTopAppBarHeight,

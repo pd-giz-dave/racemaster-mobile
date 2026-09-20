@@ -14,8 +14,10 @@ import mobile.racemaster.util.formatElapsedSplitTime
  * on `timestampMillis`, the raw wall-clock instant the record was created. `bibNumber` is the
  * mirror image — see [SyncRecord]'s own doc for why every Bibs row sends a non-null string
  * (the bib itself, or `"n/a"` for an action with no bib of its own) while a Time row always
- * sends null. [location] is the race's own `RaceEntity.location`, stamped onto every record the
- * same way regardless of mode — see [SyncRecord]'s own doc for why it's repeated per line
+ * sends null. [location] is per-call rather than a flat race-wide constant precisely because a
+ * race can now span more than one — see [withResolvedLocations] above, which every caller should
+ * resolve each row's own correct value through rather than passing one fixed string for a whole
+ * race's history — see [SyncRecord]'s own doc for why location is repeated per line at all
  * rather than sent once. No device name is attached here — the caller already knows (and
  * separately threads through) which device this batch of records belongs to; see [SyncRecord]'s
  * own doc for why that's not repeated per line either.
@@ -28,6 +30,28 @@ import mobile.racemaster.util.formatElapsedSplitTime
  * consumer already told to skip a blank/`"n/a"` split time (the same convention this mirrors)
  * naturally never mistakes this boundary marker for a real split.
  */
+/**
+ * Resolves each of [this] race history's own rows (already lineNumber-ascending — see
+ * getHistorySinceLineNumber's own doc) to whichever location was actually in effect when it was
+ * recorded, rather than the race's flat *current* location every row used to get stamped with —
+ * see HistoryAction.LOCATION's own doc for why a relocation mid-race means that's no longer
+ * accurate for anything recorded before the move. Walks once, tracking a running "current
+ * location" that starts at [initialLocation] (the race's own location as of its very first
+ * record — a race is never created with a blank one) and updates to a LOCATION row's own `note`
+ * the moment one is encountered; every row (the LOCATION row itself included, per its own doc)
+ * is paired with whatever that running value is at its own position. No filtering by `mode` is
+ * needed here: relocateActiveModes writes one LOCATION row per active mode, all carrying the
+ * same new location, so any one of them updates the running value correctly regardless of which
+ * mode's own segment a caller ultimately cares about.
+ */
+fun List<HistoryLineEntity>.withResolvedLocations(initialLocation: String): List<Pair<HistoryLineEntity, String>> {
+    var current = initialLocation
+    return map { row ->
+        if (row.action == HistoryAction.LOCATION) row.note?.let { current = it }
+        row to current
+    }
+}
+
 fun HistoryLineEntity.toSyncRecord(raceStartedAtMillis: Long?, location: String = "Finish"): SyncRecord {
     val splitTime = if (mode == HistoryMode.TIME && action == HistoryAction.MODE_START) {
         "n/a"
@@ -79,6 +103,9 @@ private fun HistoryAction.toServerAction(): String = when (this) {
     // matters is `location` (set on every SyncRecord regardless of action), but it still needs
     // its own honest, distinct action string like every other row.
     HistoryAction.SETUP -> "Setup"
+    // See HistoryAction.LOCATION's own doc — this marker's own new-location value travels via
+    // `note` (not this action string), same convention SETUP already established.
+    HistoryAction.LOCATION -> "Location"
 }
 
 /**
@@ -109,6 +136,7 @@ fun SyncRecord.toHistoryAction(): HistoryAction = when (action) {
     "Undo" -> HistoryAction.UNDO
     "ModeStart" -> HistoryAction.MODE_START
     "Setup" -> HistoryAction.SETUP
+    "Location" -> HistoryAction.LOCATION
     // An unrecognized wire value - should not get here
     else -> HistoryAction.IGNORE
 }

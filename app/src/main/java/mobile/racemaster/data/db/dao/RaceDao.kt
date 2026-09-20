@@ -113,4 +113,25 @@ interface RaceDao {
     // must never clobber it.
     @Query("UPDATE races SET name = :name, location = :location, label = :label WHERE id = :raceId")
     suspend fun updateDetails(raceId: Long, name: String, location: String, label: String)
+
+    // Relocation's own counter reset/restore — deliberately narrower than resetTimeMode/
+    // resetBibsMode/resetCpMode above, which also clear started/stoppedAtMillis and would wrongly
+    // kick an in-progress mode back to pre-Start state. A relocation mid-recording only needs the
+    // display counter itself to move (forward: reset to 1 after saving the old value into the new
+    // marker row's own priorSplitCounter; on undo: restored back to that saved value) — see
+    // RaceRepository.relocateActiveModes/insertLocationMarkerAndReset and
+    // EntryLogModeEngine/TimeModeRepository's own undoMostRecent LOCATION branch.
+    @Query("UPDATE races SET timeModeNextSplit = :value WHERE id = :raceId")
+    suspend fun setTimeModeNextSplit(raceId: Long, value: Int)
+
+    @Query("UPDATE races SET bibsModeNextSplit = :value WHERE id = :raceId")
+    suspend fun setBibsModeNextSplit(raceId: Long, value: Int)
+
+    @Query("UPDATE races SET cpModeNextSplit = :value WHERE id = :raceId")
+    suspend fun setCpModeNextSplit(raceId: Long, value: Int)
+
+    // Relocation's own location-only update/restore — narrower than updateDetails above, which
+    // also touches name/label; a relocation (forward or undone) never changes either of those.
+    @Query("UPDATE races SET location = :location WHERE id = :raceId")
+    suspend fun updateLocationOnly(raceId: Long, location: String)
 }

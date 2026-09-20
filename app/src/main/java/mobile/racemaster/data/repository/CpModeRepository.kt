@@ -18,6 +18,7 @@ private class CpProgressColumns(private val raceDao: RaceDao) : ModeProgressColu
     override suspend fun setStoppedAt(raceId: Long, stoppedAtMillis: Long) = raceDao.setCpModeStoppedAt(raceId, stoppedAtMillis)
     override suspend fun clearStoppedAt(raceId: Long) = raceDao.clearCpModeStoppedAt(raceId)
     override suspend fun resetCounters(raceId: Long) = raceDao.resetCpMode(raceId)
+    override suspend fun setCounterTo(raceId: Long, value: Int) = raceDao.setCpModeNextSplit(raceId, value)
 }
 
 /** CP Mode's own thin wrapper around [EntryLogModeEngine] — structurally identical to

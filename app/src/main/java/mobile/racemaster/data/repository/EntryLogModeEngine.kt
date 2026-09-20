@@ -25,7 +25,8 @@ const val CLOCK_SPLIT_NUMBER = 0
 // is never reachable here anyway (see observeCurrentSegmentEntries/undoMostRecent's own
 // filtering — it's excluded from the live view entirely), but listed for the same
 // belt-and-braces reason the other markers are.
-private val NON_EDITABLE_ROOT_ACTIONS = setOf(HistoryAction.STOP, HistoryAction.RESET, HistoryAction.UNDO, HistoryAction.MODE_START)
+private val NON_EDITABLE_ROOT_ACTIONS =
+    setOf(HistoryAction.STOP, HistoryAction.RESET, HistoryAction.UNDO, HistoryAction.MODE_START, HistoryAction.LOCATION)
 
 // RETIRE never crosses the timing point at all (Bibs or CP), so it gets no splitNumber and
 // doesn't consume the shared counter — see HistoryLineEntity.splitNumber's own doc. PASS, by
@@ -54,6 +55,12 @@ interface ModeProgressColumns {
     suspend fun setStoppedAt(raceId: Long, stoppedAtMillis: Long)
     suspend fun clearStoppedAt(raceId: Long)
     suspend fun resetCounters(raceId: Long)
+
+    // Relocation's own counter reset/restore (see RaceRepository.relocateActiveModes and this
+    // engine's own undoMostRecent LOCATION branch) — deliberately narrower than resetCounters,
+    // which also clears started/stoppedAtMillis and would wrongly kick an in-progress mode back
+    // to pre-Start state.
+    suspend fun setCounterTo(raceId: Long, value: Int)
 }
 
 /**
@@ -88,10 +95,23 @@ internal class EntryLogModeEngine(
     // per still-visible logical entry" before the screen ever sees them. MODE_START rows are
     // filtered out before folding — they're a boundary marker for Race History/the web app (see
     // HistoryAction.MODE_START's own doc), never meant for the live screen at all.
+    //
+    // Further sliced to "since the last relocation, inclusive" (see
+    // HistoryFold.sinceLastLocationMarker's own doc) BEFORE folding — this is what keeps a bib
+    // recorded at one station from being flagged as a duplicate of (or already-accounted-for
+    // against) the same bib number at a station the operator has since moved to. Deliberately a
+    // second, additional slice here rather than baking LOCATION into observeCurrentSegment's own
+    // RESET boundary — that would make a LOCATION row unreachable to undo for the same structural
+    // reason RESET itself already is.
     fun observeCurrentSegmentEntries(raceId: Long): Flow<List<HistoryLineEntity>> =
         historyLineDao.observeCurrentSegment(raceId, mode, HistoryAction.RESET).map {
-            foldLatestVisible(
+            val sinceLocation = sinceLastLocationMarker(
                 it.filter { e -> e.action != HistoryAction.MODE_START },
+                { e -> e.lineNumber },
+                { e -> e.action == HistoryAction.LOCATION },
+            )
+            foldLatestVisible(
+                sinceLocation,
                 { e -> e.lineNumber },
                 { e -> e.refLineNumber },
                 { e -> e.action == HistoryAction.UNDO },
@@ -225,10 +245,21 @@ internal class EntryLogModeEngine(
             if (root.action == HistoryAction.STOP) {
                 columns.clearStoppedAt(raceId)
             }
-            // Neither RETIRE nor STOP ever consumed the counter in the first place (see
-            // recordEntry/stop()/NO_SPLIT_ACTIONS), so undoing one must not decrement it either.
-            if (root.action !in NO_SPLIT_ACTIONS) {
-                columns.decrementCounter(raceId)
+            when {
+                // A LOCATION root never merely "consumed one count" the way a real entry does —
+                // its own forward write RESET the counter to 1 (see
+                // RaceRepository.insertLocationMarkerAndReset), so undoing it must restore
+                // whatever the counter (and RaceEntity.location) actually were beforehand, not
+                // decrement whatever they happen to be now. Falling through to decrementCounter()
+                // here (as an unguarded `else` would) would silently corrupt the counter.
+                root.action == HistoryAction.LOCATION -> {
+                    root.priorSplitCounter?.let { columns.setCounterTo(raceId, it) }
+                    root.previousLocation?.let { raceDao.updateLocationOnly(raceId, it) }
+                }
+                // Neither RETIRE nor STOP ever consumed the counter in the first place (see
+                // recordEntry/stop()/NO_SPLIT_ACTIONS), so undoing one must not decrement it
+                // either.
+                root.action !in NO_SPLIT_ACTIONS -> columns.decrementCounter(raceId)
             }
         }
     }

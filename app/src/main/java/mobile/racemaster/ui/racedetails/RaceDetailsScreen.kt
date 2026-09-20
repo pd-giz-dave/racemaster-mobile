@@ -32,14 +32,17 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
+import mobile.racemaster.data.repository.isValidCpLocation
 import mobile.racemaster.data.repository.isValidRaceName
 import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.ui.components.HistoryTextField
 import mobile.racemaster.util.withClickSound
 
-/** "This Race" — a rename-only editor for the device's already-created race (see
- *  RaceDetailsViewModel's own doc: creation itself moved to Setup Race, and course/bib-range
- *  fields are gone entirely). Reached from any mode screen's own top bar. */
+/** "Relocate" (formerly "This Race") — name+location editor for the device's already-created
+ *  race (see RaceDetailsViewModel's own doc: creation itself moved to Setup Race, and
+ *  course/bib-range fields are gone entirely). Reached from any mode screen's own top bar. Name
+ *  stays locked once the race is active, same as always; location is editable even then — that's
+ *  the screen's whole new purpose (see RaceDetailsViewModel.relocate). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RaceDetailsScreen(
@@ -50,6 +53,7 @@ fun RaceDetailsScreen(
 ) {
     val existingRace by viewModel.existingRace.collectAsStateWithLifecycle()
     val raceIsActive by viewModel.raceIsActive.collectAsStateWithLifecycle()
+    val cpModeActive by viewModel.cpModeActive.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     val raceNameHistory by viewModel.raceNameHistory.collectAsStateWithLifecycle()
     val locationHistory by viewModel.locationHistory.collectAsStateWithLifecycle()
@@ -71,14 +75,28 @@ fun RaceDetailsScreen(
         prefilled = true
     }
 
-    val identityFieldsEnabled = prefilled && !raceIsActive
+    // Name is locked the instant the race is active, exactly as before — it's baked into the
+    // label's sync identity, and a race already recording history needs a different name to
+    // actually be a new race. Location is NOT gated on raceIsActive any more — that's this
+    // screen's whole new purpose (relocating mid-race); it only needs the initial prefill to
+    // have landed, same guard every other field on this screen has always used before it's safe
+    // to let the operator start typing.
+    val nameFieldEnabled = prefilled && !raceIsActive
+    val locationFieldEnabled = prefilled
     val nameValid = isValidRaceName(name)
-    val canSave = prefilled && !isSaving && identityFieldsEnabled && name.isNotBlank() && nameValid && location.isNotBlank()
+    // Only enforced when CP Mode is among the currently-active modes on this race — mirrors
+    // CpModeScreen's own Start-button gating on the exact same check; every other mode's
+    // location stays free-form, same as it always has been.
+    val locationValid = !cpModeActive || isValidCpLocation(location)
+    // Pre-race: both fields matter, exactly as before. Mid-race: name is locked to its already-
+    // valid stored value, so only location's own validity gates Save.
+    val canSave = prefilled && !isSaving && location.isNotBlank() && locationValid &&
+        (raceIsActive || (name.isNotBlank() && nameValid))
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("This Race") },
+                title = { Text("Relocate") },
                 navigationIcon = { TextButton(onClick = withClickSound(onCancel)) { Text("Cancel") } },
                 actions = { HideKeyboardButton() },
                 windowInsets = WindowInsets(0, 0, 0, 0),
@@ -104,7 +122,7 @@ fun RaceDetailsScreen(
                 onValueChange = { name = it },
                 label = "Race name (letters, numbers, - only)",
                 history = raceNameHistory,
-                enabled = identityFieldsEnabled,
+                enabled = nameFieldEnabled,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                 keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
                 modifier = Modifier.fillMaxWidth(),
@@ -116,20 +134,35 @@ fun RaceDetailsScreen(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
+            if (raceIsActive) {
+                Text(
+                    "Race name is locked because this race has already started — set up a new " +
+                        "race (Setup Device > Setup Race) for a different name.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             HistoryTextField(
                 value = location,
                 onValueChange = { location = it },
-                label = "Location (e.g. Finish, CP1, CP2, et al)",
+                label = if (cpModeActive) "Location (e.g. CP1, CP2-Bridge)" else "Location (e.g. Finish, CP1, CP2, et al)",
                 history = locationHistory,
-                enabled = identityFieldsEnabled,
+                enabled = locationFieldEnabled,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (cpModeActive && location.isNotBlank() && !locationValid) {
+                Text(
+                    "CP Mode's location must look like CP1, CP2-Bridge, etc. — \"CP\" followed by a number from 1 upwards, with an optional -name.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             if (raceIsActive) {
                 Text(
-                    "Race name and location are locked because this race has already started — " +
-                        "set up a new race (Setup Device > Setup Race) for a different name or location.",
+                    "Saving a new location here records that this device has moved — its already-" +
+                        "recorded entries stay exactly as they are, and this is undoable like any " +
+                        "other entry if it was a mistake.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -137,13 +170,13 @@ fun RaceDetailsScreen(
                 onClick = withClickSound {
                     isSaving = true
                     scope.launch {
-                        viewModel.save(name, location)
+                        if (raceIsActive) viewModel.relocate(location) else viewModel.save(name, location)
                         onSaved()
                     }
                 },
                 enabled = canSave,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Save") }
+            ) { Text(if (raceIsActive) "Save (relocate)" else "Save") }
         }
     }
 }

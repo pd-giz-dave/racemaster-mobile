@@ -223,7 +223,7 @@ fun HelpScreen(onBack: () -> Unit) {
                     "\"CP1\", \"CP2-Bridge\") so its entries can be told apart from other stations " +
                     "recording the same race — checked when START is pressed (Setup Race itself " +
                     "doesn't know the mode yet, so it can't enforce this); if it's wrong, fix it via " +
-                    "\"This Race\" on this screen's own top bar.",
+                    "\"Relocate\" on this screen's own top bar.",
             )
             HelpSection(
                 title = "Mule Mode",
@@ -320,9 +320,13 @@ fun HelpScreen(onBack: () -> Unit) {
                 title = "General",
                 body = "A device records against exactly one race at a time, set up via Setup Race " +
                     "(see above) — there's no separate \"New Race\" inside a mode any more; starting " +
-                    "over means going back to Setup Device. \"This Race\" on each mode's own top bar " +
-                    "opens a rename-only editor for the current race's name/location (locked once it's " +
-                    "actually started — see each mode's own Stop/Reset section above). Time/Bibs/CP " +
+                    "over means going back to Setup Device. \"Relocate\" on each mode's own top bar " +
+                    "opens an editor for the current race's name/location. Name locks once the race " +
+                    "has actually started, the same as before, but location doesn't — saving a new " +
+                    "location there mid-race records that the device has moved (a real, undoable " +
+                    "entry in the log, same as any other), rather than requiring a Stop/Reset first; " +
+                    "already-recorded entries at the old location stay exactly as they are, and bib/" +
+                    "split numbering starts fresh at the new one. Time/Bibs/CP " +
                     "are mutually exclusive for a race — only one can be active at once, and picking " +
                     "a different one while another is still active (Started but not yet Stopped and " +
                     "Reset) is blocked with a \"Can't switch mode\" dialog rather than performed. The " +

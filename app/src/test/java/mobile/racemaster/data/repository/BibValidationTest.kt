@@ -226,6 +226,37 @@ class BibValidationTest {
         assertTrue(dups.isEmpty())
     }
 
+    // A LOCATION marker is a segment boundary too now (not just RESET) — a bib recorded at one
+    // station and the same bib number recorded again after a relocation must not be flagged
+    // against each other, the same way a Reset-separated pair already isn't.
+
+    @Test
+    fun bibReusedAfterARelocationIsNotFlaggedAgainstTheEarlierStation() {
+        val entries = listOf(
+            entry(1, 101, HistoryAction.FINISH, 1),
+            entry(2, null, HistoryAction.LOCATION, 0),
+            entry(3, 101, HistoryAction.FINISH, 1),
+        )
+        assertTrue(findDuplicateSplitRefsPerSegment(entries).isEmpty())
+    }
+
+    @Test
+    fun aRaceSpanningBothARelocationAndARealResetSegmentsOnEither() {
+        val entries = listOf(
+            entry(1, 101, HistoryAction.FINISH, 1),
+            entry(2, 101, HistoryAction.FINISH, 2), // genuine duplicate, station 1
+            entry(3, null, HistoryAction.LOCATION, 0), // relocate to station 2
+            entry(4, 202, HistoryAction.FINISH, 1),
+            entry(5, 0, HistoryAction.RESET, 2), // operator practice attempt discarded
+            entry(6, 202, HistoryAction.FINISH, 1), // same bib as entry 4, but that segment is gone
+        )
+        val dups = findDuplicateSplitRefsPerSegment(entries)
+        assertEquals(listOf(2), dups[1L])
+        assertEquals(listOf(1), dups[2L])
+        assertTrue(dups[4L] == null) // its own segment ended at the Reset, never duplicated within it
+        assertTrue(dups[6L] == null) // a fresh segment, bib 202 here for the first time
+    }
+
     // countDuplicateExtras
 
     @Test
@@ -529,7 +560,7 @@ class BibValidationTest {
             lineNumberOf = { it.lineNumber },
             refLineNumberOf = { if (it.uuid == "undo-b") 2L else null },
             isUndoMarker = { it.action == HistoryAction.UNDO },
-            isReset = { it.action == HistoryAction.RESET },
+            isSegmentBoundary = { it.action == HistoryAction.RESET },
             keyOf = { it.uuid },
             bibNumberOf = { it.bibNumber },
             actionOf = { it.action },

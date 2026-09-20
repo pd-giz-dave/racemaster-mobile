@@ -61,6 +61,17 @@ data class HistoryLineEntity(
     // records from multiple phones are merged by Mule, so this is what travels over BLE/HTTP
     // and is used for sync dedup instead.
     val recordUuid: String = java.util.UUID.randomUUID().toString(),
+    // HistoryAction.LOCATION rows only — what to restore this mode's own display split counter
+    // and RaceEntity.location back to if this marker is ever undone. Local-only bookkeeping,
+    // deliberately never sent on the wire (not part of SyncRecord/SyncRecordMapping.toSyncRecord)
+    // — a relocation's own forward-facing location already travels via `note`, and no other
+    // device/the web app ever needs to know what a phone's location used to be before a move it
+    // may since have undone. Reusing `splitNumber` for priorSplitCounter would be unsafe: the web
+    // app's own showDeviceModal groups Bibs/Time rows for display by splitNumber, and an
+    // arbitrary restore-integer here could collide with a genuine bib/split entry sharing that
+    // number and get wrongly paired into the same row there.
+    val priorSplitCounter: Int? = null,
+    val previousLocation: String? = null,
     // Non-null once this line is confirmed at a genuine data sink — the racemaster server, or
     // a Bluetooth device that identifies as one (see LineSyncEntity.isSink) — the green
     // threshold. Deliberately NOT set just because some device (mule or otherwise) has taken a

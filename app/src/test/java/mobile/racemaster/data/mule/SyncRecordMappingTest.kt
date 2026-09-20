@@ -303,6 +303,70 @@ class SyncRecordMappingTest {
     }
 
     @Test
+    fun locationMarkerRoundTripsThroughTheWireCarryingTheNewLocationInNote() {
+        // HistoryAction.LOCATION — the Relocate screen's own boundary marker (see
+        // RaceRepository.insertLocationMarkerAndReset). Unlike SETUP, this can be written for any
+        // of the three real modes (never ANY — see HistoryAction.LOCATION's own doc for why it
+        // must be mode-scoped); the destination location travels in `note`, same convention SETUP
+        // already established, leaving the `location` parameter itself (the per-push
+        // race-wide/resolved value) untouched.
+        val record = bibEntry(null, HistoryAction.LOCATION, splitNumber = 0, timestampMillis = 0L, note = "CP2")
+            .toSyncRecord(null, location = "CP1")
+        assertEquals("Location", record.action)
+        assertEquals("n/a", record.bibNumber) // Bibs/CP's own non-bib sentinel, same as any other marker
+        assertEquals("CP2", record.note)
+        assertEquals("CP1", record.location)
+        assertEquals(HistoryAction.LOCATION, record.toHistoryAction())
+    }
+
+    // List<HistoryLineEntity>.withResolvedLocations — the per-row location resolution that
+    // replaces a flat race.location for a race that's been relocated. Uses bibEntry() (a real bib
+    // number isn't relevant here, just the action/note/lineNumber shape).
+
+    @Test
+    fun withNoLocationMarkersAtAllEveryRowGetsTheInitialLocation() {
+        val rows = listOf(
+            bibEntry(101, HistoryAction.FINISH, 1, 0L, lineNumber = 1L),
+            bibEntry(102, HistoryAction.FINISH, 2, 0L, lineNumber = 2L),
+        )
+
+        val resolved = rows.withResolvedLocations("Finish")
+
+        assertEquals(listOf("Finish", "Finish"), resolved.map { it.second })
+    }
+
+    @Test
+    fun rowsBeforeALocationMarkerKeepTheOldLocationRowsAfterGetTheNew() {
+        val rows = listOf(
+            bibEntry(101, HistoryAction.FINISH, 1, 0L, lineNumber = 1L),
+            bibEntry(null, HistoryAction.LOCATION, 0, 0L, lineNumber = 2L, note = "CP2"),
+            bibEntry(102, HistoryAction.FINISH, 1, 0L, lineNumber = 3L),
+        )
+
+        val resolved = rows.withResolvedLocations("CP1")
+
+        assertEquals(
+            listOf("CP1" to 101, "CP2" to null, "CP2" to 102),
+            resolved.map { (row, location) -> location to row.bibNumber },
+        )
+    }
+
+    @Test
+    fun multipleRelocationsEachTakeEffectFromTheirOwnPointOnward() {
+        val rows = listOf(
+            bibEntry(101, HistoryAction.FINISH, 1, 0L, lineNumber = 1L),
+            bibEntry(null, HistoryAction.LOCATION, 0, 0L, lineNumber = 2L, note = "CP2"),
+            bibEntry(102, HistoryAction.FINISH, 1, 0L, lineNumber = 3L),
+            bibEntry(null, HistoryAction.LOCATION, 0, 0L, lineNumber = 4L, note = "CP3"),
+            bibEntry(103, HistoryAction.FINISH, 1, 0L, lineNumber = 5L),
+        )
+
+        val resolved = rows.withResolvedLocations("CP1")
+
+        assertEquals(listOf("CP1", "CP2", "CP2", "CP3", "CP3"), resolved.map { it.second })
+    }
+
+    @Test
     fun roundTripsEveryBibsModeActionThroughTheWireAndBack() {
         assertEquals(HistoryAction.FINISH, bibEntry(101, HistoryAction.FINISH, 1, 0L).toSyncRecord(null).toHistoryAction())
         assertEquals(HistoryAction.START, bibEntry(101, HistoryAction.START, 1, 0L).toSyncRecord(null).toHistoryAction())

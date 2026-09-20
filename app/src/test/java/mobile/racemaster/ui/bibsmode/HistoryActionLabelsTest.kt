@@ -24,6 +24,7 @@ class HistoryActionLabelsTest {
         assertEquals("Undo", HistoryAction.UNDO.displayName())
         assertEquals("Start", HistoryAction.MODE_START.displayName())
         assertEquals("Setup", HistoryAction.SETUP.displayName())
+        assertEquals("Relocated", HistoryAction.LOCATION.displayName())
     }
 
     @Test

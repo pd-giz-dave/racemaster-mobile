@@ -47,6 +47,7 @@ class DefaultAppContainer(context: Context) : AppContainer {
 
     override val raceRepository: RaceRepository by lazy {
         RaceRepository(
+            database,
             database.raceDao(),
             database.historyLineDao(),
             database.lineSyncDao(),

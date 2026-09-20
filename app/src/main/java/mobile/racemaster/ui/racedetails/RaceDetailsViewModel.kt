@@ -16,13 +16,14 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
 /**
- * Backs the "This Race" screen — a rename-only editor for the device's already-created race
- * (creation itself moved to Setup Race — see TODO.md's phase 1; course/bib-range fields are
- * gone entirely, not just moved). Name/location stay editable until the race has genuinely
- * started a mode — locked read-only only once [raceIsActive] is true (see that flow's own doc
- * and RaceRepository.updateRaceDetails' own doc for why that's safe); a race that's already
- * recording history needs a different name/location to actually be a new race instead, since
- * the name is baked into the label's sync identity.
+ * Backs the "Relocate" screen (formerly "This Race") — name+location editor for the device's
+ * already-created race (creation itself moved to Setup Race — see TODO.md's phase 1;
+ * course/bib-range fields are gone entirely, not just moved). Name stays editable only until the
+ * race has genuinely started a mode — locked read-only once [raceIsActive] is true, same as
+ * always, since a race that's already recording history needs a different name to actually be a
+ * new race instead (it's baked into the label's sync identity). Location is different: it's
+ * editable even while [raceIsActive], via [relocate] — this is the screen's whole new purpose,
+ * see that function's own doc.
  */
 class RaceDetailsViewModel(
     private val existingRaceId: Long,
@@ -39,6 +40,13 @@ class RaceDetailsViewModel(
         race != null && isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.cpModeStartedAtMillis)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    // Whether CP Mode specifically is among the currently-active modes on this race — the one
+    // piece of "which mode(s) are active" this screen actually needs, to know whether to enforce
+    // isValidCpLocation on a relocation the same way CpModeScreen already enforces it at its own
+    // Start button. No new query: existingRace already carries cpModeStartedAtMillis.
+    val cpModeActive: StateFlow<Boolean> = existingRace.map { it?.cpModeStartedAtMillis != null }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     val deviceName: StateFlow<String?> = settingsRepository.deviceName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
@@ -50,12 +58,28 @@ class RaceDetailsViewModel(
     val locationHistory: StateFlow<List<String>> = settingsRepository.locationHistory
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    // The pre-race path — nothing's been recorded yet, so a name/location edit is still just a
+    // plain field overwrite, exactly as before this screen gained its relocate capability.
     suspend fun save(name: String, location: String) {
         val trimmedName = name.trim()
         val trimmedLocation = location.trim()
         settingsRepository.addRaceNameToHistory(trimmedName)
         settingsRepository.addLocationToHistory(trimmedLocation)
         raceRepository.updateRaceDetails(existingRaceId, trimmedName, trimmedLocation)
+    }
+
+    // The mid-race path — name is locked (the screen never offers it for editing once active,
+    // see RaceDetailsScreen's own nameFieldEnabled), so only location moves. Writes a real
+    // LOCATION marker (RaceRepository.relocateActiveModes) rather than a plain field overwrite —
+    // that's what gives the move history, per-mode segment/counter-reset behavior, and undo (see
+    // HistoryAction.LOCATION's own doc) — a bare updateRaceDetails call would silently lose all
+    // of that. A no-op if the location wasn't actually changed, so re-pressing Save on an
+    // unmodified field never writes a spurious, undo-able "relocated to the same place" event.
+    suspend fun relocate(location: String) {
+        val trimmedLocation = location.trim()
+        if (trimmedLocation == existingRace.value?.location) return
+        settingsRepository.addLocationToHistory(trimmedLocation)
+        raceRepository.relocateActiveModes(existingRaceId, trimmedLocation)
     }
 
     companion object {

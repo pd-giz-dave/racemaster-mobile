@@ -245,7 +245,7 @@ private fun TimeModeContent(
                         // Start/Stop marker rows are never editable — retyping either one's
                         // own note would break every query keyed off it (the repository also
                         // refuses this as a backstop, but the UI shouldn't offer it at all).
-                        val isMarkerRow = split.action == HistoryAction.START || split.action == HistoryAction.STOP
+                        val isMarkerRow = split.action == HistoryAction.START || split.action == HistoryAction.STOP || split.action == HistoryAction.LOCATION
                         SplitRow(
                             splitNumber = split.splitNumber,
                             elapsedMillis = split.elapsedMillis,

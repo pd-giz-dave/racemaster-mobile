@@ -498,7 +498,7 @@ class MuleRepository(
 
             // This device's own history, built fresh from the real HistoryLineEntity rows —
             // no locally-staged copy to fall out of sync with what actually happened. Fetched
-            // from line 0 (this race's *entire* history), not from status[myDeviceName] — the
+            // from line 0 (this race's *entire* history), not from this race's own status entry — the
             // "confirmed" step below needs the full set to tell "not sent this round because
             // the server already had it" apart from "not sent because it doesn't exist yet",
             // exactly mirroring how pulledForRace (every row ever pulled, not just what's due)
@@ -508,9 +508,15 @@ class MuleRepository(
             // never be marked synced no matter how many pushes actually landed (confirmed in
             // the field: self stayed permanently red, and lastSyncedAtMillis stayed "never",
             // despite the server genuinely having the data).
+            //
+            // Each row's own location is resolved individually (withResolvedLocations), not one
+            // flat localRace.location for the whole race — a relocation mid-race means a row
+            // recorded before the move must keep reporting its own, older location even though
+            // the race's *current* one has since changed (see HistoryAction.LOCATION's own doc).
             val selfRecords = if (localRace != null) {
                 raceRepository.getHistorySinceLineNumber(localRace.id, 0L)
-                    .map { it.toSyncRecord(localRace.timeModeStartedAtMillis, location = localRace.location) }
+                    .withResolvedLocations(localRace.location)
+                    .map { (row, location) -> row.toSyncRecord(localRace.timeModeStartedAtMillis, location = location) }
             } else {
                 emptyList()
             }
@@ -527,7 +533,11 @@ class MuleRepository(
                 .mapNotNull { row -> decodeSyncRecord(row, json)?.let { row.deviceName to it } }
                 .groupBy({ it.first }) { it.second }
 
-            val byDevice = if (selfRecords.isEmpty()) pulledByDevice else pulledByDevice + (myDeviceName to selfRecords)
+            val byDevice = if (selfRecords.isEmpty()) {
+                pulledByDevice
+            } else {
+                pulledByDevice + (myDeviceName to selfRecords)
+            }
             val devicesToSend = recordsDueForDevices(byDevice, status)
             if (devicesToSend.isNotEmpty()) {
                 // See reauthenticate's own doc: a 401/403 here — this device's saved token no
@@ -610,11 +620,11 @@ private fun maxOfNullable(a: Long?, b: Long?): Long? = when {
     else -> maxOf(a, b)
 }
 
-// Per-device delta filtering: each device's records are compared against that same device's
-// own already-stored max lineNumber (status[deviceName], 0 if the server has nothing for it
-// yet) — no more Bibs/Time split, since the server no longer stores one either (lineLabel's
-// B/T prefix already carries that distinction end to end). Pulled out as a pure function so
-// this logic can be tested directly, without faking pushToServer's network round-trip.
+// Per-device delta filtering: each device's records are compared against that same device's own
+// already-stored max lineNumber (status[deviceName], 0 if the server has nothing for it yet) — no
+// more Bibs/Time split, since the server no longer stores one either (lineLabel's B/T prefix
+// already carries that distinction end to end). Pulled out as a pure function so this logic can
+// be tested directly, without faking pushToServer's network round-trip.
 internal fun recordsDueForDevices(
     byDevice: Map<String, List<SyncRecord>>,
     status: Map<String, Long>,

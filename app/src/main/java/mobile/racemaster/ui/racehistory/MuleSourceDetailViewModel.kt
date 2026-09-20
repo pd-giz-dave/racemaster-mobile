@@ -76,7 +76,7 @@ class MuleSourceDetailViewModel(
                 lineNumberOf = { it.record.lineNumber },
                 refLineNumberOf = { it.record.refLineNumber },
                 isUndoMarker = { it.record.toHistoryAction() == HistoryAction.UNDO },
-                isReset = { it.record.toHistoryAction() == HistoryAction.RESET },
+                isSegmentBoundary = { it.record.toHistoryAction().let { a -> a == HistoryAction.RESET || a == HistoryAction.LOCATION } },
                 keyOf = { it.record.recordUuid },
                 // Wire bibNumber is a String ("101"/"n/a"/null — see SyncRecord's own doc);
                 // toIntOrNull() collapses both "n/a" and a genuinely absent value back to the

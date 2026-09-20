@@ -26,6 +26,11 @@ fun HistoryAction.displayName(): String = when (this) {
     // doc) — HistoryMode.ANY keeps it out of every per-mode live screen already, so this label
     // only ever needs to read sensibly in the unified cross-mode chronology.
     HistoryAction.SETUP -> "Setup"
+    // Unlike MODE_START/SETUP, this one IS shown on the live screen too (see
+    // HistoryAction.LOCATION's own doc — it must stay visible to be undoable) — the actual
+    // destination is carried in `note`, rendered alongside this label the same way any other
+    // row's note already is.
+    HistoryAction.LOCATION -> "Relocated"
 }
 
 // Deliberately excludes every marker action (CLOCK/STOP/RESET/UNDO, plus the Time-only SPLIT,

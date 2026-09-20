@@ -1,5 +1,7 @@
 package mobile.racemaster.data.repository
 
+import androidx.room.withTransaction
+import mobile.racemaster.data.db.RacemasterDatabase
 import mobile.racemaster.data.db.dao.HistoryLineDao
 import mobile.racemaster.data.db.dao.LineSyncDao
 import mobile.racemaster.data.db.dao.RaceDao
@@ -14,6 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 
 class RaceRepository(
+    private val db: RacemasterDatabase,
     private val raceDao: RaceDao,
     private val historyLineDao: HistoryLineDao,
     private val lineSyncDao: LineSyncDao,
@@ -254,6 +257,63 @@ class RaceRepository(
         }
     }
 
+    // The "This Race"/Relocate screen's own write path (RaceDetailsViewModel.save, only once the
+    // race is active — before that, a location edit is still just a plain field overwrite via
+    // updateRaceDetails, nothing recorded yet to segment). Writes one HistoryAction.LOCATION
+    // marker PER currently-active mode — mirrors forceResetActiveModes' own per-mode-conditional
+    // loop exactly, and for the same reason: mode-scoped, never HistoryMode.ANY, since
+    // observeCurrentSegment's own query filters `mode = :mode` and an ANY-scoped row would be
+    // invisible to every mode's own live segment/duplicate-detection. Wrapped in one transaction
+    // so a crash mid-loop (relocating a race active in more than one mode) can't leave some
+    // modes' markers written and others not.
+    suspend fun relocateActiveModes(raceId: Long, newLocation: String) {
+        db.withTransaction {
+            val race = raceDao.getById(raceId) ?: return@withTransaction
+            if (race.timeModeStartedAtMillis != null) insertLocationMarkerAndReset(raceId, HistoryMode.TIME, newLocation)
+            if (race.bibsModeStartedAtMillis != null) insertLocationMarkerAndReset(raceId, HistoryMode.BIBS, newLocation)
+            if (race.cpModeStartedAtMillis != null) insertLocationMarkerAndReset(raceId, HistoryMode.CP, newLocation)
+            raceDao.updateLocationOnly(raceId, newLocation)
+        }
+    }
+
+    // Mirrors insertResetMarkerAndReset's own 3-step shape (insert marker consuming a real
+    // lineNumber, increment, reset that mode's own counter) with two differences: the marker
+    // carries the new location (in `note`) plus what to restore on undo (priorSplitCounter/
+    // previousLocation — see HistoryLineEntity's own doc for why these need their own dedicated
+    // columns rather than reusing splitNumber), and the "reset" is the narrower
+    // setXModeNextSplit(raceId, 1) rather than resetXMode, which would also wrongly clear
+    // started/stoppedAtMillis mid-recording (see RaceDao's own doc on those queries).
+    private suspend fun insertLocationMarkerAndReset(raceId: Long, mode: HistoryMode, newLocation: String, relocatedAtMillis: Long = System.currentTimeMillis()) {
+        val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+        val priorSplitCounter = when (mode) {
+            HistoryMode.TIME -> race.timeModeNextSplit
+            HistoryMode.BIBS -> race.bibsModeNextSplit
+            HistoryMode.CP -> race.cpModeNextSplit
+            HistoryMode.ANY -> error("HistoryMode.ANY is never an active mode to relocate")
+        }
+        historyLineDao.insert(
+            HistoryLineEntity(
+                raceId = raceId,
+                mode = mode,
+                action = HistoryAction.LOCATION,
+                bibNumber = null,
+                splitNumber = null,
+                lineNumber = race.nextLineNumber,
+                note = newLocation,
+                timestampMillis = relocatedAtMillis,
+                priorSplitCounter = priorSplitCounter,
+                previousLocation = race.location,
+            ),
+        )
+        raceDao.incrementLineNumber(raceId)
+        when (mode) {
+            HistoryMode.TIME -> raceDao.setTimeModeNextSplit(raceId, 1)
+            HistoryMode.BIBS -> raceDao.setBibsModeNextSplit(raceId, 1)
+            HistoryMode.CP -> raceDao.setCpModeNextSplit(raceId, 1)
+            HistoryMode.ANY -> error("HistoryMode.ANY is never an active mode to relocate")
+        }
+    }
+
     // Resolves a race label back to this device's own local race — see
     // MuleRepository.pushToServer's own self-push path.
     suspend fun getRaceByLabel(label: String): RaceEntity? = raceDao.getByLabel(label)
@@ -298,6 +358,13 @@ class RaceRepository(
     // every attempt instead of relying on a locally-staged copy.
     suspend fun getHistorySinceLineNumber(raceId: Long, sinceLineNumber: Long): List<HistoryLineEntity> =
         historyLineDao.getSinceLineNumber(raceId, sinceLineNumber)
+
+    // See HistoryLineDao.getLastLocationMarkerAtOrBefore's own doc — resolves the correct
+    // location to seed a delta batch's own SyncRecordMapping.withResolvedLocations walk from,
+    // for a caller (PeripheralSyncService.computeRecordsPayload) serving a since-cursor rather
+    // than this race's full history from line 0.
+    suspend fun getLastLocationMarkerAtOrBefore(raceId: Long, atOrBeforeLineNumber: Long): HistoryLineEntity? =
+        historyLineDao.getLastLocationMarkerAtOrBefore(raceId, atOrBeforeLineNumber, HistoryAction.LOCATION)
 
     // How recently this race's own history was actually edited — used by
     // MuleRepository.pushToServer to decide whether a race with no recent activity is still

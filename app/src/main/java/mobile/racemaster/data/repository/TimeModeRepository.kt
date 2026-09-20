@@ -17,8 +17,10 @@ import kotlinx.coroutines.flow.map
 // MODE_START is never reachable here anyway (see observeCurrentSegmentSplits/undoMostRecent's
 // own filtering — it's excluded from the live view entirely), but listed for the same
 // belt-and-braces reason the other markers are.
-private val NON_EDITABLE_ROOT_ACTIONS =
-    setOf(HistoryAction.START, HistoryAction.STOP, HistoryAction.RESET, HistoryAction.UNDO, HistoryAction.MODE_START)
+private val NON_EDITABLE_ROOT_ACTIONS = setOf(
+    HistoryAction.START, HistoryAction.STOP, HistoryAction.RESET, HistoryAction.UNDO,
+    HistoryAction.MODE_START, HistoryAction.LOCATION,
+)
 
 class TimeModeRepository(
     private val db: RacemasterDatabase,
@@ -31,10 +33,19 @@ class TimeModeRepository(
     // row per still-visible logical entry" before the screen ever sees them. MODE_START rows
     // are filtered out before folding — they're a boundary marker for Race History/the web app
     // (see HistoryAction.MODE_START's own doc), never meant for the live screen at all.
+    // Further sliced to "since the last relocation, inclusive" — see
+    // EntryLogModeEngine.observeCurrentSegmentEntries's own identical doc for why this is a
+    // second, additional boundary rather than being baked into observeCurrentSegment's own RESET
+    // boundary.
     fun observeCurrentSegmentSplits(raceId: Long): Flow<List<HistoryLineEntity>> =
         historyLineDao.observeCurrentSegment(raceId, HistoryMode.TIME, HistoryAction.RESET).map {
-            foldLatestVisible(
+            val sinceLocation = sinceLastLocationMarker(
                 it.filter { s -> s.action != HistoryAction.MODE_START },
+                { s -> s.lineNumber },
+                { s -> s.action == HistoryAction.LOCATION },
+            )
+            foldLatestVisible(
+                sinceLocation,
                 { s -> s.lineNumber },
                 { s -> s.refLineNumber },
                 { s -> s.action == HistoryAction.UNDO },
@@ -247,6 +258,16 @@ class TimeModeRepository(
                 // Stop never consumed the counter (see stopStopwatch's own doc), so undoing it
                 // doesn't decrement one either — same treatment as Start.
                 HistoryAction.STOP -> raceDao.clearTimeModeStoppedAt(raceId)
+                // A LOCATION root never merely "consumed one count" — its own forward write
+                // RESET the counter to 1 (see RaceRepository.insertLocationMarkerAndReset), so
+                // undoing it must restore whatever the counter (and RaceEntity.location) actually
+                // were beforehand, never decrementTimeCounter — that would silently corrupt it
+                // (this was the bug in this `when` before this branch existed: LOCATION fell into
+                // `else` and got wrongly decremented).
+                HistoryAction.LOCATION -> {
+                    root.priorSplitCounter?.let { raceDao.setTimeModeNextSplit(raceId, it) }
+                    root.previousLocation?.let { raceDao.updateLocationOnly(raceId, it) }
+                }
                 else -> raceDao.decrementTimeCounter(raceId)
             }
         }

@@ -63,18 +63,19 @@ private fun <T, K> flagExcess(group: List<T>, keyOf: (T) -> K, splitNumberOf: (T
 }
 
 /**
- * Splits [entries] into segments bounded by RESET markers (mirroring BibsModeRepository's own
- * segment boundary), folds each segment down to only its currently-visible rows (exactly what
- * BibsModeViewModel's own live current-segment feed already is — see
- * BibsModeRepository.observeCurrentSegmentEntries and HistoryFold.foldLatestVisible), runs
- * [findDuplicateSplitRefs] independently within each folded segment, then merges the results —
- * row ids are globally unique so a plain merge is safe. Two things the live screen already gets
- * for free from only ever seeing the folded current segment, that Race History's full raw
- * multi-segment history must instead account for explicitly: a bib number legitimately reused in
- * a later segment must not be flagged against an earlier, already-reset-away segment; and a row
- * that's since been undone (or superseded by a later edit) must not keep counting toward a
- * duplicate — only whatever's still actually visible should ever be flagged, same as the operator
- * would see live.
+ * Splits [entries] into segments bounded by RESET **or** LOCATION markers (mirroring
+ * BibsModeRepository's own segment boundary — see HistoryFold.sinceLastLocationMarker's own doc
+ * for why the live screen needs the LOCATION half of this too), folds each segment down to only
+ * its currently-visible rows (exactly what BibsModeViewModel's own live current-segment feed
+ * already is — see BibsModeRepository.observeCurrentSegmentEntries and
+ * HistoryFold.foldLatestVisible), runs [findDuplicateSplitRefs] independently within each folded
+ * segment, then merges the results — row ids are globally unique so a plain merge is safe. Two
+ * things the live screen already gets for free from only ever seeing the folded current segment,
+ * that Race History's full raw multi-segment history must instead account for explicitly: a bib
+ * number legitimately reused in a later segment (whether the boundary between them was a Reset or
+ * a relocation) must not be flagged against an earlier one; and a row that's since been undone (or
+ * superseded by a later edit) must not keep counting toward a duplicate — only whatever's still
+ * actually visible should ever be flagged, same as the operator would see live.
  */
 fun findDuplicateSplitRefsPerSegment(entries: List<HistoryLineEntity>): Map<Long, List<Int?>> =
     findDuplicateSplitRefsPerSegment(
@@ -82,7 +83,7 @@ fun findDuplicateSplitRefsPerSegment(entries: List<HistoryLineEntity>): Map<Long
         lineNumberOf = { it.lineNumber },
         refLineNumberOf = { it.refLineNumber },
         isUndoMarker = { it.action == HistoryAction.UNDO },
-        isReset = { it.action == HistoryAction.RESET },
+        isSegmentBoundary = { it.action == HistoryAction.RESET || it.action == HistoryAction.LOCATION },
         keyOf = { it.id },
         bibNumberOf = { it.bibNumber },
         actionOf = { it.action },
@@ -99,7 +100,7 @@ fun <T, K> findDuplicateSplitRefsPerSegment(
     lineNumberOf: (T) -> Long,
     refLineNumberOf: (T) -> Long?,
     isUndoMarker: (T) -> Boolean,
-    isReset: (T) -> Boolean,
+    isSegmentBoundary: (T) -> Boolean,
     keyOf: (T) -> K,
     bibNumberOf: (T) -> Int?,
     actionOf: (T) -> HistoryAction,
@@ -110,7 +111,7 @@ fun <T, K> findDuplicateSplitRefsPerSegment(
     var current = mutableListOf<T>()
     for (row in ascending) {
         current.add(row)
-        if (isReset(row)) {
+        if (isSegmentBoundary(row)) {
             segments.add(current)
             current = mutableListOf()
         }

@@ -81,4 +81,48 @@ class HistoryFoldTest {
 
         assertEquals(emptyList<String>(), folded.map { it.content })
     }
+
+    private data class MarkerRow(val lineNumber: Long, val content: String, val isLocation: Boolean = false)
+
+    private fun sinceLocation(rows: List<MarkerRow>): List<MarkerRow> =
+        sinceLastLocationMarker(rows, { it.lineNumber }, { it.isLocation })
+
+    @Test
+    fun noLocationMarkerAtAllIsANoOp() {
+        val rows = listOf(MarkerRow(1L, "a"), MarkerRow(2L, "b"), MarkerRow(3L, "c"))
+
+        assertEquals(rows, sinceLocation(rows))
+    }
+
+    @Test
+    fun keepsOnlyRowsAtOrAfterTheMostRecentLocationMarkerInclusive() {
+        val rows = listOf(
+            MarkerRow(1L, "old-a"),
+            MarkerRow(2L, "old-b"),
+            MarkerRow(3L, "relocated", isLocation = true),
+            MarkerRow(4L, "new-a"),
+            MarkerRow(5L, "new-b"),
+        )
+
+        val sliced = sinceLocation(rows)
+
+        // Inclusive of the marker itself (line 3) — it must stay visible/undoable, same as a
+        // fresh segment's own Clock/Start marker already does.
+        assertEquals(listOf("relocated", "new-a", "new-b"), sliced.map { it.content })
+    }
+
+    @Test
+    fun onlyTheMostRecentOfMultipleLocationMarkersDefinesTheBoundary() {
+        val rows = listOf(
+            MarkerRow(1L, "cp1-a"),
+            MarkerRow(2L, "relocate-to-cp2", isLocation = true),
+            MarkerRow(3L, "cp2-a"),
+            MarkerRow(4L, "relocate-to-cp3", isLocation = true),
+            MarkerRow(5L, "cp3-a"),
+        )
+
+        val sliced = sinceLocation(rows)
+
+        assertEquals(listOf("relocate-to-cp3", "cp3-a"), sliced.map { it.content })
+    }
 }

@@ -18,6 +18,7 @@ private class BibsProgressColumns(private val raceDao: RaceDao) : ModeProgressCo
     override suspend fun setStoppedAt(raceId: Long, stoppedAtMillis: Long) = raceDao.setBibsModeStoppedAt(raceId, stoppedAtMillis)
     override suspend fun clearStoppedAt(raceId: Long) = raceDao.clearBibsModeStoppedAt(raceId)
     override suspend fun resetCounters(raceId: Long) = raceDao.resetBibsMode(raceId)
+    override suspend fun setCounterTo(raceId: Long, value: Int) = raceDao.setBibsModeNextSplit(raceId, value)
 }
 
 /** Bibs Mode's own thin wrapper around [EntryLogModeEngine] — every method here is a direct
