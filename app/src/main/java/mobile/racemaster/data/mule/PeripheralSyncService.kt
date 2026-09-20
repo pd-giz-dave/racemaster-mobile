@@ -1099,16 +1099,8 @@ class PeripheralSyncService : Service() {
     private suspend fun computeRecordsPayload(sinceLineNumber: Long): String? {
         val raceId = servingState.raceId ?: return null
         val race = container.raceRepository.getRace(raceId)
-        // Seeds the location walk with whatever was actually in effect as of sinceLineNumber —
-        // not race?.location (the race's *current* one), which would misattribute every row in
-        // this delta to wherever the race ended up if a relocation happened before this cursor
-        // but after the location that was current when this delta's own rows were recorded. See
-        // RaceRepository.getLastLocationMarkerAtOrBefore's own doc.
-        val seedLocation = container.raceRepository.getLastLocationMarkerAtOrBefore(raceId, sinceLineNumber)?.note
-            ?: race?.location ?: "Finish"
         val records = container.raceRepository.getHistorySinceLineNumber(raceId, sinceLineNumber)
-            .withResolvedLocations(seedLocation)
-            .map { (row, location) -> row.toSyncRecord(race?.timeModeStartedAtMillis, location = location) }
+            .map { row -> row.toSyncRecord(race?.timeModeStartedAtMillis) }
         return json.encodeToString(records)
     }
 

@@ -516,14 +516,9 @@ class MuleRepository(
             // the field: self stayed permanently red, and lastSyncedAtMillis stayed "never",
             // despite the server genuinely having the data).
             //
-            // Each row's own location is resolved individually (withResolvedLocations), not one
-            // flat localRace.location for the whole race — a relocation mid-race means a row
-            // recorded before the move must keep reporting its own, older location even though
-            // the race's *current* one has since changed (see HistoryAction.LOCATION's own doc).
             val selfRecords = if (localRace != null) {
                 raceRepository.getHistorySinceLineNumber(localRace.id, 0L)
-                    .withResolvedLocations(localRace.location)
-                    .map { (row, location) -> row.toSyncRecord(localRace.timeModeStartedAtMillis, location = location) }
+                    .map { row -> row.toSyncRecord(localRace.timeModeStartedAtMillis) }
             } else {
                 emptyList()
             }

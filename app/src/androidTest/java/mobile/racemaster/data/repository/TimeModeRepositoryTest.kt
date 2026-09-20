@@ -90,7 +90,12 @@ class TimeModeRepositoryTest {
         // benefit, never shown on the live screen.
         val splits = db.historyLineDao().observeAllForRace(raceId).first()
         assertEquals(3, splits.size)
-        assertEquals(HistoryAction.MODE_START, splits.single { it.splitNumber == null }.action)
+        val modeStartRow = splits.single { it.splitNumber == null }
+        assertEquals(HistoryAction.MODE_START, modeStartRow.action)
+        // Carries the race's current location in `note` — the web app's only way to learn a
+        // device's station now that SyncRecord no longer sends `location` on every record (see
+        // SyncRecord's own doc).
+        assertEquals("Finish", modeStartRow.note)
         val startRow = splits.single { it.splitNumber == 0 }
         assertEquals(HistoryAction.START, startRow.action)
         assertEquals(1_000L, startRow.timestampMillis)

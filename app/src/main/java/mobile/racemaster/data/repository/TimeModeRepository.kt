@@ -78,6 +78,7 @@ class TimeModeRepository(
                     action = HistoryAction.MODE_START,
                     splitNumber = null,
                     lineNumber = race.nextLineNumber,
+                    note = race.location,
                     timestampMillis = startedAtMillis,
                 ),
             )

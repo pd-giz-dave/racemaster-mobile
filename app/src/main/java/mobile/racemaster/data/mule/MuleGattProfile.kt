@@ -489,17 +489,20 @@ data class AckPayload(
  * or the enclosing `deviceName` key server-side — so repeating it on every line would be pure
  * redundancy, not information.
  *
- * `location` (RaceEntity.location's own doc) is the opposite case: it genuinely is repeated on
- * every single line, even though it's constant for the whole race — there's no separate
- * per-race metadata channel in this wire protocol to send it through just once the way
- * `deviceName` rides on [DeviceInfo] instead, so each record carries its own copy.
+ * Deliberately carries no `location` either, even though `RaceEntity.location` is otherwise
+ * constant for a whole race — unlike `deviceName`, there's no separate per-race metadata channel
+ * in this wire protocol to send it through once, so it used to be repeated on every single
+ * record instead. It now travels only on the three boundary-marker rows whose own `note` field
+ * already means "location as of this point" — SETUP, MODE_START and `HistoryAction.LOCATION`
+ * (see that action's own doc) — a consumer reconstructs "what location was record X recorded at"
+ * by walking a device's history in lineNumber order and tracking the most recent such marker's
+ * `note`.
  */
 @Serializable
 data class SyncRecord(
     val action: String,
     val bibNumber: String?,
     val splitTime: String?,
-    val location: String,
     val splitNumber: Int?,
     // Permanent, ascending history position — see RaceEntity.nextLineNumber. What delta-sync
     // (both the BLE pull protocol and the server's mobile-sync endpoint) keys off.

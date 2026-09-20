@@ -132,6 +132,17 @@ class RaceRepositoryTest {
         assertNull(repository.getRaceByLabel("Some other race entirely"))
     }
 
+    @Test
+    fun recordSetupMarkerCarriesTheRacesCurrentLocationInNote() = runTest {
+        // The only place SETUP's location reaches the wire now — see SyncRecord's own doc for
+        // why it no longer sends a dedicated `location` field on every record.
+        repository.recordSetupMarker(raceId)
+
+        val setupRow = db.historyLineDao().observeAllForRace(raceId).first().single { it.action == HistoryAction.SETUP }
+        assertEquals("Finish", setupRow.note)
+        assertEquals(HistoryMode.ANY, setupRow.mode)
+    }
+
     // resolveCourseRace — the "Multi-mode Method" course picker's own resolution logic (see
     // its own doc and RaceEntity.course/.courses' docs). Every race here is created course-less
     // via startNewRace(course = "") the same way RaceDetailsViewModel.save now always does.

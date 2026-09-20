@@ -65,7 +65,7 @@ class BibsModeRepository(
                     bibNumber = null,
                     splitNumber = null,
                     lineNumber = race.nextLineNumber,
-                    note = null,
+                    note = race.location,
                     timestampMillis = startedAtMillis,
                 ),
             )

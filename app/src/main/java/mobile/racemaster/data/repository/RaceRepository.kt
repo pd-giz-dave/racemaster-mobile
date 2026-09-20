@@ -88,6 +88,7 @@ class RaceRepository(
                 bibNumber = null,
                 splitNumber = null,
                 lineNumber = race.nextLineNumber,
+                note = race.location,
                 timestampMillis = timestampMillis,
             ),
         )
@@ -358,13 +359,6 @@ class RaceRepository(
     // every attempt instead of relying on a locally-staged copy.
     suspend fun getHistorySinceLineNumber(raceId: Long, sinceLineNumber: Long): List<HistoryLineEntity> =
         historyLineDao.getSinceLineNumber(raceId, sinceLineNumber)
-
-    // See HistoryLineDao.getLastLocationMarkerAtOrBefore's own doc — resolves the correct
-    // location to seed a delta batch's own SyncRecordMapping.withResolvedLocations walk from,
-    // for a caller (PeripheralSyncService.computeRecordsPayload) serving a since-cursor rather
-    // than this race's full history from line 0.
-    suspend fun getLastLocationMarkerAtOrBefore(raceId: Long, atOrBeforeLineNumber: Long): HistoryLineEntity? =
-        historyLineDao.getLastLocationMarkerAtOrBefore(raceId, atOrBeforeLineNumber, HistoryAction.LOCATION)
 
     // How recently this race's own history was actually edited — used by
     // MuleRepository.pushToServer to decide whether a race with no recent activity is still

@@ -117,18 +117,4 @@ interface HistoryLineDao {
     // the data and it writing the ack back loses the ack, not the data).
     @Query("SELECT lineNumber FROM history_lines WHERE raceId = :raceId AND lineNumber <= :sinceLineNumber AND syncedAtMillis IS NULL")
     suspend fun getUnsyncedLineNumbersUpTo(raceId: Long, sinceLineNumber: Long): List<Long>
-
-    // The location a delta batch (getSinceLineNumber's own result) should start being resolved
-    // from — see SyncRecordMapping.withResolvedLocations' own doc for why a flat race.location
-    // isn't correct here: PeripheralSyncService.computeRecordsPayload serves an arbitrary
-    // since-cursor, not the race's full history, so seeding that walk with the race's *current*
-    // location would misattribute every row in the delta to wherever the race ended up, not
-    // wherever it actually was as of this delta's own starting point — this query finds the
-    // relocation (if any) that was already in effect there, so the delta's own walk can pick up
-    // correctly without needing to refetch/re-walk the whole race's history to get there.
-    @Query(
-        "SELECT * FROM history_lines WHERE raceId = :raceId AND action = :locationAction " +
-            "AND lineNumber <= :atOrBeforeLineNumber ORDER BY lineNumber DESC LIMIT 1",
-    )
-    suspend fun getLastLocationMarkerAtOrBefore(raceId: Long, atOrBeforeLineNumber: Long, locationAction: HistoryAction): HistoryLineEntity?
 }

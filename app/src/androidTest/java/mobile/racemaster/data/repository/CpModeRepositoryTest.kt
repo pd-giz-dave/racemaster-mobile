@@ -54,6 +54,9 @@ class CpModeRepositoryTest {
         assertEquals(2, all.size)
         assertEquals(HistoryAction.MODE_START, all[0].action)
         assertNull(all[0].splitNumber)
+        // Carries the race's current location in `note` — see SyncRecord's own doc for why this
+        // is now the only place a device's station travels on the wire.
+        assertEquals("Finish", all[0].note)
         assertEquals(HistoryAction.CLOCK, all[1].action)
         assertEquals(0, all[1].splitNumber)
         assertEquals(HistoryMode.CP, all[0].mode)

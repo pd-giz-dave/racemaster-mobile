@@ -103,23 +103,6 @@ class SyncRecordMappingTest {
     }
 
     @Test
-    fun locationIsStampedOntoEveryRecordRegardlessOfMode() {
-        // Constant for the whole race, repeated on every line — see SyncRecord's own doc for
-        // why there's no separate once-per-race channel to send it through instead.
-        val splitRecord = split(splitNumber = 1, timestampMillis = 0L).toSyncRecord(0L, location = "Checkpoint 2")
-        assertEquals("Checkpoint 2", splitRecord.location)
-
-        val bibRecord = bibEntry(101, HistoryAction.FINISH, splitNumber = 1, timestampMillis = 0L).toSyncRecord(null, location = "Start")
-        assertEquals("Start", bibRecord.location)
-    }
-
-    @Test
-    fun locationDefaultsToFinishWhenNotSpecified() {
-        val record = split(splitNumber = 1, timestampMillis = 0L).toSyncRecord(0L)
-        assertEquals("Finish", record.location)
-    }
-
-    @Test
     fun clockMarkersMapToTheirOwnHonestActionsNotHardcodedFinish() {
         // Previously every Time row hardcoded action = "Finish" regardless of whether it was
         // really a Start/Stop/Reset/Undo marker — the real type only ever reached `note`. Now
@@ -288,80 +271,30 @@ class SyncRecordMappingTest {
     }
 
     @Test
-    fun setupMarkerRoundTripsThroughTheWireCarryingOnlyLocation() {
+    fun setupMarkerRoundTripsThroughTheWireCarryingLocationInNote() {
         // HistoryMode.ANY/HistoryAction.SETUP — Setup Race's own location-announcement marker
         // (see RaceRepository.recordSetupMarker). No bib, no split time, just an honest "Setup"
-        // action and whatever location the race was set up with.
-        val record = line(HistoryMode.ANY, HistoryAction.SETUP, splitNumber = 0, timestampMillis = 0L).toSyncRecord(null, location = "CP2")
+        // action and whatever location the race was set up with, now carried in `note` rather
+        // than a dedicated wire field (see SyncRecord's own doc).
+        val record = line(HistoryMode.ANY, HistoryAction.SETUP, splitNumber = 0, timestampMillis = 0L, note = "CP2").toSyncRecord(null)
         assertEquals("Setup", record.action)
         assertNull(record.bibNumber)
         assertNull(record.splitTime)
-        assertEquals("CP2", record.location)
+        assertEquals("CP2", record.note)
         assertEquals(HistoryAction.SETUP, record.toHistoryAction())
     }
 
     @Test
     fun locationMarkerRoundTripsThroughTheWireCarryingTheNewLocationInNote() {
         // HistoryAction.LOCATION — the Relocate screen's own boundary marker (see
-        // RaceRepository.insertLocationMarkerAndReset). Unlike SETUP, this can be written for any
-        // of the three real modes (never ANY — see HistoryAction.LOCATION's own doc for why it
-        // must be mode-scoped); the destination location travels in `note`, same convention SETUP
-        // already established, leaving the `location` parameter itself (the per-push
-        // race-wide/resolved value) untouched.
+        // RaceRepository.insertLocationMarkerAndReset). The destination location travels in
+        // `note`, same convention SETUP now also uses.
         val record = bibEntry(null, HistoryAction.LOCATION, splitNumber = 0, timestampMillis = 0L, note = "CP2")
-            .toSyncRecord(null, location = "CP1")
+            .toSyncRecord(null)
         assertEquals("Location", record.action)
         assertEquals("n/a", record.bibNumber) // Bibs/CP's own non-bib sentinel, same as any other marker
         assertEquals("CP2", record.note)
-        assertEquals("CP1", record.location)
         assertEquals(HistoryAction.LOCATION, record.toHistoryAction())
-    }
-
-    // List<HistoryLineEntity>.withResolvedLocations — the per-row location resolution that
-    // replaces a flat race.location for a race that's been relocated. Uses bibEntry() (a real bib
-    // number isn't relevant here, just the action/note/lineNumber shape).
-
-    @Test
-    fun withNoLocationMarkersAtAllEveryRowGetsTheInitialLocation() {
-        val rows = listOf(
-            bibEntry(101, HistoryAction.FINISH, 1, 0L, lineNumber = 1L),
-            bibEntry(102, HistoryAction.FINISH, 2, 0L, lineNumber = 2L),
-        )
-
-        val resolved = rows.withResolvedLocations("Finish")
-
-        assertEquals(listOf("Finish", "Finish"), resolved.map { it.second })
-    }
-
-    @Test
-    fun rowsBeforeALocationMarkerKeepTheOldLocationRowsAfterGetTheNew() {
-        val rows = listOf(
-            bibEntry(101, HistoryAction.FINISH, 1, 0L, lineNumber = 1L),
-            bibEntry(null, HistoryAction.LOCATION, 0, 0L, lineNumber = 2L, note = "CP2"),
-            bibEntry(102, HistoryAction.FINISH, 1, 0L, lineNumber = 3L),
-        )
-
-        val resolved = rows.withResolvedLocations("CP1")
-
-        assertEquals(
-            listOf("CP1" to 101, "CP2" to null, "CP2" to 102),
-            resolved.map { (row, location) -> location to row.bibNumber },
-        )
-    }
-
-    @Test
-    fun multipleRelocationsEachTakeEffectFromTheirOwnPointOnward() {
-        val rows = listOf(
-            bibEntry(101, HistoryAction.FINISH, 1, 0L, lineNumber = 1L),
-            bibEntry(null, HistoryAction.LOCATION, 0, 0L, lineNumber = 2L, note = "CP2"),
-            bibEntry(102, HistoryAction.FINISH, 1, 0L, lineNumber = 3L),
-            bibEntry(null, HistoryAction.LOCATION, 0, 0L, lineNumber = 4L, note = "CP3"),
-            bibEntry(103, HistoryAction.FINISH, 1, 0L, lineNumber = 5L),
-        )
-
-        val resolved = rows.withResolvedLocations("CP1")
-
-        assertEquals(listOf("CP1", "CP2", "CP2", "CP3", "CP3"), resolved.map { it.second })
     }
 
     @Test
@@ -385,15 +318,15 @@ class SyncRecordMappingTest {
         // A Time split is sent as its own honest "Split" (see toServerAction's own doc), so
         // "Finish" on the wire now means exactly one thing — a genuine Bibs Finish — regardless
         // of whether `splitTime` happens to be set.
-        assertEquals(HistoryAction.SPLIT, SyncRecord(action = "Split", bibNumber = null, splitTime = "00:00:00", location = "Finish", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
-        assertEquals(HistoryAction.FINISH, SyncRecord(action = "Finish", bibNumber = "101", splitTime = null, location = "Finish", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
+        assertEquals(HistoryAction.SPLIT, SyncRecord(action = "Split", bibNumber = null, splitTime = "00:00:00", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
+        assertEquals(HistoryAction.FINISH, SyncRecord(action = "Finish", bibNumber = "101", splitTime = null, splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
     }
 
     @Test
     fun unrecognizedWireActionFallsBackToIgnoreRatherThanThrowing() {
         assertEquals(
             HistoryAction.IGNORE,
-            SyncRecord(action = "SomeFutureAction", bibNumber = null, splitTime = null, location = "Finish", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction(),
+            SyncRecord(action = "SomeFutureAction", bibNumber = null, splitTime = null, splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction(),
         )
     }
 }
