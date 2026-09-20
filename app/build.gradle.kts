@@ -15,8 +15,8 @@ android {
         applicationId = "mobile.racemaster"
         minSdk = 24
         targetSdk = 37
-        versionCode = 20
-        versionName = "0.0.20"
+        versionCode = 21
+        versionName = "0.0.21"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
