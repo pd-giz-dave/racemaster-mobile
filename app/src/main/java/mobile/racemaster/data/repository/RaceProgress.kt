@@ -94,6 +94,19 @@ fun isModeStarted(mode: AppMode, race: RaceEntity?): Boolean = when (mode) {
     AppMode.TIME -> race?.timeModeStartedAtMillis != null
 }
 
+/**
+ * Whether [mode] is currently running (started, not yet stopped) for [race]'s current segment —
+ * narrower than [isModeStarted], which stays true through Stop and only clears on Reset. Used by
+ * [RaceRepository.blockedModeSwitchReason]: a mode switch should only be blocked by another mode
+ * that's still actually *recording*, not merely one that's been Stopped but not yet Reset — the
+ * same relaxed "Stop is enough" rule a pure location-only Relocate already gets for free.
+ */
+fun isModeInProgress(mode: AppMode, race: RaceEntity?): Boolean = when (mode) {
+    AppMode.BIBS -> race?.bibsModeStartedAtMillis != null && race.bibsModeStoppedAtMillis == null
+    AppMode.CP -> race?.cpModeStartedAtMillis != null && race.cpModeStoppedAtMillis == null
+    AppMode.TIME -> race?.timeModeStartedAtMillis != null && race.timeModeStoppedAtMillis == null
+}
+
 // Shared with RaceRepository.blockedModeSwitchReason's own user-facing message — the one place
 // an AppMode's recording-mode name is spelled out, so the wording can't drift between call sites.
 fun AppMode.displayName(): String = when (this) {

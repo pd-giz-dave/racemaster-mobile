@@ -18,10 +18,17 @@ data class RaceEntity(
     // worth of data for what's otherwise the same race. Not part of `label`: two devices
     // stationed differently for the same physical race must still land under the one shared
     // server-side race folder, not be split into separate ones just because of where they're
-    // standing. Carried on every outgoing SyncRecord instead (see SyncRecordMapping's own
-    // doc) — the wire protocol has no separate per-race metadata channel to send it through
-    // just once.
+    // standing. Not carried on the wire at all any more — it travels only via `note` on the
+    // LOCATION/MODE_START/SETUP boundary-marker rows (see SyncRecord's own doc); this column is
+    // this device's own current value, kept in sync by RaceRepository.recordModeStart.
     val location: String = "Finish",
+    // This race's single, currently-active recording mode (RaceRepository.recordModeStart's own
+    // AppMode.name) — a race records at most one mode at a time now; changing it (via Relocate)
+    // writes a fresh LOCATION+MODE_START pair rather than letting more than one mode run
+    // concurrently. Null only very transiently between a race row being inserted and
+    // recordModeStart's own follow-up write in the same save flow — every race a screen can
+    // actually observe has one.
+    val mode: String? = null,
     val label: String,
     val createdAtMillis: Long,
     val timeModeNextSplit: Int = 1,

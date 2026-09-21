@@ -63,7 +63,6 @@ fun RaceHistoryScreen(
         topBar = {
             TopAppBar(
                 title = { Text("Races") },
-                navigationIcon = { TextButton(onClick = withClickSound(onBack)) { Text("Back") } },
                 actions = {
                     // Hidden entirely rather than disabled when there's nothing to sweep — this
                     // is an occasional maintenance action, not a primary control, and most
@@ -71,6 +70,7 @@ fun RaceHistoryScreen(
                     if (staleSummary.total > 0) {
                         TextButton(onClick = withClickSound { pendingDeleteAllStale = true }) { Text("Delete stale") }
                     }
+                    TextButton(onClick = withClickSound(onBack)) { Text("Back") }
                 },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )

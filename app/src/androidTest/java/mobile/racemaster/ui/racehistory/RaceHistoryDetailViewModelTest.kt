@@ -56,6 +56,7 @@ class RaceHistoryDetailViewModelTest {
         bibsModeRepository = BibsModeRepository(db, db.raceDao(), db.historyLineDao())
         cpModeRepository = CpModeRepository(db, db.raceDao(), db.historyLineDao())
         raceRepository = RaceRepository(
+            db,
             db.raceDao(),
             db.historyLineDao(),
             db.lineSyncDao(),

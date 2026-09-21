@@ -49,6 +49,5 @@ class HistoryModeTest {
         assertEquals("Time", HistoryMode.TIME.displayName())
         assertEquals("Bibs", HistoryMode.BIBS.displayName())
         assertEquals("CP", HistoryMode.CP.displayName())
-        assertEquals("Setup", HistoryMode.ANY.displayName())
     }
 }

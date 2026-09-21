@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import mobile.racemaster.data.db.RacemasterDatabase
 import mobile.racemaster.data.db.entity.HistoryAction
+import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.RaceEntity
 import kotlinx.coroutines.async
@@ -85,17 +86,10 @@ class TimeModeRepositoryTest {
         repository.startStopwatch(raceId, startedAtMillis = 1_000L)
         repository.recordSplit(raceId, timestampMillis = 1_500L)
 
-        // Also inserts a MODE_START boundary marker (splitNumber null, see that action's own
-        // doc) immediately before the real Start marker — purely for the web app's later
-        // benefit, never shown on the live screen.
+        // No MODE_START row here any more — that's now written up front by
+        // RaceRepository.recordModeStart (Setup Race / Relocate), not by startStopwatch itself.
         val splits = db.historyLineDao().observeAllForRace(raceId).first()
-        assertEquals(3, splits.size)
-        val modeStartRow = splits.single { it.splitNumber == null }
-        assertEquals(HistoryAction.MODE_START, modeStartRow.action)
-        // Carries the race's current location in `note` — the web app's only way to learn a
-        // device's station now that SyncRecord no longer sends `location` on every record (see
-        // SyncRecord's own doc).
-        assertEquals("Finish", modeStartRow.note)
+        assertEquals(2, splits.size)
         val startRow = splits.single { it.splitNumber == 0 }
         assertEquals(HistoryAction.START, startRow.action)
         assertEquals(1_000L, startRow.timestampMillis)
@@ -302,15 +296,62 @@ class TimeModeRepositoryTest {
         assertEquals(2, db.historyLineDao().observeAllForRace(raceId).first().size)
     }
 
+    // Regression test for the HistoryFold ordering bug: sinceLastLocationMarker used to be
+    // applied to raw (un-folded) rows, so an already-undone LOCATION marker kept acting as the
+    // live view's boundary, hiding everything before it (including a Stop the operator's next
+    // Undo needed to reach) and disabling Undo one step too early. Fixed by folding first, then
+    // slicing by location — see observeCurrentSegmentSplits's own doc.
     @Test
-    fun getLineNumbersForUuidsResolvesOnlyTheGivenAckedRows() = runTest {
-        repository.recordSplit(raceId, timestampMillis = 1_000L)
-        repository.recordSplit(raceId, timestampMillis = 2_000L)
-        repository.recordSplit(raceId, timestampMillis = 3_000L)
-        val splits = db.historyLineDao().observeAllForRace(raceId).first().sortedBy { it.lineNumber }
+    fun undoingARelocateAfterAStopRevealsTheStopAgainAndASecondUndoResumesRecording() = runTest {
+        repository.startStopwatch(raceId, startedAtMillis = 1_000L)
+        repository.recordSplit(raceId, timestampMillis = 1_500L)
+        repository.stopStopwatch(raceId, stoppedAtMillis = 2_000L)
 
-        val lineNumbers = repository.getLineNumbersForUuids(listOf(splits[0].recordUuid, splits[2].recordUuid))
+        // Simulate RaceRepository.recordModeStart's own LOCATION+MODE_START write for a
+        // same-mode relocate (allowed even while Time is merely Stopped, not Reset).
+        val race = db.raceDao().getById(raceId)!!
+        db.historyLineDao().insert(
+            HistoryLineEntity(
+                raceId = raceId, mode = HistoryMode.TIME, action = HistoryAction.LOCATION,
+                bibNumber = null, splitNumber = null,
+                lineNumber = race.nextLineNumber, note = "CP1", timestampMillis = 3_000L,
+                priorSplitCounter = race.timeModeNextSplit, previousLocation = race.location, previousMode = race.mode,
+            ),
+        )
+        db.raceDao().incrementLineNumber(raceId)
+        val raceAfterLocation = db.raceDao().getById(raceId)!!
+        db.historyLineDao().insert(
+            HistoryLineEntity(
+                raceId = raceId, mode = HistoryMode.TIME, action = HistoryAction.MODE_START,
+                bibNumber = null, splitNumber = null,
+                lineNumber = raceAfterLocation.nextLineNumber, note = "Time", timestampMillis = 3_000L,
+            ),
+        )
+        db.raceDao().incrementLineNumber(raceId)
+        db.raceDao().setTimeModeNextSplit(raceId, 1)
+        db.raceDao().updateModeAndLocation(raceId, "TIME", "CP1")
 
-        assertEquals(setOf(splits[0].lineNumber, splits[2].lineNumber), lineNumbers.toSet())
+        // Immediately after relocating, only the LOCATION marker is visible.
+        assertEquals(
+            listOf(HistoryAction.LOCATION),
+            repository.observeCurrentSegmentSplits(raceId).first().map { it.action },
+        )
+
+        // First Undo: undoes the relocate, restoring the prior location/counter — and the
+        // earlier Stop becomes visible again instead of staying hidden.
+        repository.undoMostRecent(raceId)
+        assertEquals(
+            listOf(HistoryAction.STOP),
+            repository.observeCurrentSegmentSplits(raceId).first().map { it.action },
+        )
+        assertEquals("Finish", db.raceDao().getById(raceId)?.location)
+        assertEquals(2_000L, db.raceDao().getById(raceId)?.timeModeStoppedAtMillis)
+
+        // Second Undo: undoes the Stop, resuming live recording.
+        repository.undoMostRecent(raceId)
+        assertEquals(null, db.raceDao().getById(raceId)?.timeModeStoppedAtMillis)
+        assertEquals(1_000L, db.raceDao().getById(raceId)?.timeModeStartedAtMillis)
+        assertTrue(repository.observeCurrentSegmentSplits(raceId).first().none { it.action == HistoryAction.STOP })
     }
+
 }

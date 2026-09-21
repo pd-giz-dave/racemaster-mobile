@@ -55,7 +55,7 @@ fun MuleModeScreen(
                 // three "is everything working" lines just below in the body).
                 actions = {
                     TextButton(onClick = withClickSound(onOptions)) { Text("Options") }
-                    TextButton(onClick = withClickSound(onChangeMode)) { Text("Mode") }
+                    TextButton(onClick = withClickSound(onChangeMode)) { Text("Back") }
                 },
                 expandedHeight = CompactTopAppBarHeight,
                 windowInsets = WindowInsets(0, 0, 0, 0),

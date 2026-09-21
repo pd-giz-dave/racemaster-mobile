@@ -53,6 +53,7 @@ class RaceRepositoryTest {
             ),
         )
         repository = RaceRepository(
+            db,
             db.raceDao(),
             db.historyLineDao(),
             db.lineSyncDao(),
@@ -133,125 +134,36 @@ class RaceRepositoryTest {
     }
 
     @Test
-    fun recordSetupMarkerCarriesTheRacesCurrentLocationInNote() = runTest {
-        // The only place SETUP's location reaches the wire now — see SyncRecord's own doc for
-        // why it no longer sends a dedicated `location` field on every record.
-        repository.recordSetupMarker(raceId)
+    fun recordModeStartWritesLocationThenModeStartBothScopedToTheChosenMode() = runTest {
+        repository.recordModeStart(raceId, AppMode.TIME, "Finish")
 
-        val setupRow = db.historyLineDao().observeAllForRace(raceId).first().single { it.action == HistoryAction.SETUP }
-        assertEquals("Finish", setupRow.note)
-        assertEquals(HistoryMode.ANY, setupRow.mode)
-    }
+        val rows = db.historyLineDao().observeAllForRace(raceId).first().sortedBy { it.lineNumber }
+        assertEquals(2, rows.size)
+        assertEquals(HistoryAction.LOCATION, rows[0].action)
+        assertEquals("Finish", rows[0].note)
+        assertEquals(HistoryMode.TIME, rows[0].mode)
+        assertEquals(HistoryAction.MODE_START, rows[1].action)
+        assertEquals("Time", rows[1].note)
+        assertEquals(HistoryMode.TIME, rows[1].mode)
+        assertNull(rows[1].bibNumber)
+        assertNull(rows[1].splitNumber)
 
-    // resolveCourseRace — the "Multi-mode Method" course picker's own resolution logic (see
-    // its own doc and RaceEntity.course/.courses' docs). Every race here is created course-less
-    // via startNewRace(course = "") the same way RaceDetailsViewModel.save now always does.
-
-    @Test
-    fun resolveCourseRaceClaimsAStillCourseLessRowInPlace() = runTest {
-        val pendingId = repository.startNewRace(name = "Acme", course = "", courses = listOf("Seniors", "Juniors"))
-
-        val targetId = repository.resolveCourseRace(pendingId, "Seniors", deviceRole = "TIME")
-
-        assertEquals(pendingId, targetId)
-        val race = requireNotNull(repository.getRace(targetId))
-        assertEquals("Seniors", race.course)
-        assertEquals(buildRaceLabel("Acme", "Seniors", System.currentTimeMillis()), race.label)
-    }
-
-    @Test
-    fun resolveCourseRaceCreatesASiblingRowWhenTheCurrentOneAlreadyHasADifferentCourse() = runTest {
-        val juniorsId = repository.startNewRace(
-            name = "Acme",
-            course = "Juniors",
-            location = "CP1",
-            courses = listOf("Seniors", "Juniors"),
-            bibsRangeStart = 100,
-            bibsRangeCount = 50,
-        )
-
-        val seniorsId = repository.resolveCourseRace(juniorsId, "Seniors", deviceRole = "TIME")
-
-        assertEquals(false, seniorsId == juniorsId)
-        val seniors = requireNotNull(repository.getRace(seniorsId))
-        assertEquals("Seniors", seniors.course)
-        // Template fields cloned from the Juniors row, so the operator never re-enters them.
-        assertEquals("CP1", seniors.location)
-        assertEquals(100, seniors.bibsRangeStart)
-        assertEquals(50, seniors.bibsRangeCount)
-        assertEquals(listOf("Seniors", "Juniors"), seniors.courses)
-        // The Juniors row itself is untouched.
-        assertEquals("Juniors", repository.getRace(juniorsId)?.course)
-    }
-
-    @Test
-    fun resolveCourseRaceReusesAnAlreadyExistingRowForTodaysLabelInsteadOfDuplicatingIt() = runTest {
-        val juniorsId = repository.startNewRace(name = "Acme", course = "Juniors", courses = listOf("Seniors", "Juniors"))
-        // A fresh, still course-less pending row — e.g. Time Mode's own "New Race" on the same
-        // device, opened after Bibs Mode already claimed "Juniors" for today.
-        val pendingId = repository.startNewRace(name = "Acme", course = "", courses = listOf("Seniors", "Juniors"))
-
-        val resolvedId = repository.resolveCourseRace(pendingId, "Juniors", deviceRole = "TIME")
-
-        assertEquals(juniorsId, resolvedId)
-        // The now-superseded pending row is cleaned up rather than left behind as clutter.
-        assertNull(repository.getRace(pendingId))
-    }
-
-    // endRecordingForCourse — the Reset confirmation's "End recording" choice, backing
-    // StopOrResetButton/*ModeViewModel.endRecording.
-
-    @Test
-    fun endRecordingForCourseLeavesTheFinishedCourseCompletelyUntouched() = runTest {
-        val juniorsId = repository.startNewRace(
-            name = "Acme",
-            course = "Juniors",
-            location = "CP1",
-            courses = listOf("Seniors", "Juniors"),
-            bibsRangeStart = 100,
-            bibsRangeCount = 50,
-        )
-        db.raceDao().setBibsModeStartedAt(juniorsId, 1_000L)
-        db.raceDao().setBibsModeStoppedAt(juniorsId, 2_000L)
-
-        repository.endRecordingForCourse(juniorsId, deviceRole = "BIBS")
-
-        val juniors = requireNotNull(repository.getRace(juniorsId))
-        assertEquals("Juniors", juniors.course)
-        assertEquals(1_000L, juniors.bibsModeStartedAtMillis)
-        assertEquals(2_000L, juniors.bibsModeStoppedAtMillis)
-    }
-
-    @Test
-    fun endRecordingForCourseCreatesAFreshCourseLessSiblingClonedFromTheTemplate() = runTest {
-        val juniorsId = repository.startNewRace(
-            name = "Acme",
-            course = "Juniors",
-            location = "CP1",
-            courses = listOf("Seniors", "Juniors"),
-            bibsRangeStart = 100,
-            bibsRangeCount = 50,
-        )
-
-        val pendingId = repository.endRecordingForCourse(juniorsId, deviceRole = "BIBS")
-
-        assertEquals(false, pendingId == juniorsId)
-        val pending = requireNotNull(repository.getRace(pendingId))
-        assertEquals("", pending.course)
-        assertEquals("CP1", pending.location)
-        assertEquals(100, pending.bibsRangeStart)
-        assertEquals(50, pending.bibsRangeCount)
-        assertEquals(listOf("Seniors", "Juniors"), pending.courses)
+        val race = db.raceDao().getById(raceId)
+        assertEquals("TIME", race?.mode)
+        assertEquals("Finish", race?.location)
     }
 
     // switchActiveRace — the "auto delete the empty placeholder" cleanup every setActiveRaceId
     // call site routes through instead of calling settingsRepository.setActiveRaceId directly.
+    // Judged by whether the race being switched away from has ever recorded a single history
+    // line (see switchActiveRace's own doc) — the "course" concept this used to be judged by
+    // (a still course-less row) is gone entirely (TODO.md's phase 1).
 
     @Test
-    fun switchActiveRaceDeletesAStillCourseLessPlaceholderBeingSwitchedAwayFrom() = runTest {
-        val pendingId = repository.startNewRace(name = "Acme", course = "", courses = listOf("Seniors"))
+    fun switchActiveRaceDeletesARaceWithNoHistoryBeingSwitchedAwayFrom() = runTest {
+        val pendingId = repository.startNewRace(name = "Acme")
         settingsRepository.setActiveRaceId(pendingId)
-        val newRaceId = repository.startNewRace(name = "Other", course = "", courses = listOf("Seniors"))
+        val newRaceId = repository.startNewRace(name = "Other")
 
         repository.switchActiveRace(newRaceId)
 
@@ -260,22 +172,28 @@ class RaceRepositoryTest {
     }
 
     @Test
-    fun switchActiveRaceKeepsARealRaceBeingSwitchedAwayFrom() = runTest {
-        val juniorsId = repository.startNewRace(name = "Acme", course = "Juniors", courses = listOf("Seniors", "Juniors"))
-        settingsRepository.setActiveRaceId(juniorsId)
-        val newRaceId = repository.startNewRace(name = "Other", course = "", courses = listOf("Seniors"))
+    fun switchActiveRaceKeepsARaceWithRealHistoryBeingSwitchedAwayFrom() = runTest {
+        val acmeId = repository.startNewRace(name = "Acme")
+        db.historyLineDao().insert(
+            HistoryLineEntity(
+                raceId = acmeId, mode = HistoryMode.TIME, action = HistoryAction.SPLIT,
+                splitNumber = 1, lineNumber = 1L, timestampMillis = 0L,
+            ),
+        )
+        settingsRepository.setActiveRaceId(acmeId)
+        val newRaceId = repository.startNewRace(name = "Other")
 
         repository.switchActiveRace(newRaceId)
 
-        // A course already locked in means real history could exist for it — never deleted,
-        // regardless of whether any has actually been recorded yet.
-        assertEquals("Juniors", repository.getRace(juniorsId)?.course)
+        // Real history means the race is never deleted, regardless of whether it was ever
+        // actually started in either mode.
+        assertEquals("Acme", repository.getRace(acmeId)?.name)
         assertEquals(newRaceId, settingsRepository.activeRaceId.first())
     }
 
     @Test
     fun switchActiveRaceIsSafeWhenNothingWasActiveBefore() = runTest {
-        val newRaceId = repository.startNewRace(name = "Acme", course = "", courses = listOf("Seniors"))
+        val newRaceId = repository.startNewRace(name = "Acme")
 
         repository.switchActiveRace(newRaceId)
 
@@ -284,7 +202,7 @@ class RaceRepositoryTest {
 
     @Test
     fun switchActiveRaceIsSafeWhenSwitchingToTheSameRace() = runTest {
-        val pendingId = repository.startNewRace(name = "Acme", course = "", courses = listOf("Seniors"))
+        val pendingId = repository.startNewRace(name = "Acme")
         settingsRepository.setActiveRaceId(pendingId)
 
         repository.switchActiveRace(pendingId)
@@ -300,28 +218,27 @@ class RaceRepositoryTest {
         // device's own data onto the new label), MuleRepository.pushToServer now reads this
         // race's own current label fresh from RaceEntity every attempt — a rename just takes
         // effect on the very next push, nothing else needs updating.
-        repository.updateRaceDetails(raceId, name = "Renamed", courses = listOf("Course"), location = "Finish", bibsRangeStart = null, bibsRangeCount = null)
+        repository.updateRaceDetails(raceId, name = "Renamed", location = "Finish")
 
-        // "Test Race" (see setUp) was inserted with a blank course, so the label rebuilds
-        // course-less too (see buildRaceLabel's own doc) — updateRaceDetails no longer edits
-        // course itself (see RaceEntity.course's own doc).
-        assertEquals(buildRaceLabel("Renamed", "", 0L), repository.getRace(raceId)?.label)
+        // The label is just the new name verbatim now (see buildRaceLabel's own doc) — no
+        // date/course is ever appended.
+        assertEquals(buildRaceLabel("Renamed"), repository.getRace(raceId)?.label)
     }
 
-    // location — see RaceEntity.location's own doc. Not part of the label (unlike name/course),
-    // so it's the one field here that both persists and can be edited freely without touching
+    // location — see RaceEntity.location's own doc. Not part of the label (unlike name), so
+    // it's the one field here that both persists and can be edited freely without touching
     // buildRaceLabel at all.
 
     @Test
     fun startNewRacePersistsTheGivenLocation() = runTest {
-        val newRaceId = repository.startNewRace(name = "Other Race", course = "Course", location = "Start", createdAtMillis = 0L)
+        val newRaceId = repository.startNewRace(name = "Other Race", location = "Start", createdAtMillis = 0L)
 
         assertEquals("Start", repository.getRace(newRaceId)?.location)
     }
 
     @Test
     fun startNewRaceDefaultsLocationToFinish() = runTest {
-        val newRaceId = repository.startNewRace(name = "Other Race", course = "Course", createdAtMillis = 0L)
+        val newRaceId = repository.startNewRace(name = "Other Race", createdAtMillis = 0L)
 
         assertEquals("Finish", repository.getRace(newRaceId)?.location)
     }
@@ -330,12 +247,12 @@ class RaceRepositoryTest {
     fun updateRaceDetailsChangesLocationWithoutAffectingTheLabel() = runTest {
         // "Test Race"/"" (see setUp) wasn't produced by buildRaceLabel in the first place, so
         // this establishes a stable buildRaceLabel-derived label first, then changes only
-        // location — the label recomputed from the *same* name/course a second time must come
-        // out identical, proving location plays no part in it.
-        repository.updateRaceDetails(raceId, name = "Same", courses = listOf("Course"), location = "Finish", bibsRangeStart = null, bibsRangeCount = null)
+        // location — the label recomputed from the *same* name a second time must come out
+        // identical, proving location plays no part in it.
+        repository.updateRaceDetails(raceId, name = "Same", location = "Finish")
         val stableLabel = requireNotNull(repository.getRace(raceId)?.label)
 
-        repository.updateRaceDetails(raceId, name = "Same", courses = listOf("Course"), location = "Checkpoint 2", bibsRangeStart = null, bibsRangeCount = null)
+        repository.updateRaceDetails(raceId, name = "Same", location = "Checkpoint 2")
 
         val updated = repository.getRace(raceId)
         assertEquals("Checkpoint 2", updated?.location)
@@ -387,7 +304,6 @@ class RaceRepositoryTest {
         db.pulledRecordDao().insertAll(
             listOf(
                 PulledRecordEntity(
-                    recordUuid = "other-device-1",
                     sourceDeviceId = "some-other-device-id",
                     sourceRaceLabel = "Test Race",
                     lineNumber = 1L,
@@ -399,7 +315,7 @@ class RaceRepositoryTest {
 
         repository.deleteRace(raceId)
 
-        assertEquals(listOf("other-device-1"), db.pulledRecordDao().getAll().map { it.recordUuid })
+        assertEquals(listOf(1L), db.pulledRecordDao().getAll().map { it.lineNumber })
     }
 
     @Test
@@ -549,7 +465,9 @@ class RaceRepositoryTest {
     }
 
     // blockedModeSwitchReason — Bibs and CP are mutually exclusive for the same race; see the
-    // function's own doc for why (both are alternate ways of logging the same station).
+    // function's own doc for why (both are alternate ways of logging the same station). Stop
+    // alone (not a full Reset) is enough to permit a switch — only a mode that's still actually
+    // recording (started, not yet stopped) blocks one.
 
     @Test
     fun blockedModeSwitchReasonAllowsSwitchingToBibsWhenCpWasNeverStarted() = runTest {
@@ -566,22 +484,20 @@ class RaceRepositoryTest {
         db.raceDao().setCpModeStartedAt(raceId, 1_000L)
 
         assertEquals(
-            "CP Mode still has an active race — Stop and Reset it before switching to Bibs Mode.",
+            "CP Mode still has an active race — Stop it before switching to Bibs Mode.",
             repository.blockedModeSwitchReason(raceId, AppMode.BIBS),
         )
     }
 
     @Test
-    fun blockedModeSwitchReasonRefusesSwitchingToBibsWhileCpIsStoppedButNotReset() = runTest {
-        // Stopping alone must not clear CP's active status — only Reset (which clears
-        // cpModeStartedAtMillis) does, same reasoning as isRaceActive.
+    fun blockedModeSwitchReasonAllowsSwitchingToBibsOnceCpIsStoppedEvenIfNotReset() = runTest {
+        // Merely Stopping CP (no Reset) is now enough to permit the switch — unlike isRaceActive
+        // (a different, deliberately stricter guard for delete/rename protection), which still
+        // treats a Stopped-not-Reset race as active.
         db.raceDao().setCpModeStartedAt(raceId, 1_000L)
         db.raceDao().setCpModeStoppedAt(raceId, 2_000L)
 
-        assertEquals(
-            "CP Mode still has an active race — Stop and Reset it before switching to Bibs Mode.",
-            repository.blockedModeSwitchReason(raceId, AppMode.BIBS),
-        )
+        assertNull(repository.blockedModeSwitchReason(raceId, AppMode.BIBS))
     }
 
     @Test
@@ -598,22 +514,19 @@ class RaceRepositoryTest {
         db.raceDao().setBibsModeStartedAt(raceId, 1_000L)
 
         assertEquals(
-            "Bibs Mode still has an active race — Stop and Reset it before switching to CP Mode.",
+            "Bibs Mode still has an active race — Stop it before switching to CP Mode.",
             repository.blockedModeSwitchReason(raceId, AppMode.CP),
         )
     }
 
     @Test
-    fun blockedModeSwitchReasonRefusesSwitchingToCpWhileBibsIsStoppedButNotReset() = runTest {
-        // Stopping alone must not clear Bibs' active status — only Reset (which clears
-        // bibsModeStartedAtMillis) does, same reasoning as isRaceActive.
+    fun blockedModeSwitchReasonAllowsSwitchingToCpOnceBibsIsStoppedEvenIfNotReset() = runTest {
+        // Merely Stopping Bibs (no Reset) is now enough to permit the switch — see the Bibs↔CP
+        // mirror test's own doc above.
         db.raceDao().setBibsModeStartedAt(raceId, 1_000L)
         db.raceDao().setBibsModeStoppedAt(raceId, 2_000L)
 
-        assertEquals(
-            "Bibs Mode still has an active race — Stop and Reset it before switching to CP Mode.",
-            repository.blockedModeSwitchReason(raceId, AppMode.CP),
-        )
+        assertNull(repository.blockedModeSwitchReason(raceId, AppMode.CP))
     }
 
     @Test
@@ -634,7 +547,7 @@ class RaceRepositoryTest {
         db.raceDao().setBibsModeStartedAt(raceId, 1_000L)
 
         assertEquals(
-            "Bibs Mode still has an active race — Stop and Reset it before switching to Time Mode.",
+            "Bibs Mode still has an active race — Stop it before switching to Time Mode.",
             repository.blockedModeSwitchReason(raceId, AppMode.TIME),
         )
     }

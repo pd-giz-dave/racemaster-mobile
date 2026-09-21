@@ -35,15 +35,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.MainActivity
 import mobile.racemaster.data.db.entity.HistoryAction
-import mobile.racemaster.data.db.entity.formatSplitRef
 import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.ui.bibsmode.displayName
-import mobile.racemaster.ui.components.BtPollingStatusLine
 import mobile.racemaster.ui.components.ModeScreenTopBar
-import mobile.racemaster.ui.components.ServerStatusLine
+import mobile.racemaster.ui.components.RaceProgressSummary
 import mobile.racemaster.ui.components.SplitRow
 import mobile.racemaster.ui.components.StopOrResetButton
-import mobile.racemaster.ui.components.SyncStatusLine
 import mobile.racemaster.ui.components.UndoLastButton
 import mobile.racemaster.ui.components.rememberListClickGuard
 import mobile.racemaster.util.formatTimeSplitsText
@@ -160,21 +157,17 @@ private fun TimeModeContent(
                 },
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                ServerStatusLine(uiState.serverStatus)
-                BtPollingStatusLine(btPollingStatus)
-                if (!deviceName.isNullOrBlank()) {
-                    Text(text = "Device name: $deviceName", style = MaterialTheme.typography.labelMedium)
-                }
-                Text(text = "Race name: ${uiState.raceLabel}", style = MaterialTheme.typography.labelMedium)
-                Text(text = "Location: ${uiState.raceLocation}", style = MaterialTheme.typography.labelMedium)
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(
-                        text = "Next: ${formatSplitRef(uiState.nextSplitNumber)}",
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                    SyncStatusLine(uiState.unsyncedCount, uiState.lastSyncedAtMillis)
-                }
-                Text(text = formatTimeSplitsText(uiState.splitCount), style = MaterialTheme.typography.labelMedium)
+                RaceProgressSummary(
+                    deviceName = deviceName,
+                    raceLabel = uiState.raceLabel,
+                    raceLocation = uiState.raceLocation,
+                    nextSplitNumber = uiState.nextSplitNumber,
+                    unsyncedCount = uiState.unsyncedCount,
+                    lastSyncedAtMillis = uiState.lastSyncedAtMillis,
+                    serverStatus = uiState.serverStatus,
+                    btPollingStatus = btPollingStatus,
+                    progressText = formatTimeSplitsText(uiState.splitCount),
+                )
                 Text(
                     text = if (uiState.stopwatchStarted) formatElapsed(uiState.liveElapsedMillis) else "",
                     style = MaterialTheme.typography.displayMedium,

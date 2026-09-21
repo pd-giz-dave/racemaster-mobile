@@ -74,6 +74,12 @@ data class HistoryLineEntity(
     // number and get wrongly paired into the same row there.
     val priorSplitCounter: Int? = null,
     val previousLocation: String? = null,
+    // HistoryAction.LOCATION rows only — mirrors previousLocation, but for RaceEntity.mode: what
+    // to restore it to if this marker (now always paired with the MODE_START right after it, see
+    // RaceRepository.recordModeStart) is ever undone. Null for a brand-new race's very own first
+    // LOCATION+MODE_START pair (nothing chosen yet before it) — restoring null is correct there
+    // too, leaving the race back in "no mode chosen" state.
+    val previousMode: String? = null,
     // Non-null once this line is confirmed at a genuine data sink — the racemaster server, or
     // a Bluetooth device that identifies as one (see LineSyncEntity.isSink) — the green
     // threshold. Deliberately NOT set just because some device (mule or otherwise) has taken a

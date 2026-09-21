@@ -48,10 +48,9 @@ class CpModeRepository(
 
     fun observeLastSyncedAtMillis(raceId: Long): Flow<Long?> = engine.observeLastSyncedAtMillis(raceId)
 
-    // Immediately preceded by its own MODE_START boundary marker (see that action's own doc) —
-    // a second, separate row purely for the web app's later benefit, never shown on any live
-    // screen; the real Clock marker right after it is completely unaffected, exactly as it
-    // always was.
+    // Its own MODE_START boundary marker (see that action's own doc) is written earlier, up
+    // front, by RaceRepository.recordModeStart (Setup Race / Relocate) — this only writes the
+    // real Clock marker itself.
     suspend fun startCpMode(raceId: Long, startedAtMillis: Long = System.currentTimeMillis()) {
         db.withTransaction {
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
@@ -60,23 +59,10 @@ class CpModeRepository(
                 HistoryLineEntity(
                     raceId = raceId,
                     mode = HistoryMode.CP,
-                    action = HistoryAction.MODE_START,
-                    bibNumber = null,
-                    splitNumber = null,
-                    lineNumber = race.nextLineNumber,
-                    note = race.location,
-                    timestampMillis = startedAtMillis,
-                ),
-            )
-            raceDao.incrementLineNumber(raceId)
-            historyLineDao.insert(
-                HistoryLineEntity(
-                    raceId = raceId,
-                    mode = HistoryMode.CP,
                     action = HistoryAction.CLOCK,
                     bibNumber = null,
                     splitNumber = CLOCK_SPLIT_NUMBER,
-                    lineNumber = race.nextLineNumber + 1,
+                    lineNumber = race.nextLineNumber,
                     note = null,
                     timestampMillis = startedAtMillis,
                 ),

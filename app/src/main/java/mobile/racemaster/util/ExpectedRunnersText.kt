@@ -15,3 +15,12 @@ fun formatBibsExpectedText(expectedCount: Int, outstandingCount: Int): String? {
  *  [mobile.racemaster.data.repository.starters]'s own doc — that's a Bibs/CP Mode-only concept).
  *  Just a running tally. */
 fun formatTimeSplitsText(splitCount: Int): String = "$splitCount split${if (splitCount == 1) "" else "s"} so far"
+
+/** Bibs/CP Mode's own "N so far" running-tally line — [RaceProgressSummary]'s common
+ *  `progressText` slot, mirroring [formatTimeSplitsText] for the two modes that track individual
+ *  bib numbers instead of anonymous splits. A plain count of real (non-Clock) entries, distinct
+ *  from [formatBibsExpectedText]'s separate expected-vs-outstanding line, which stays as its own
+ *  extra line in EntryModeHeaderInfo below this one. */
+fun formatBibsSoFarText(count: Int): String = "$count bib${if (count == 1) "" else "s"} so far"
+
+fun formatCpSoFarText(count: Int): String = "$count checkpoint entr${if (count == 1) "y" else "ies"} so far"

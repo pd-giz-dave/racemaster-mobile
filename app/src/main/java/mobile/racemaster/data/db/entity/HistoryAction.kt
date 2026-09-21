@@ -28,46 +28,45 @@ enum class HistoryAction {
     // Shared — see this file's own doc for why START/STOP/RESET/UNDO are safe to share.
     START, STOP, RESET, UNDO,
 
-    // Shared — written once by every mode's own start (TimeModeRepository.startStopwatch/
-    // BibsModeRepository.startBibsMode/CpModeRepository.startCpMode), immediately before that
-    // mode's own real Start/Clock marker, which stays completely unchanged. A separate,
-    // dedicated marker rather than reusing START/CLOCK: it's purely a boundary flag for the
-    // racemaster web app to later recognise "a mode began here" once this race's history file
-    // reaches it, not something the operator is meant to see or interact with — so it's excluded
-    // from every live current-segment view/undo target (see EntryLogModeEngine/
-    // TimeModeRepository's own current-segment queries) and only ever shows up in Race History's
-    // full chronology.
+    // Shared — written once by RaceRepository.recordModeStart (Setup Race / Relocate), the
+    // moment a mode is chosen, immediately after its own LOCATION marker (see that action's own
+    // doc) — a boundary flag for the racemaster web app to recognise "a mode began here" once
+    // this race's history file reaches it, not something the operator is meant to see or
+    // interact with, so it's excluded from every live current-segment view/undo target (see
+    // EntryLogModeEngine/TimeModeRepository's own current-segment queries) and only ever shows up
+    // in Race History's full chronology. States its mode explicitly in `note` (e.g. "Time"/
+    // "Bibs"/"CP" — see AppMode.wireName()) rather than being inferred from bibNumber/splitTime
+    // nullness (see SyncRecord's own doc for why neither field means anything on this row any
+    // more); bibNumber and splitNumber are always null here, regardless of mode.
     MODE_START,
 
-    // HistoryMode.ANY only — RaceRepository.recordSetupMarker's own single row, written once at
-    // Setup Race time before any mode has been chosen. Unlike MODE_START (shared with a real
-    // family, so it needs an explicit action-based exclusion from that family's own live view),
-    // this needs no such exclusion: mode = ANY already keeps it out of every per-family SQL query
-    // (see HistoryMode.ANY's own doc). It carries only `location` (via SyncRecordMapping's own
-    // location = race.location on every outgoing record) — the whole point of this marker is
-    // letting the web app see where this device is stationed as soon as it's set up, before the
-    // first real split. Has a real toServerAction()/toHistoryAction() wire mapping (see
-    // SyncRecordMapping.kt) since — unlike a wire-only marker would have been — this is a genuine
-    // persisted row that gets pulled/relayed over BLE like any other.
-    SETUP,
-
-    // Written once per currently-active mode whenever the operator relocates mid-race ("This
-    // Race"/Relocate screen, see RaceRepository.relocateActiveModes) — mode-scoped (never ANY),
-    // since HistoryMode.ANY would make it invisible to every per-family observeCurrentSegment
-    // query, defeating its whole purpose as a boundary marker. Carries the NEW location in `note`
-    // (mirrors SETUP's own convention). Unlike MODE_START/SETUP, this is deliberately NOT
-    // filtered out of the live current-segment view — it must stay visible and undoable (an
-    // operator relocating by mistake needs to be able to undo it), which is also why it is NOT
-    // added to observeCurrentSegment/getCurrentSegmentSnapshot's own resetAction boundary
-    // (RESET stays the only hard SQL segment boundary — see HistoryFold.sinceLastLocationMarker
-    // for the separate, additional slice this uses instead, applied only for duplicate-detection/
-    // bib-accounting purposes, never for live-view/undo visibility). HistoryLineEntity's own
-    // priorSplitCounter/previousLocation columns exist solely to let undoMostRecent restore this
-    // marker's mode-level split counter and RaceEntity.location exactly, since simply not
-    // decrementing (the way STOP/START are handled) isn't enough — the counter was reset to 1,
-    // not incremented, by this marker's own forward write.
+    // Written once whenever the operator sets up or relocates the race ("Setup Race"/Relocate
+    // screen, see RaceRepository.recordModeStart) — always mode-scoped, always immediately
+    // followed by that same call's own MODE_START row. Carries the new location in `note`.
+    // Deliberately NOT filtered out of the live current-segment view — it must stay visible and
+    // undoable (an operator relocating by mistake needs to be able to undo it), which is also why
+    // it is NOT added to observeCurrentSegment/getCurrentSegmentSnapshot's own resetAction
+    // boundary (RESET stays the only hard SQL segment boundary — see
+    // HistoryFold.sinceLastLocationMarker for the separate, additional slice this uses instead,
+    // applied only for duplicate-detection/bib-accounting purposes, never for live-view/undo
+    // visibility). HistoryLineEntity's own priorSplitCounter/previousLocation/previousMode
+    // columns exist solely to let undoMostRecent restore this marker's mode-level split counter
+    // and RaceEntity.location/mode exactly, since simply not decrementing (the way STOP/START are
+    // handled) isn't enough — the counter was reset to 1, not incremented, by this marker's own
+    // forward write.
     LOCATION,
 }
 
 /** Actions that carry a real bib number and participate in range/duplicate checks. */
 val BIB_REQUIRED_ACTIONS = setOf(HistoryAction.START, HistoryAction.FINISH, HistoryAction.RETIRE, HistoryAction.PASS)
+
+/** Boundary/marker rows that a Bibs/CP "N so far" running-tally count (see
+ *  [mobile.racemaster.util.formatBibsSoFarText]/[mobile.racemaster.util.formatCpSoFarText]) must
+ *  exclude — CLOCK is the fixed Start marker, LOCATION and STOP are both markers that can appear
+ *  in the same current-segment-since-last-relocation view alongside genuine entries (see
+ *  HistoryAction.LOCATION's own doc: it's deliberately never excluded from that view so it stays
+ *  undoable), neither of which represents an operator-recorded bib/CP crossing. RESET/UNDO/
+ *  MODE_START are never reachable in that view in the first place (RESET is a hard segment
+ *  boundary, UNDO markers are folded away, MODE_START is filtered out explicitly), so they're
+ *  omitted here rather than listed defensively. */
+val NON_ENTRY_ACTIONS = setOf(HistoryAction.CLOCK, HistoryAction.LOCATION, HistoryAction.STOP)

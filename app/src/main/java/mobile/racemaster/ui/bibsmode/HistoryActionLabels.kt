@@ -22,15 +22,13 @@ fun HistoryAction.displayName(): String = when (this) {
     // doc) — same "Start" text its own real Start/Clock marker already shows there, just on
     // its own separate boundary-marker row.
     HistoryAction.MODE_START -> "Start"
-    // Race History is the only place this is ever shown too (see HistoryAction.SETUP's own
-    // doc) — HistoryMode.ANY keeps it out of every per-mode live screen already, so this label
-    // only ever needs to read sensibly in the unified cross-mode chronology.
-    HistoryAction.SETUP -> "Setup"
-    // Unlike MODE_START/SETUP, this one IS shown on the live screen too (see
-    // HistoryAction.LOCATION's own doc — it must stay visible to be undoable) — the actual
-    // destination is carried in `note`, rendered alongside this label the same way any other
-    // row's note already is.
-    HistoryAction.LOCATION -> "Relocated"
+    // Unlike MODE_START, this one IS shown on the live screen too (see
+    // HistoryAction.LOCATION's own doc — it must stay visible to be undoable). Covers both a
+    // race's initial location (set at Setup Race time) and a later mid-race relocation with one
+    // neutral word — no need to tell them apart here, since the actual destination is always
+    // carried in `note` and rendered alongside this label the same way any other row's note
+    // already is.
+    HistoryAction.LOCATION -> "Location"
 }
 
 // Deliberately excludes every marker action (CLOCK/STOP/RESET/UNDO, plus the Time-only SPLIT,

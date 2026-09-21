@@ -43,7 +43,7 @@ fun ModeScreenTopBar(
             // which is what this button is mostly reached for now — is the more common reason to
             // tap it than a pre-race rename.
             TextButton(onClick = withClickSound(onThisRace), enabled = thisRaceEnabled) { Text("Relocate") }
-            TextButton(onClick = withClickSound(onChangeMode)) { Text("Mode") }
+            TextButton(onClick = withClickSound(onChangeMode)) { Text("Back") }
         },
         expandedHeight = CompactTopAppBarHeight,
         windowInsets = WindowInsets(0, 0, 0, 0),

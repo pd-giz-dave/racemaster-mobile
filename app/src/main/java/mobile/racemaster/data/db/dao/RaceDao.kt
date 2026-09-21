@@ -119,8 +119,8 @@ interface RaceDao {
     // kick an in-progress mode back to pre-Start state. A relocation mid-recording only needs the
     // display counter itself to move (forward: reset to 1 after saving the old value into the new
     // marker row's own priorSplitCounter; on undo: restored back to that saved value) — see
-    // RaceRepository.relocateActiveModes/insertLocationMarkerAndReset and
-    // EntryLogModeEngine/TimeModeRepository's own undoMostRecent LOCATION branch.
+    // RaceRepository.recordModeStart and EntryLogModeEngine/TimeModeRepository's own
+    // undoMostRecent LOCATION branch.
     @Query("UPDATE races SET timeModeNextSplit = :value WHERE id = :raceId")
     suspend fun setTimeModeNextSplit(raceId: Long, value: Int)
 
@@ -130,8 +130,11 @@ interface RaceDao {
     @Query("UPDATE races SET cpModeNextSplit = :value WHERE id = :raceId")
     suspend fun setCpModeNextSplit(raceId: Long, value: Int)
 
-    // Relocation's own location-only update/restore — narrower than updateDetails above, which
-    // also touches name/label; a relocation (forward or undone) never changes either of those.
-    @Query("UPDATE races SET location = :location WHERE id = :raceId")
-    suspend fun updateLocationOnly(raceId: Long, location: String)
+    // RaceRepository.recordModeStart's own mode+location update — used both for its forward
+    // write (Setup Race / Relocate choosing a new mode/location) and, with the *previous*
+    // mode/location instead, to restore both when a LOCATION marker is undone (see
+    // EntryLogModeEngine/TimeModeRepository's own LOCATION-undo branch). Narrower than
+    // updateDetails above, which also touches name/label; neither of those ever changes here.
+    @Query("UPDATE races SET mode = :mode, location = :location WHERE id = :raceId")
+    suspend fun updateModeAndLocation(raceId: Long, mode: String?, location: String)
 }

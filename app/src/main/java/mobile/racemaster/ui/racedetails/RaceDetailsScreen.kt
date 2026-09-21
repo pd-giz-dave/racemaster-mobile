@@ -1,7 +1,9 @@
 package mobile.racemaster.ui.racedetails
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -10,9 +12,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -32,17 +36,19 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
-import mobile.racemaster.data.repository.isValidCpLocation
+import mobile.racemaster.data.repository.isValidLocationForMode
 import mobile.racemaster.data.repository.isValidRaceName
+import mobile.racemaster.data.settings.AppMode
+import mobile.racemaster.ui.components.DiscardChangesDialog
 import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.ui.components.HistoryTextField
 import mobile.racemaster.util.withClickSound
 
-/** "Relocate" (formerly "This Race") — name+location editor for the device's already-created
- *  race (see RaceDetailsViewModel's own doc: creation itself moved to Setup Race, and
- *  course/bib-range fields are gone entirely). Reached from any mode screen's own top bar. Name
- *  stays locked once the race is active, same as always; location is editable even then — that's
- *  the screen's whole new purpose (see RaceDetailsViewModel.relocate). */
+/** "Relocate" (formerly "This Race") — name/location/mode editor for the device's
+ *  already-created race (see RaceDetailsViewModel's own doc: creation itself moved to Setup
+ *  Race, and course/bib-range fields are gone entirely). Reached from any mode screen's own top
+ *  bar. Name stays locked once the race is active, same as always; location and mode are both
+ *  editable even then — that's the screen's whole new purpose (see RaceDetailsViewModel.save). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RaceDetailsScreen(
@@ -53,52 +59,74 @@ fun RaceDetailsScreen(
 ) {
     val existingRace by viewModel.existingRace.collectAsStateWithLifecycle()
     val raceIsActive by viewModel.raceIsActive.collectAsStateWithLifecycle()
-    val cpModeActive by viewModel.cpModeActive.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     val raceNameHistory by viewModel.raceNameHistory.collectAsStateWithLifecycle()
     val locationHistory by viewModel.locationHistory.collectAsStateWithLifecycle()
+    val modeSwitchError by viewModel.modeSwitchError.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
     var name by remember { mutableStateOf("") }
     var location by remember { mutableStateOf("") }
+    var mode by remember { mutableStateOf<AppMode?>(null) }
     // Pre-fill exactly once from the loaded race — later emissions (e.g. a Mule pull touching
     // this race elsewhere) must not stomp on what the operator is typing.
     var prefilled by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
+    // The exact values this screen was seeded with, so leaving via Back can tell whether the
+    // operator actually changed anything this visit — see showDiscardConfirm's own doc below.
+    var initialName by remember { mutableStateOf("") }
+    var initialLocation by remember { mutableStateOf("") }
+    var initialMode by remember { mutableStateOf<AppMode?>(null) }
 
     LaunchedEffect(existingRace) {
         val race = existingRace ?: return@LaunchedEffect
         if (prefilled) return@LaunchedEffect
         name = race.name
         location = race.location
+        mode = race.mode?.let { raw -> runCatching { AppMode.valueOf(raw) }.getOrNull() }
+        initialName = name
+        initialLocation = location
+        initialMode = mode
         prefilled = true
     }
 
     // Name is locked the instant the race is active, exactly as before — it's baked into the
     // label's sync identity, and a race already recording history needs a different name to
-    // actually be a new race. Location is NOT gated on raceIsActive any more — that's this
-    // screen's whole new purpose (relocating mid-race); it only needs the initial prefill to
-    // have landed, same guard every other field on this screen has always used before it's safe
-    // to let the operator start typing.
+    // actually be a new race. Location and mode are NOT gated on raceIsActive any more — that's
+    // this screen's whole new purpose (relocating/switching mode mid-race); they only need the
+    // initial prefill to have landed, same guard every other field on this screen has always
+    // used before it's safe to let the operator start typing.
     val nameFieldEnabled = prefilled && !raceIsActive
-    val locationFieldEnabled = prefilled
+    val fieldsEnabled = prefilled
     val nameValid = isValidRaceName(name)
-    // Only enforced when CP Mode is among the currently-active modes on this race — mirrors
-    // CpModeScreen's own Start-button gating on the exact same check; every other mode's
-    // location stays free-form, same as it always has been.
-    val locationValid = !cpModeActive || isValidCpLocation(location)
-    // Pre-race: both fields matter, exactly as before. Mid-race: name is locked to its already-
-    // valid stored value, so only location's own validity gates Save.
-    val canSave = prefilled && !isSaving && location.isNotBlank() && locationValid &&
+    val locationValid = isValidLocationForMode(location, mode)
+    // Pre-race: both name and location/mode matter, exactly as before. Mid-race: name is locked
+    // to its already-valid stored value, so only location/mode validity gates Save.
+    val canSave = prefilled && !isSaving && locationValid &&
         (raceIsActive || (name.isNotBlank() && nameValid))
+    val hasChanges = name != initialName || location != initialLocation || mode != initialMode
+
+    // Leaving with unsaved edits still on screen needs a confirm — no separate draft to revert
+    // here (unlike Setup Race/Setup Server), since this screen's own state is only ever seeded
+    // from the race's own current values and never persisted anywhere until Save — but silently
+    // discarding a typed relocate/mode-switch is still a real "lost my edit" trap worth
+    // guarding against. Wired to both the top bar's own Back button and the system back
+    // gesture/button.
+    var showDiscardConfirm by remember { mutableStateOf(false) }
+    val attemptExit = {
+        if (hasChanges) showDiscardConfirm = true else onCancel()
+    }
+    BackHandler(onBack = attemptExit)
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Relocate") },
-                navigationIcon = { TextButton(onClick = withClickSound(onCancel)) { Text("Cancel") } },
-                actions = { HideKeyboardButton() },
+                actions = {
+                    HideKeyboardButton()
+                    TextButton(onClick = withClickSound(attemptExit)) { Text("Back") }
+                },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },
@@ -141,17 +169,23 @@ fun RaceDetailsScreen(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+            Text("Mode", style = MaterialTheme.typography.labelLarge)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                RelocateModeButton("Time", mode == AppMode.TIME, fieldsEnabled, Modifier.weight(1f)) { mode = AppMode.TIME }
+                RelocateModeButton("Bibs", mode == AppMode.BIBS, fieldsEnabled, Modifier.weight(1f)) { mode = AppMode.BIBS }
+                RelocateModeButton("CP", mode == AppMode.CP, fieldsEnabled, Modifier.weight(1f)) { mode = AppMode.CP }
+            }
             HistoryTextField(
                 value = location,
                 onValueChange = { location = it },
-                label = if (cpModeActive) "Location (e.g. CP1, CP2-Bridge)" else "Location (e.g. Finish, CP1, CP2, et al)",
+                label = if (mode == AppMode.CP) "Location (e.g. CP1, CP2-Bridge)" else "Location (e.g. Finish, CP1, CP2, et al)",
                 history = locationHistory,
-                enabled = locationFieldEnabled,
+                enabled = fieldsEnabled,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                 modifier = Modifier.fillMaxWidth(),
             )
-            if (cpModeActive && location.isNotBlank() && !locationValid) {
+            if (mode == AppMode.CP && location.isNotBlank() && !locationValid) {
                 Text(
                     "CP Mode's location must look like CP1, CP2-Bridge, etc. — \"CP\" followed by a number from 1 upwards, with an optional -name.",
                     style = MaterialTheme.typography.bodySmall,
@@ -160,23 +194,55 @@ fun RaceDetailsScreen(
             }
             if (raceIsActive) {
                 Text(
-                    "Saving a new location here records that this device has moved — its already-" +
-                        "recorded entries stay exactly as they are, and this is undoable like any " +
-                        "other entry if it was a mistake.",
+                    "Saving a new location and/or mode here records that this device has moved " +
+                        "and/or switched — its already-recorded entries stay exactly as they are, " +
+                        "and this is undoable like any other entry if it was a mistake.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
             Button(
                 onClick = withClickSound {
+                    val chosenMode = mode ?: return@withClickSound
                     isSaving = true
                     scope.launch {
-                        if (raceIsActive) viewModel.relocate(location) else viewModel.save(name, location)
-                        onSaved()
+                        val succeeded = viewModel.save(name, location, chosenMode)
+                        isSaving = false
+                        if (succeeded) onSaved()
                     }
                 },
                 enabled = canSave,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text(if (raceIsActive) "Save (relocate)" else "Save") }
         }
+    }
+
+    modeSwitchError?.let { message ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissModeSwitchError,
+            title = { Text("Can't switch mode") },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = withClickSound(viewModel::dismissModeSwitchError)) { Text("OK") }
+            },
+        )
+    }
+
+    if (showDiscardConfirm) {
+        DiscardChangesDialog(
+            onConfirm = {
+                showDiscardConfirm = false
+                onCancel()
+            },
+            onDismiss = { showDiscardConfirm = false },
+        )
+    }
+}
+
+@Composable
+private fun RelocateModeButton(label: String, selected: Boolean, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    if (selected) {
+        Button(onClick = withClickSound(onClick), enabled = enabled, modifier = modifier) { Text(label) }
+    } else {
+        OutlinedButton(onClick = withClickSound(onClick), enabled = enabled, modifier = modifier) { Text(label) }
     }
 }

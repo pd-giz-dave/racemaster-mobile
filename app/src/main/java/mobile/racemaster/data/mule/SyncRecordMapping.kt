@@ -3,44 +3,38 @@ package mobile.racemaster.data.mule
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
-import mobile.racemaster.util.formatElapsedSplitTime
+import mobile.racemaster.util.elapsedSeconds
 
 /**
  * Maps a unified history line into the wire/server record shape. [raceStartedAtMillis] is the
  * race's `timeModeStartedAtMillis` (a Time-mode row's own t=0 reference) — `splitTime` is
- * formatted elapsed-since-start to match the racemaster server's existing finisher time
- * convention (confirmed against real data, e.g. `"00:26:51"`), only for Time-mode rows; a
- * Bibs-mode row has no stopwatch of its own, so its `splitTime` stays null and it relies purely
- * on `timestampMillis`, the raw wall-clock instant the record was created. `bibNumber` is the
- * mirror image — see [SyncRecord]'s own doc for why every Bibs row sends a non-null string
- * (the bib itself, or `"n/a"` for an action with no bib of its own) while a Time row always
- * sends null. No device name is attached here — the caller already knows (and separately threads
- * through) which device this batch of records belongs to; see [SyncRecord]'s own doc for why
- * that's not repeated per line either — location is the same story now (see [SyncRecord]'s own
- * doc): it travels only via `note` on SETUP/MODE_START/LOCATION rows, which this function passes
- * through unchanged like any other row's `note`, rather than as a field of its own here.
+ * elapsed-seconds-since-start, only for a real Time-mode row; a Bibs-mode row has no stopwatch
+ * of its own, so its `splitTime` stays null and it relies purely on `timestampMillis`, the raw
+ * wall-clock instant the record was created. `bibNumber` is a straight passthrough of the local
+ * column — already null for every non-`BIB_REQUIRED_ACTIONS` row, including every Time-mode row
+ * (see [SyncRecord]'s own doc for why neither field carries any discriminator meaning any more).
+ * No device name is attached here — the caller already knows (and separately threads through)
+ * which device this batch of records belongs to; see [SyncRecord]'s own doc for why that's not
+ * repeated per line either — location is the same story: it travels only via `note` on
+ * `HistoryAction.LOCATION` rows, which this function passes through unchanged like any other
+ * row's `note`, rather than as a field of its own here.
  *
- * MODE_START is the one Time-mode row whose `splitTime` deliberately isn't a real elapsed time:
- * it's written at the exact same instant as the real Start marker right after it (see
- * TimeModeRepository.startStopwatch), so a naive elapsed calculation would also come out
- * "00:00:00" — indistinguishable on the wire from a genuine Start. It sends `"n/a"` instead,
- * mirroring the same sentinel Bibs/CP's own non-bib markers already use for `bibNumber` — a
- * consumer already told to skip a blank/`"n/a"` split time (the same convention this mirrors)
- * naturally never mistakes this boundary marker for a real split.
+ * MODE_START's `splitTime` is deliberately always null, regardless of mode — it's written at the
+ * exact same instant as the real Start marker right after it (see
+ * TimeModeRepository.startStopwatch), so a naive elapsed calculation would come out "00:00:00",
+ * indistinguishable from a genuine Start; its own explicit mode declaration already lives in
+ * `note` instead (see `AppMode.wireName()`), so there's nothing left for `splitTime` to signal.
  */
 fun HistoryLineEntity.toSyncRecord(raceStartedAtMillis: Long?): SyncRecord {
-    val splitTime = if (mode == HistoryMode.TIME && action == HistoryAction.MODE_START) {
-        "n/a"
-    } else if (mode == HistoryMode.TIME) {
+    val splitTime = if (mode == HistoryMode.TIME && action != HistoryAction.MODE_START) {
         val elapsedMillis = raceStartedAtMillis?.let { timestampMillis - it } ?: 0L
-        formatElapsedSplitTime(elapsedMillis)
+        elapsedSeconds(elapsedMillis).toInt()
     } else {
         null
     }
-    val wireBibNumber = if (mode == HistoryMode.BIBS || mode == HistoryMode.CP) bibNumber?.toString() ?: "n/a" else null
     return SyncRecord(
         action = action.toServerAction(),
-        bibNumber = wireBibNumber,
+        bibNumber = bibNumber,
         splitTime = splitTime,
         splitNumber = splitNumber,
         lineNumber = lineNumber,
@@ -73,12 +67,8 @@ private fun HistoryAction.toServerAction(): String = when (this) {
     // tell this boundary marker apart from a mode's own real Start/Clock row (see
     // HistoryAction.MODE_START's own doc), even though both show as "Start" in this app's UI.
     HistoryAction.MODE_START -> "ModeStart"
-    // See HistoryAction.SETUP's own doc — the only wire content this marker carries that
-    // matters is `note` (the race's location as of setup), but it still needs its own honest,
-    // distinct action string like every other row.
-    HistoryAction.SETUP -> "Setup"
     // See HistoryAction.LOCATION's own doc — this marker's own new-location value travels via
-    // `note` (not this action string), same convention SETUP already established.
+    // `note`, not this action string.
     HistoryAction.LOCATION -> "Location"
 }
 
@@ -109,7 +99,6 @@ fun SyncRecord.toHistoryAction(): HistoryAction = when (action) {
     "Reset" -> HistoryAction.RESET
     "Undo" -> HistoryAction.UNDO
     "ModeStart" -> HistoryAction.MODE_START
-    "Setup" -> HistoryAction.SETUP
     "Location" -> HistoryAction.LOCATION
     // An unrecognized wire value - should not get here
     else -> HistoryAction.IGNORE

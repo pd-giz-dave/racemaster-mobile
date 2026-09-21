@@ -51,7 +51,7 @@ fun SetupDeviceScreen(
         topBar = {
             TopAppBar(
                 title = { Text("Setup Device") },
-                navigationIcon = { TextButton(onClick = withClickSound(onDone)) { Text("Back") } },
+                actions = { TextButton(onClick = withClickSound(onDone)) { Text("Back") } },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },

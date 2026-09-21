@@ -1,5 +1,6 @@
 package mobile.racemaster.ui.editentry
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -43,6 +44,7 @@ import mobile.racemaster.data.repository.unexpectedBibWarning
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.ui.components.ActionPickerDialog
+import mobile.racemaster.ui.components.DiscardChangesDialog
 import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.util.withClickSound
 
@@ -81,21 +83,43 @@ fun EditEntryScreen(
     // RaceDetailsScreen/EditSplitScreen use, so a later recomposition never stomps on what the
     // operator's already typing.
     var prefilled by remember { mutableStateOf(false) }
+    // The exact values this screen was seeded with, so leaving can tell whether the operator
+    // actually changed anything this visit — see showDiscardConfirm's own doc below. Covers
+    // both this screen's sub-forms (a plain Clock-row time edit only ever touches noteText; the
+    // full type/bib/note edit can touch all three).
+    var initialEditType by remember { mutableStateOf<HistoryAction?>(null) }
+    var initialBibText by remember { mutableStateOf("") }
+    var initialNoteText by remember { mutableStateOf("") }
     LaunchedEffect(entry) {
         if (entry != null && !prefilled) {
             editType = entry.action
             bibText = entry.bibNumber?.toString().orEmpty()
             noteText = entry.note.orEmpty()
+            initialEditType = editType
+            initialBibText = bibText
+            initialNoteText = noteText
             prefilled = true
         }
     }
+
+    val hasChanges = editType != initialEditType || bibText != initialBibText || noteText != initialNoteText
+    // Leaving with an unsaved entry edit still on screen needs a confirm — wired to the top
+    // bar's own Back button, both sub-forms' own in-body Cancel button, and the system back
+    // gesture/button, so none of them bypasses this.
+    var showDiscardConfirm by remember { mutableStateOf(false) }
+    val attemptExit = {
+        if (hasChanges) showDiscardConfirm = true else onCancel()
+    }
+    BackHandler(onBack = attemptExit)
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(entry?.let { "Editing ${formatSplitRef(it.splitNumber)}" } ?: "Editing entry") },
-                navigationIcon = { TextButton(onClick = withClickSound(onCancel)) { Text("Cancel") } },
-                actions = { HideKeyboardButton() },
+                actions = {
+                    HideKeyboardButton()
+                    TextButton(onClick = withClickSound(attemptExit)) { Text("Back") }
+                },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },
@@ -140,7 +164,7 @@ fun EditEntryScreen(
                         },
                         modifier = Modifier.weight(1f),
                     ) { Text("Save") }
-                    OutlinedButton(onClick = withClickSound(onCancel), modifier = Modifier.weight(1f)) { Text("Cancel") }
+                    OutlinedButton(onClick = withClickSound(attemptExit), modifier = Modifier.weight(1f)) { Text("Cancel") }
                 }
                 return@Column
             }
@@ -194,7 +218,7 @@ fun EditEntryScreen(
                     },
                     modifier = Modifier.weight(1f),
                 ) { Text("Save") }
-                OutlinedButton(onClick = withClickSound(onCancel), modifier = Modifier.weight(1f)) { Text("Cancel") }
+                OutlinedButton(onClick = withClickSound(attemptExit), modifier = Modifier.weight(1f)) { Text("Cancel") }
             }
 
             if (showActionPicker) {
@@ -209,5 +233,15 @@ fun EditEntryScreen(
                 )
             }
         }
+    }
+
+    if (showDiscardConfirm) {
+        DiscardChangesDialog(
+            onConfirm = {
+                showDiscardConfirm = false
+                onCancel()
+            },
+            onDismiss = { showDiscardConfirm = false },
+        )
     }
 }

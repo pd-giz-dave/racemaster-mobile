@@ -1,5 +1,6 @@
 package mobile.racemaster.ui.mulemode
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -45,6 +46,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import mobile.racemaster.BuildConfig
 import mobile.racemaster.data.settings.ServerSetupDraft
+import mobile.racemaster.ui.components.DiscardChangesDialog
 import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.ui.components.HistoryTextField
 import mobile.racemaster.ui.theme.ServerOfflineRed
@@ -95,6 +97,12 @@ fun MuleServerSetupScreen(
     // draft, not the possibly-fallback-filled url/username/password state below: an empty draft
     // (nothing ever saved) must revert to genuinely empty, not to the dev-default auto-fill.
     var lastKnownGoodDraft by remember { mutableStateOf<ServerSetupDraft?>(null) }
+    // The exact values this screen was seeded with (post dev-default fallback), so leaving via
+    // Back can tell whether the operator actually changed anything this visit — see
+    // showDiscardConfirm's own doc below.
+    var initialUrl by remember { mutableStateOf("") }
+    var initialUsername by remember { mutableStateOf("") }
+    var initialPassword by remember { mutableStateOf("") }
     var isSaving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     // null while the one-shot check is still resolving (renders nothing that one frame,
@@ -118,37 +126,49 @@ fun MuleServerSetupScreen(
         username = loadedDraft.username.ifBlank { BuildConfig.DEV_SERVER_USERNAME }
         password = loadedDraft.password.ifBlank { BuildConfig.DEV_SERVER_PASSWORD }
         lastKnownGoodDraft = loadedDraft
+        initialUrl = url
+        initialUsername = username
+        initialPassword = password
         prefilled = true
     }
 
     val canSave = !isSaving && url.isNotBlank() && username.isNotBlank() && password.isNotBlank()
+    val hasChanges = url != initialUrl || username != initialUsername || password != initialPassword
+
+    // A failed "Save & Log In" still updates the sticky draft (see
+    // MuleServerSetupViewModel.save's own doc — deliberate, for a quick in-place retry) while
+    // leaving the actually-active session untouched. Leaving instead of retrying must not leave
+    // that bad/half-edited draft behind masking the credentials sync is still really using —
+    // revert it back to what it held on entry first.
+    val discardAndExit: () -> Unit = {
+        val snapshot = lastKnownGoodDraft
+        if (snapshot == null) {
+            onDone()
+        } else {
+            scope.launch {
+                viewModel.revertDraft(snapshot)
+                onDone()
+            }
+        }
+    }
+    // Leaving with unsaved edits still on screen needs a confirm first — wired to both the top
+    // bar's own Back button and the system back gesture/button (see DiscardChangesDialog's own
+    // doc for why silently discarding, or letting the gesture bypass this, is the wrong default
+    // here).
+    var showDiscardConfirm by remember { mutableStateOf(false) }
+    val attemptExit: () -> Unit = {
+        if (hasChanges) showDiscardConfirm = true else discardAndExit()
+    }
+    BackHandler(onBack = attemptExit)
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Setup Server") },
-                navigationIcon = {
-                    TextButton(
-                        onClick = withClickSound {
-                            // A failed "Save & Log In" still updates the sticky draft (see
-                            // MuleServerSetupViewModel.save's own doc — deliberate, for a quick
-                            // in-place retry) while leaving the actually-active session
-                            // untouched. Cancelling out instead of retrying must not leave that
-                            // bad/half-edited draft behind masking the credentials sync is still
-                            // really using — revert it back to what it held on entry first.
-                            val snapshot = lastKnownGoodDraft
-                            if (snapshot == null) {
-                                onDone()
-                            } else {
-                                scope.launch {
-                                    viewModel.revertDraft(snapshot)
-                                    onDone()
-                                }
-                            }
-                        },
-                    ) { Text("Cancel") }
+                actions = {
+                    HideKeyboardButton()
+                    TextButton(onClick = withClickSound(attemptExit)) { Text("Back") }
                 },
-                actions = { HideKeyboardButton() },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },
@@ -267,5 +287,15 @@ fun MuleServerSetupScreen(
                 ) { Text("No Server") }
             }
         }
+    }
+
+    if (showDiscardConfirm) {
+        DiscardChangesDialog(
+            onConfirm = {
+                showDiscardConfirm = false
+                discardAndExit()
+            },
+            onDismiss = { showDiscardConfirm = false },
+        )
     }
 }

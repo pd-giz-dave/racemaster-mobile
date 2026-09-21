@@ -125,4 +125,41 @@ class HistoryFoldTest {
 
         assertEquals(listOf("relocate-to-cp3", "cp3-a"), sliced.map { it.content })
     }
+
+    // Composed usage — matches TimeModeRepository.observeCurrentSegmentSplits/
+    // EntryLogModeEngine.observeCurrentSegmentEntries's own real call order (fold, then slice by
+    // location). A single row shape carrying both foldLatestVisible's (refLineNumber/isUndo) and
+    // sinceLastLocationMarker's (isLocation) own fields, since a real HistoryLineEntity carries
+    // all of them together.
+    private data class SegmentRow(
+        val lineNumber: Long,
+        val refLineNumber: Long? = null,
+        val content: String,
+        val isUndo: Boolean = false,
+        val isLocation: Boolean = false,
+    )
+
+    private fun foldThenSlice(rows: List<SegmentRow>): List<SegmentRow> {
+        val folded = foldLatestVisible(rows, { it.lineNumber }, { it.refLineNumber }, { it.isUndo })
+        return sinceLastLocationMarker(folded, { it.lineNumber }, { it.isLocation })
+    }
+
+    @Test
+    fun undoingTheMostRecentLocationMarkerRevealsWhateverWasVisibleBeforeIt() {
+        // stop (line 1) -> relocate (LOCATION, line 2) -> undo of the relocate (line 3, ref=2).
+        val rows = listOf(
+            SegmentRow(1L, content = "stop"),
+            SegmentRow(2L, content = "relocated", isLocation = true),
+            SegmentRow(3L, refLineNumber = 2L, isUndo = true, content = "undo of relocate"),
+        )
+
+        val visible = foldThenSlice(rows)
+
+        // The undone LOCATION marker's whole group is dropped by folding first, so slicing
+        // finds no remaining LOCATION row at all and falls back to its own no-op branch,
+        // correctly re-exposing "stop" — the entry the operator's next Undo needs to reach.
+        // Slicing before folding (the previous, buggy order) would instead still find the
+        // undone LOCATION row's raw, never-deleted lineNumber as the boundary and hide "stop".
+        assertEquals(listOf("stop"), visible.map { it.content })
+    }
 }

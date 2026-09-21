@@ -21,20 +21,21 @@ class PulledRecordDaoTest {
     private lateinit var db: RacemasterDatabase
     private lateinit var dao: PulledRecordDao
 
+    // A record's real identity is now (sourceDeviceId, sourceRaceLabel, lineNumber) — no
+    // recordUuid column exists any more (see PulledRecordEntity's own doc: sync identity is
+    // derived from device+lineNumber, not a separately-generated id).
     private fun record(
-        recordUuid: String,
+        lineNumber: Long,
         pulledAtMillis: Long = 0L,
         sourceDeviceId: String = "device-1",
-        lineNumber: Long = 1L,
         sourceRaceLabel: String = "Test Race",
         deviceName: String = "clever-gecko",
     ) = PulledRecordEntity(
-        recordUuid = recordUuid,
         sourceDeviceId = sourceDeviceId,
         sourceRaceLabel = sourceRaceLabel,
         lineNumber = lineNumber,
         deviceName = deviceName,
-        payloadJson = """{"recordUuid":"$recordUuid"}""",
+        payloadJson = """{"lineNumber":$lineNumber}""",
         pulledAtMillis = pulledAtMillis,
     )
 
@@ -53,47 +54,47 @@ class PulledRecordDaoTest {
     }
 
     @Test
-    fun insertAllIgnoresDuplicateRecordUuids() = runTest {
-        dao.insertAll(listOf(record("a"), record("b")))
-        // Re-pulling after a dropped connection retry re-sends the same uuids — must not duplicate.
-        dao.insertAll(listOf(record("a"), record("c")))
+    fun insertAllIgnoresDuplicateLineNumbersFromTheSameSource() = runTest {
+        dao.insertAll(listOf(record(1L), record(2L)))
+        // Re-pulling after a dropped connection retry re-sends the same lines — must not duplicate.
+        dao.insertAll(listOf(record(1L), record(3L)))
 
         assertEquals(3, dao.getUnsynced().size)
     }
 
     @Test
     fun unsyncedCountReflectsOnlyUnsyncedRows() = runTest {
-        dao.insertAll(listOf(record("a"), record("b")))
+        dao.insertAll(listOf(record(1L), record(2L)))
         assertEquals(2, dao.observeUnsyncedCount().first())
 
-        dao.markSynced(listOf("a"), syncedAtMillis = 1_000L)
+        dao.markSynced("device-1", "Test Race", listOf(1L), syncedAtMillis = 1_000L)
         assertEquals(1, dao.observeUnsyncedCount().first())
     }
 
     @Test
-    fun markSyncedOnlyAffectsGivenRecordUuids() = runTest {
-        dao.insertAll(listOf(record("a"), record("b"), record("c")))
-        dao.markSynced(listOf("a", "c"), syncedAtMillis = 5_000L)
+    fun markSyncedOnlyAffectsGivenLineNumbers() = runTest {
+        dao.insertAll(listOf(record(1L), record(2L), record(3L)))
+        dao.markSynced("device-1", "Test Race", listOf(1L, 3L), syncedAtMillis = 5_000L)
 
         val unsynced = dao.getUnsynced()
         assertEquals(1, unsynced.size)
-        assertEquals("b", unsynced.single().recordUuid)
+        assertEquals(2L, unsynced.single().lineNumber)
     }
 
     @Test
     fun lastSyncedAtMillisIsNullUntilAnythingSynced() = runTest {
-        dao.insertAll(listOf(record("a")))
+        dao.insertAll(listOf(record(1L)))
         assertNull(dao.observeLastSyncedAtMillis().first())
 
-        dao.markSynced(listOf("a"), syncedAtMillis = 42_000L)
+        dao.markSynced("device-1", "Test Race", listOf(1L), syncedAtMillis = 42_000L)
         assertEquals(42_000L, dao.observeLastSyncedAtMillis().first())
     }
 
     @Test
     fun getUnsyncedOrdersByPulledAtMillis() = runTest {
-        dao.insertAll(listOf(record("later", pulledAtMillis = 200L), record("earlier", pulledAtMillis = 100L)))
+        dao.insertAll(listOf(record(2L, pulledAtMillis = 200L), record(1L, pulledAtMillis = 100L)))
         val ordered = dao.getUnsynced()
-        assertTrue(ordered.map { it.recordUuid } == listOf("earlier", "later"))
+        assertTrue(ordered.map { it.lineNumber } == listOf(1L, 2L))
     }
 
     @Test
@@ -105,10 +106,10 @@ class PulledRecordDaoTest {
     fun lastPulledLineNumberIsTheMaxAcrossRecordsFromThatSourceOnly() = runTest {
         dao.insertAll(
             listOf(
-                record("a", sourceDeviceId = "device-1", lineNumber = 3L),
-                record("b", sourceDeviceId = "device-1", lineNumber = 7L),
+                record(3L, sourceDeviceId = "device-1"),
+                record(7L, sourceDeviceId = "device-1"),
                 // A different device sharing the same race label must not affect device-1's cutoff.
-                record("c", sourceDeviceId = "device-2", lineNumber = 99L),
+                record(99L, sourceDeviceId = "device-2"),
             ),
         )
         assertEquals(7L, dao.getLastPulledLineNumber("device-1", "Test Race"))
@@ -123,8 +124,8 @@ class PulledRecordDaoTest {
         // history entirely from the list.
         dao.insertAll(
             listOf(
-                record("a", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", deviceName = "earlier-device", pulledAtMillis = 100L),
-                record("b", sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label", deviceName = "later-device", pulledAtMillis = 200L),
+                record(1L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", deviceName = "earlier-device", pulledAtMillis = 100L),
+                record(1L, sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label", deviceName = "later-device", pulledAtMillis = 200L),
             ),
         )
         val summaries = dao.observeSourceSummaries().first()
@@ -141,9 +142,9 @@ class PulledRecordDaoTest {
         // pulled in (an edit-echo/undo-marker can arrive in a later batch than its own root).
         dao.insertAll(
             listOf(
-                record("a", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", lineNumber = 9L, pulledAtMillis = 100L),
-                record("b", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", lineNumber = 3L, pulledAtMillis = 200L),
-                record("c", sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label", lineNumber = 40L, pulledAtMillis = 50L),
+                record(9L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", pulledAtMillis = 100L),
+                record(3L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", pulledAtMillis = 200L),
+                record(40L, sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label", pulledAtMillis = 50L),
             ),
         )
         val summaries = dao.observeSourceSummaries().first().associate { it.sourceDeviceId to it.lastLineNumber }
@@ -154,24 +155,25 @@ class PulledRecordDaoTest {
     fun getRecordsSinceOnlyReturnsRowsPastTheCutoffForThatSourceOrderedByLineNumber() = runTest {
         dao.insertAll(
             listOf(
-                record("a", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", lineNumber = 5L),
-                record("b", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", lineNumber = 2L),
-                record("c", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", lineNumber = 8L),
+                record(5L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
+                record(2L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
+                record(8L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
                 // Different source sharing the line-number range — must not leak in.
-                record("d", sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label", lineNumber = 6L),
+                record(6L, sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label"),
             ),
         )
         val since = dao.getRecordsSince("device-2", "Shared Label", sinceLineNumber = 1L)
-        assertEquals(listOf("b", "a", "c"), since.map { it.recordUuid })
+        assertEquals(listOf(2L, 5L, 8L), since.map { it.lineNumber })
     }
 
     @Test
     fun theSameRecordArrivingViaTwoRelayPathsStaysAtOneRow() = runTest {
         // The whole no-hop-count/TTL relay design leans on redundant transfer being a harmless
-        // storage no-op — this pins that down directly: the same recordUuid inserted twice
-        // (simulating it reaching this device via two different mule paths) must not duplicate.
-        dao.insertAll(listOf(record("shared-record", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label")))
-        dao.insertAll(listOf(record("shared-record", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label")))
+        // storage no-op — this pins that down directly: the same (source, lineNumber) inserted
+        // twice (simulating it reaching this device via two different mule paths) must not
+        // duplicate.
+        dao.insertAll(listOf(record(1L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label")))
+        dao.insertAll(listOf(record(1L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label")))
 
         assertEquals(1, dao.getUnsynced().size)
     }
@@ -180,31 +182,31 @@ class PulledRecordDaoTest {
     fun observeForSourceOnlyReturnsRowsFromTheGivenDevice() = runTest {
         dao.insertAll(
             listOf(
-                record("a", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
-                record("b", sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label"),
+                record(1L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
+                record(2L, sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label"),
             ),
         )
         val rows = dao.observeForSource("Shared Label", sourceDeviceId = "device-3").first()
-        assertEquals(listOf("b"), rows.map { it.recordUuid })
+        assertEquals(listOf(2L), rows.map { it.lineNumber })
     }
 
     @Test
     fun deleteForSourceOnlyRemovesTheGivenDevicesRowsForThatRaceLabel() = runTest {
         dao.insertAll(
             listOf(
-                record("a", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
+                record(1L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
                 // Same device, different race label — must survive.
-                record("b", sourceDeviceId = "device-2", sourceRaceLabel = "Other Label"),
+                record(2L, sourceDeviceId = "device-2", sourceRaceLabel = "Other Label"),
                 // Same race label, different device — must survive (see
                 // observeForSourceOnlyReturnsRowsFromTheGivenDevice's own reasoning).
-                record("c", sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label"),
+                record(3L, sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label"),
             ),
         )
         dao.deleteForSource("Shared Label", sourceDeviceId = "device-2")
 
-        assertEquals(emptyList<String>(), dao.observeForSource("Shared Label", sourceDeviceId = "device-2").first().map { it.recordUuid })
-        assertEquals(listOf("b"), dao.getUnsynced().filter { it.sourceDeviceId == "device-2" }.map { it.recordUuid })
-        assertEquals(listOf("c"), dao.observeForSource("Shared Label", sourceDeviceId = "device-3").first().map { it.recordUuid })
+        assertEquals(emptyList<Long>(), dao.observeForSource("Shared Label", sourceDeviceId = "device-2").first().map { it.lineNumber })
+        assertEquals(listOf(2L), dao.getUnsynced().filter { it.sourceDeviceId == "device-2" }.map { it.lineNumber })
+        assertEquals(listOf(3L), dao.observeForSource("Shared Label", sourceDeviceId = "device-3").first().map { it.lineNumber })
     }
 
     @Test
@@ -212,7 +214,7 @@ class PulledRecordDaoTest {
         // The whole point of allowing deletion mid-race: the next pull re-requests this
         // device's full history from scratch rather than a delta, since there's nothing left
         // locally to compute a cutoff from.
-        dao.insertAll(listOf(record("a", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", lineNumber = 5L)))
+        dao.insertAll(listOf(record(5L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label")))
         assertEquals(5L, dao.getLastPulledLineNumber("device-2", "Shared Label"))
 
         dao.deleteForSource("Shared Label", sourceDeviceId = "device-2")
@@ -221,27 +223,28 @@ class PulledRecordDaoTest {
     }
 
     @Test
-    fun unrelayedSinkConfirmedRecordUuidsForSourceOnlyReturnsSyncedRowsFromThatSource() = runTest {
+    fun unrelayedSinkConfirmedLineNumbersForSourceOnlyReturnsSyncedRowsFromThatSource() = runTest {
         dao.insertAll(
             listOf(
-                record("synced", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
-                record("unsynced", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
+                record(1L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
+                record(2L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
                 // Synced, but a different source — must not leak into device-2's own list.
-                record("other-source-synced", sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label"),
+                record(1L, sourceDeviceId = "device-3", sourceRaceLabel = "Shared Label"),
             ),
         )
-        dao.markSynced(listOf("synced", "other-source-synced"), syncedAtMillis = 1_000L)
+        dao.markSynced("device-2", "Shared Label", listOf(1L), syncedAtMillis = 1_000L)
+        dao.markSynced("device-3", "Shared Label", listOf(1L), syncedAtMillis = 1_000L)
 
-        val confirmed = dao.getUnrelayedSinkConfirmedRecordUuidsForSource("device-2", "Shared Label")
+        val confirmed = dao.getUnrelayedSinkConfirmedLineNumbersForSource("device-2", "Shared Label")
 
-        assertEquals(listOf("synced"), confirmed)
+        assertEquals(listOf(1L), confirmed)
     }
 
     @Test
-    fun unrelayedSinkConfirmedRecordUuidsForSourceIsEmptyWhenNothingIsSyncedYet() = runTest {
-        dao.insertAll(listOf(record("a", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label")))
+    fun unrelayedSinkConfirmedLineNumbersForSourceIsEmptyWhenNothingIsSyncedYet() = runTest {
+        dao.insertAll(listOf(record(1L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label")))
 
-        assertEquals(emptyList<String>(), dao.getUnrelayedSinkConfirmedRecordUuidsForSource("device-2", "Shared Label"))
+        assertEquals(emptyList<Long>(), dao.getUnrelayedSinkConfirmedLineNumbersForSource("device-2", "Shared Label"))
     }
 
     @Test
@@ -251,17 +254,17 @@ class PulledRecordDaoTest {
         // every subsequent tick — otherwise a large race's ack payload only ever grows.
         dao.insertAll(
             listOf(
-                record("told", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
-                record("not-yet-told", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
+                record(1L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
+                record(2L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label"),
             ),
         )
-        dao.markSynced(listOf("told", "not-yet-told"), syncedAtMillis = 1_000L)
+        dao.markSynced("device-2", "Shared Label", listOf(1L, 2L), syncedAtMillis = 1_000L)
 
-        dao.markConfirmationRelayed(listOf("told"), relayedAtMillis = 2_000L)
+        dao.markConfirmationRelayed("device-2", "Shared Label", listOf(1L), relayedAtMillis = 2_000L)
 
         assertEquals(
-            listOf("not-yet-told"),
-            dao.getUnrelayedSinkConfirmedRecordUuidsForSource("device-2", "Shared Label"),
+            listOf(2L),
+            dao.getUnrelayedSinkConfirmedLineNumbersForSource("device-2", "Shared Label"),
         )
     }
 
@@ -272,9 +275,9 @@ class PulledRecordDaoTest {
         // own pulled-from-others staleness check for that label.
         dao.insertAll(
             listOf(
-                record("a", sourceDeviceId = "device-1", sourceRaceLabel = "Shared Label", pulledAtMillis = 100L),
-                record("b", sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", pulledAtMillis = 300L),
-                record("c", sourceDeviceId = "device-3", sourceRaceLabel = "Other Label", pulledAtMillis = 200L),
+                record(1L, sourceDeviceId = "device-1", sourceRaceLabel = "Shared Label", pulledAtMillis = 100L),
+                record(1L, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label", pulledAtMillis = 300L),
+                record(1L, sourceDeviceId = "device-3", sourceRaceLabel = "Other Label", pulledAtMillis = 200L),
             ),
         )
         val activity = dao.observeLastTouchedByRaceLabel().first().associate { it.sourceRaceLabel to it.lastTouchedAtMillis }

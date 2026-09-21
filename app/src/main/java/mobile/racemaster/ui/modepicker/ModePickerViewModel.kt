@@ -6,41 +6,43 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.HistoryAction
+import mobile.racemaster.data.db.entity.NON_ENTRY_ACTIONS
+import mobile.racemaster.data.mule.BluetoothStateRepository
+import mobile.racemaster.data.mule.BtPollingStatus
+import mobile.racemaster.data.mule.ServerStatusRepository
+import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
-import mobile.racemaster.data.repository.activeModeLabels
 import mobile.racemaster.data.repository.isModeStarted
-import mobile.racemaster.data.repository.isRaceActive
-import mobile.racemaster.data.repository.isRaceInProgress
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
+import mobile.racemaster.util.formatBibsSoFarText
+import mobile.racemaster.util.formatCpSoFarText
+import mobile.racemaster.util.formatTimeSplitsText
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 
-data class ActiveRaceStatus(
+/** Mode Picker's own version of the [mobile.racemaster.ui.components.RaceProgressSummary]
+ *  fields it doesn't already hold as a plain top-level StateFlow (deviceName, btPollingStatus —
+ *  both device-wide, passed straight through from this ViewModel's own separate flows instead). */
+data class RaceSummaryUiState(
     val raceLabel: String,
-    val currentModeLabel: String,
-    val splitCount: Int,
-    val bibCount: Int,
-    val cpCount: Int,
-    val isStopped: Boolean,
-    // Which of Time/Bibs/CP this race is actually active in — lets the picker mark the
-    // matching mode button(s) "-active" alongside this same status, rather than the operator
-    // having to cross-reference currentModeLabel's own text against the button labels by eye.
-    val activeModes: Set<AppMode> = emptySet(),
+    val raceLocation: String,
+    val nextSplitNumber: Int,
+    val unsyncedCount: Int,
+    val lastSyncedAtMillis: Long?,
+    val serverStatus: ServerStatusState,
+    val progressText: String,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -50,6 +52,8 @@ class ModePickerViewModel(
     private val bibsModeRepository: BibsModeRepository,
     private val cpModeRepository: CpModeRepository,
     private val settingsRepository: SettingsRepository,
+    private val serverStatusRepository: ServerStatusRepository,
+    bluetoothStateRepository: BluetoothStateRepository,
 ) : ViewModel() {
 
     val hasActiveRace: StateFlow<Boolean> = settingsRepository.activeRaceId
@@ -59,88 +63,110 @@ class ModePickerViewModel(
     val deviceName: StateFlow<String?> = settingsRepository.deviceName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    // Device-wide, not tied to whether a race is selected — same reasoning as TimeModeViewModel's
+    // own identical flow.
+    val btPollingStatus: StateFlow<BtPollingStatus> = combine(
+        bluetoothStateRepository.advertisingWarning,
+        bluetoothStateRepository.lastPolledAtMillis,
+        ::BtPollingStatus,
+    ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BtPollingStatus())
+
     // Echoed on the picker regardless of whether a race is active, alongside the Mule Mode
     // button — see SettingsRepository.muleSyncEnabled's own doc for what this actually gates.
     val muleSyncEnabled: StateFlow<Boolean> = settingsRepository.muleSyncEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
-    // Surfaces the active race (if any) so the picker can tell the operator what's still
-    // open and which mode to return to, rather than letting them lose track of it. Stays
-    // visible once Stopped — only Reset (see isRaceActive) clears it.
-    val activeRaceStatus: StateFlow<ActiveRaceStatus?> = settingsRepository.activeRaceId
+    // Which mode(s) still have this race active — not this device's own last-selected AppMode
+    // (that used to read "Mule Mode" whenever the operator had since switched screens away from
+    // whichever mode actually started this race, pointing them at a screen with no way to
+    // Stop/Reset it at all). Lets the picker mark the matching mode button "- active".
+    val activeModes: StateFlow<Set<AppMode>> = settingsRepository.activeRaceId
+        .flatMapLatest { raceId ->
+            if (raceId == null) {
+                flowOf(emptySet())
+            } else {
+                raceRepository.observeRace(raceId).map { race ->
+                    if (race == null) emptySet() else AppMode.entries.filterTo(mutableSetOf()) { isModeStarted(it, race) }
+                }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
+    // This race's own single, currently-chosen mode (RaceRepository.recordModeStart's own
+    // write, at Setup Race or Relocate) — what the picker's one "Start <mode>" button both
+    // labels itself from and navigates to. Mode is no longer switched here at all (see
+    // RaceDetailsScreen's own Relocate flow for the only remaining way to change it once a race
+    // exists) — tapping the button just opens whichever mode this race already has.
+    val raceMode: StateFlow<AppMode?> = settingsRepository.activeRaceId
         .flatMapLatest { raceId ->
             if (raceId == null) {
                 flowOf(null)
             } else {
-                combine(
-                    raceRepository.observeRace(raceId),
-                    timeModeRepository.observeCurrentSegmentSplits(raceId),
-                    bibsModeRepository.observeCurrentSegmentEntries(raceId),
-                    cpModeRepository.observeCurrentSegmentEntries(raceId),
-                ) { race, splits, bibEntries, cpEntries ->
-                    if (race == null) return@combine null
-                    val active = isRaceActive(
-                        race.timeModeStartedAtMillis,
-                        race.bibsModeStartedAtMillis,
-                        race.cpModeStartedAtMillis,
-                    )
-                    if (!active) return@combine null
-                    val inProgress = isRaceInProgress(
-                        race.timeModeStartedAtMillis,
-                        race.timeModeStoppedAtMillis,
-                        race.bibsModeStartedAtMillis,
-                        race.bibsModeStoppedAtMillis,
-                        race.cpModeStartedAtMillis,
-                        race.cpModeStoppedAtMillis,
-                    )
-                    ActiveRaceStatus(
-                        raceLabel = race.label,
-                        // Which mode(s) actually still have this race active — not this device's
-                        // own last-selected AppMode (that used to read "Mule Mode" whenever the
-                        // operator had since switched screens away from whichever mode actually
-                        // started this race, pointing them at a screen with no way to Stop/Reset
-                        // it at all). See activeModeLabels' own doc.
-                        currentModeLabel = activeModeLabels(
-                            race.timeModeStartedAtMillis,
-                            race.bibsModeStartedAtMillis,
-                            race.cpModeStartedAtMillis,
-                        ).joinToString(" and "),
-                        splitCount = splits.count { it.splitNumber != 0 },
-                        bibCount = bibEntries.count { it.action != HistoryAction.CLOCK },
-                        cpCount = cpEntries.count { it.action != HistoryAction.CLOCK },
-                        isStopped = !inProgress,
-                        activeModes = AppMode.entries.filterTo(mutableSetOf()) { isModeStarted(it, race) },
-                    )
+                raceRepository.observeRace(raceId).map { race ->
+                    race?.mode?.let { raw -> runCatching { AppMode.valueOf(raw) }.getOrNull() }
                 }
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    private val modeSwitchErrorFlow = MutableStateFlow<String?>(null)
-    val modeSwitchError: StateFlow<String?> = modeSwitchErrorFlow.asStateFlow()
-
-    /** Mode switch when a race is already active — no new race needed. Switching into Bibs
-     *  Mode for a race started in a different mode lands on an empty Bibs segment, same as a
-     *  freshly created one — its own Start button (see BibsModeScreen) is what begins it,
-     *  nothing needed here. Blocked (see [RaceRepository.blockedModeSwitchReason]) rather than
-     *  performed when Bibs and CP are being switched between each other and the one being left
-     *  still has live, un-Reset activity. */
-    fun selectModeForExistingRace(mode: AppMode, onComplete: () -> Unit) {
-        viewModelScope.launch {
-            val raceId = settingsRepository.activeRaceId.first()
-            val blockedReason = raceId?.let { raceRepository.blockedModeSwitchReason(it, mode) }
-            if (blockedReason != null) {
-                modeSwitchErrorFlow.value = blockedReason
-                return@launch
+    // Once a race has genuinely been set up (a race exists AND its mode is known), the same
+    // device/race/location/sync/progress summary the live mode screens themselves show (see
+    // RaceProgressSummary) — sourced from whichever of Time/Bibs/CP repositories matches
+    // [raceMode], since that's this race's one currently-recording mode.
+    val raceSummary: StateFlow<RaceSummaryUiState?> = combine(settingsRepository.activeRaceId, raceMode) { raceId, mode -> raceId to mode }
+        .flatMapLatest { (raceId, mode) ->
+            if (raceId == null || mode == null) {
+                flowOf(null)
+            } else {
+                val unsyncedFlow: Flow<Int> = when (mode) {
+                    AppMode.TIME -> timeModeRepository.observeUnsyncedCount(raceId)
+                    AppMode.BIBS -> bibsModeRepository.observeUnsyncedCount(raceId)
+                    AppMode.CP -> cpModeRepository.observeUnsyncedCount(raceId)
+                }
+                val lastSyncedFlow: Flow<Long?> = when (mode) {
+                    AppMode.TIME -> timeModeRepository.observeLastSyncedAtMillis(raceId)
+                    AppMode.BIBS -> bibsModeRepository.observeLastSyncedAtMillis(raceId)
+                    AppMode.CP -> cpModeRepository.observeLastSyncedAtMillis(raceId)
+                }
+                val progressTextFlow: Flow<String> = when (mode) {
+                    // Matches TimeModeViewModel's own splitCount exactly (action == SPLIT, an
+                    // allowlist) — not splitNumber != 0, which would also count the fixed Start
+                    // marker's... no, Start's splitNumber is 0 so that's excluded correctly, but
+                    // a LOCATION row's splitNumber is null, and null != 0 is true, wrongly
+                    // counting it as a real split.
+                    AppMode.TIME -> timeModeRepository.observeCurrentSegmentSplits(raceId)
+                        .map { formatTimeSplitsText(it.count { s -> s.action == HistoryAction.SPLIT }) }
+                    AppMode.BIBS -> bibsModeRepository.observeCurrentSegmentEntries(raceId)
+                        .map { formatBibsSoFarText(it.count { e -> e.action !in NON_ENTRY_ACTIONS }) }
+                    AppMode.CP -> cpModeRepository.observeCurrentSegmentEntries(raceId)
+                        .map { formatCpSoFarText(it.count { e -> e.action !in NON_ENTRY_ACTIONS }) }
+                }
+                combine(
+                    raceRepository.observeRace(raceId),
+                    unsyncedFlow,
+                    lastSyncedFlow,
+                    progressTextFlow,
+                    serverStatusRepository.state,
+                ) { race, unsynced, lastSynced, progressText, serverStatus ->
+                    if (race == null) return@combine null
+                    val nextSplitNumber = when (mode) {
+                        AppMode.TIME -> race.timeModeNextSplit
+                        AppMode.BIBS -> race.bibsModeNextSplit
+                        AppMode.CP -> race.cpModeNextSplit
+                    }
+                    RaceSummaryUiState(
+                        raceLabel = race.label,
+                        raceLocation = race.location,
+                        nextSplitNumber = nextSplitNumber,
+                        unsyncedCount = unsynced,
+                        lastSyncedAtMillis = lastSynced,
+                        serverStatus = serverStatus,
+                        progressText = progressText,
+                    )
+                }
             }
-            settingsRepository.setAppMode(mode)
-            onComplete()
         }
-    }
-
-    fun dismissModeSwitchError() {
-        modeSwitchErrorFlow.value = null
-    }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     companion object {
         val Factory: ViewModelProvider.Factory = viewModelFactory {
@@ -152,6 +178,8 @@ class ModePickerViewModel(
                     container.bibsModeRepository,
                     container.cpModeRepository,
                     container.settingsRepository,
+                    container.serverStatusRepository,
+                    container.bluetoothStateRepository,
                 )
             }
         }

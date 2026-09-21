@@ -1,5 +1,6 @@
 package mobile.racemaster.ui.modepicker
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -27,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.ui.components.DiscardChangesDialog
 import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.util.withClickSound
 
@@ -47,20 +49,37 @@ fun NameDeviceScreen(
     // generation side effect landing after first composition) must not stomp on what the
     // operator is already typing.
     var prefilled by remember { mutableStateOf(false) }
+    // The exact value this screen was seeded with, so leaving via Back can tell whether the
+    // operator actually changed anything this visit — see showDiscardConfirm's own doc below.
+    var initialName by remember { mutableStateOf("") }
 
     LaunchedEffect(deviceName) {
         val loaded = deviceName ?: return@LaunchedEffect
         if (prefilled) return@LaunchedEffect
         nameText = loaded
+        initialName = loaded
         prefilled = true
     }
+
+    val hasChanges = nameText != initialName
+    // Leaving with an unsaved rename (typed or via Suggest Name) still on screen needs a
+    // confirm — no separate draft to revert here, the field is only ever committed via Save, so
+    // discarding just means leaving without calling it. Wired to both the top bar's own Back
+    // button and the system back gesture/button.
+    var showDiscardConfirm by remember { mutableStateOf(false) }
+    val attemptExit = {
+        if (hasChanges) showDiscardConfirm = true else onDone()
+    }
+    BackHandler(onBack = attemptExit)
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Name Device") },
-                navigationIcon = { TextButton(onClick = withClickSound(onDone)) { Text("Cancel") } },
-                actions = { HideKeyboardButton() },
+                actions = {
+                    HideKeyboardButton()
+                    TextButton(onClick = withClickSound(attemptExit)) { Text("Back") }
+                },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },
@@ -113,5 +132,15 @@ fun NameDeviceScreen(
                 ) { Text("Save") }
             }
         }
+    }
+
+    if (showDiscardConfirm) {
+        DiscardChangesDialog(
+            onConfirm = {
+                showDiscardConfirm = false
+                onDone()
+            },
+            onDismiss = { showDiscardConfirm = false },
+        )
     }
 }

@@ -28,7 +28,7 @@ import mobile.racemaster.data.db.entity.TargetedProgressEntity
         ProgressEntity::class,
         TargetedProgressEntity::class,
     ],
-    version = 32,
+    version = 33,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

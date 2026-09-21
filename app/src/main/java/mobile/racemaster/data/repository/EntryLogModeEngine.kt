@@ -55,7 +55,7 @@ interface ModeProgressColumns {
     suspend fun clearStoppedAt(raceId: Long)
     suspend fun resetCounters(raceId: Long)
 
-    // Relocation's own counter reset/restore (see RaceRepository.relocateActiveModes and this
+    // Relocation's own counter reset/restore (see RaceRepository.recordModeStart and this
     // engine's own undoMostRecent LOCATION branch) — deliberately narrower than resetCounters,
     // which also clears started/stoppedAtMillis and would wrongly kick an in-progress mode back
     // to pre-Start state.
@@ -96,25 +96,28 @@ internal class EntryLogModeEngine(
     // HistoryAction.MODE_START's own doc), never meant for the live screen at all.
     //
     // Further sliced to "since the last relocation, inclusive" (see
-    // HistoryFold.sinceLastLocationMarker's own doc) BEFORE folding — this is what keeps a bib
+    // HistoryFold.sinceLastLocationMarker's own doc) AFTER folding — this is what keeps a bib
     // recorded at one station from being flagged as a duplicate of (or already-accounted-for
     // against) the same bib number at a station the operator has since moved to. Deliberately a
     // second, additional slice here rather than baking LOCATION into observeCurrentSegment's own
     // RESET boundary — that would make a LOCATION row unreachable to undo for the same structural
-    // reason RESET itself already is.
+    // reason RESET itself already is. Folding first (not slicing first) matters: once a LOCATION
+    // marker has itself been undone, sinceLastLocationMarker must stop treating it as the
+    // boundary — it only ever looks at rows still standing after folding, so an undone LOCATION
+    // row (whose whole group folding just dropped) can never be found there, correctly falling
+    // back to whatever real entry was visible before it. Slicing before folding kept using that
+    // LOCATION row's raw, never-deleted lineNumber as the boundary even after undoing it, hiding
+    // everything before it — including the one entry the operator's next Undo press needed to
+    // reach.
     fun observeCurrentSegmentEntries(raceId: Long): Flow<List<HistoryLineEntity>> =
         historyLineDao.observeCurrentSegment(raceId, mode, HistoryAction.RESET).map {
-            val sinceLocation = sinceLastLocationMarker(
+            val folded = foldLatestVisible(
                 it.filter { e -> e.action != HistoryAction.MODE_START },
-                { e -> e.lineNumber },
-                { e -> e.action == HistoryAction.LOCATION },
-            )
-            foldLatestVisible(
-                sinceLocation,
                 { e -> e.lineNumber },
                 { e -> e.refLineNumber },
                 { e -> e.action == HistoryAction.UNDO },
             )
+            sinceLastLocationMarker(folded, { e -> e.lineNumber }, { e -> e.action == HistoryAction.LOCATION })
         }
 
     fun observeUnsyncedCount(raceId: Long): Flow<Int> = historyLineDao.observeUnsyncedCountForRace(raceId, mode)
@@ -241,13 +244,13 @@ internal class EntryLogModeEngine(
             when {
                 // A LOCATION root never merely "consumed one count" the way a real entry does —
                 // its own forward write RESET the counter to 1 (see
-                // RaceRepository.insertLocationMarkerAndReset), so undoing it must restore
+                // RaceRepository.recordModeStart), so undoing it must restore
                 // whatever the counter (and RaceEntity.location) actually were beforehand, not
                 // decrement whatever they happen to be now. Falling through to decrementCounter()
                 // here (as an unguarded `else` would) would silently corrupt the counter.
                 root.action == HistoryAction.LOCATION -> {
                     root.priorSplitCounter?.let { columns.setCounterTo(raceId, it) }
-                    root.previousLocation?.let { raceDao.updateLocationOnly(raceId, it) }
+                    root.previousLocation?.let { raceDao.updateModeAndLocation(raceId, root.previousMode, it) }
                 }
                 // Neither RETIRE nor STOP ever consumed the counter in the first place (see
                 // recordEntry/stop()/NO_SPLIT_ACTIONS), so undoing one must not decrement it

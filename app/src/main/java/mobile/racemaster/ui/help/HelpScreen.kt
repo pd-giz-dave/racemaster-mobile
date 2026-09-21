@@ -46,7 +46,7 @@ fun HelpScreen(onBack: () -> Unit) {
                         },
                     )
                 },
-                navigationIcon = { TextButton(onClick = withClickSound(onBack)) { Text("Back") } },
+                actions = { TextButton(onClick = withClickSound(onBack)) { Text("Back") } },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },

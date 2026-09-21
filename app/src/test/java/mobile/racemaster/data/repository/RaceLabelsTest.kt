@@ -1,52 +1,39 @@
 package mobile.racemaster.data.repository
 
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class RaceLabelsTest {
 
-    // Mirrors buildRaceLabel's own SimpleDateFormat("yy-MM-dd") exactly (same pattern, same
-    // default locale/timezone it uses) rather than hardcoding an expected date string, which
-    // would be flaky across machines in different default timezones.
-    private fun expectedDate(timestamp: Long) = SimpleDateFormat("yy-MM-dd", Locale.getDefault()).format(Date(timestamp))
-
     @Test
-    fun buildRaceLabelOmitsTheCourseSegmentWhenCourseIsBlank() {
-        val timestamp = System.currentTimeMillis()
-        assertEquals("pontesbury-${expectedDate(timestamp)}", buildRaceLabel("pontesbury", "", timestamp))
+    fun buildRaceLabelIsTheNameVerbatim() {
+        assertEquals("pontesbury-seniors", buildRaceLabel("pontesbury-seniors"))
     }
 
     @Test
-    fun buildRaceLabelIncludesTheCourseSegmentWhenPresent() {
-        val timestamp = System.currentTimeMillis()
-        assertEquals("pontesbury-seniors-${expectedDate(timestamp)}", buildRaceLabel("pontesbury", "seniors", timestamp))
+    fun buildRaceLabelTrimsTheName() {
+        assertEquals("pontesbury", buildRaceLabel("  pontesbury  "))
     }
 
     @Test
-    fun buildRaceLabelTrimsNameAndCourse() {
-        val timestamp = System.currentTimeMillis()
-        assertEquals("pontesbury-seniors-${expectedDate(timestamp)}", buildRaceLabel("  pontesbury  ", "  seniors  ", timestamp))
+    fun buildRaceLabelNeverAppendsADate() {
+        // The whole point of this change: a name already inherited from the server (via Scan
+        // Server) or following its own convention must never be silently modified — including
+        // one that happens to look like it already ends in a date, or one entered today.
+        assertEquals("pontesbury-26-09-14", buildRaceLabel("pontesbury-26-09-14"))
     }
 
     @Test
-    fun raceNameFromLabelStripsOnlyTheTrailingDate() {
+    fun raceNameFromLabelStripsOnlyATrailingDate() {
         assertEquals("pontesbury-seniors", raceNameFromLabel("pontesbury-seniors-26-09-14"))
         assertEquals("pontesbury", raceNameFromLabel("pontesbury-26-09-14"))
     }
 
     @Test
     fun raceNameFromLabelLeavesALabelWithNoTrailingDateUnchanged() {
+        // The common case now: buildRaceLabel no longer produces a trailing date at all, so a
+        // freshly-created race's own label round-trips through raceNameFromLabel unchanged.
         assertEquals("pontesbury-seniors", raceNameFromLabel("pontesbury-seniors"))
         assertEquals("", raceNameFromLabel(""))
-    }
-
-    @Test
-    fun raceNameFromLabelIsBuildRaceLabelsOwnInverse() {
-        val timestamp = System.currentTimeMillis()
-        val label = buildRaceLabel("webtest-Seniors", "", timestamp)
-        assertEquals("webtest-Seniors", raceNameFromLabel(label))
     }
 }

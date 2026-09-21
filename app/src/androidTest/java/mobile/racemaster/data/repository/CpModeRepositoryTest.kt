@@ -44,25 +44,18 @@ class CpModeRepositoryTest {
     }
 
     @Test
-    fun startCpModeInsertsModeStartThenClockAndSetsStartedAt() = runTest {
+    fun startCpModeInsertsOnlyTheClockMarkerAndSetsStartedAt() = runTest {
         repository.startCpMode(raceId, startedAtMillis = 5_000L)
 
-        // A MODE_START boundary marker (see that action's own doc — purely for the web app's
-        // later mode-change-boundary detection) immediately followed by the real Clock marker,
-        // same pair Bibs' own startBibsMode writes.
+        // No MODE_START row here any more — that's now written up front by
+        // RaceRepository.recordModeStart (Setup Race / Relocate), not by startCpMode itself.
         val all = db.historyLineDao().observeAllForRace(raceId).first().sortedBy { it.lineNumber }
-        assertEquals(2, all.size)
-        assertEquals(HistoryAction.MODE_START, all[0].action)
-        assertNull(all[0].splitNumber)
-        // Carries the race's current location in `note` — see SyncRecord's own doc for why this
-        // is now the only place a device's station travels on the wire.
-        assertEquals("Finish", all[0].note)
-        assertEquals(HistoryAction.CLOCK, all[1].action)
-        assertEquals(0, all[1].splitNumber)
+        assertEquals(1, all.size)
+        assertEquals(HistoryAction.CLOCK, all[0].action)
+        assertEquals(0, all[0].splitNumber)
         assertEquals(HistoryMode.CP, all[0].mode)
         assertEquals(5_000L, db.raceDao().getById(raceId)?.cpModeStartedAtMillis)
 
-        // MODE_START never reaches the live screen — only the Clock row does.
         val live = repository.observeCurrentSegmentEntries(raceId).first()
         assertEquals(1, live.size)
         assertEquals(HistoryAction.CLOCK, live.single().action)
@@ -166,15 +159,4 @@ class CpModeRepositoryTest {
         assertTrue(repository.observeCurrentSegmentEntries(raceId).first().isNotEmpty())
     }
 
-    @Test
-    fun getLineNumbersForUuidsResolvesOnlyTheGivenAckedRows() = runTest {
-        repository.recordEntry(raceId, HistoryAction.PASS, 101, note = null)
-        repository.recordEntry(raceId, HistoryAction.RETIRE, 102, note = null)
-        repository.recordEntry(raceId, HistoryAction.PASS, 103, note = null)
-        val entries = db.historyLineDao().observeAllForRace(raceId).first().sortedBy { it.lineNumber }
-
-        val lineNumbers = repository.getLineNumbersForUuids(listOf(entries[0].recordUuid, entries[2].recordUuid))
-
-        assertEquals(setOf(entries[0].lineNumber, entries[2].lineNumber), lineNumbers.toSet())
-    }
 }

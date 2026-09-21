@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.data.db.entity.HistoryAction
+import mobile.racemaster.data.db.entity.NON_ENTRY_ACTIONS
 import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.ui.components.ActionPickerDialog
 import mobile.racemaster.ui.components.DigitKeypad
@@ -41,6 +42,7 @@ import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.StopOrResetButton
 import mobile.racemaster.ui.components.UndoLastButton
 import mobile.racemaster.ui.components.rememberListClickGuard
+import mobile.racemaster.util.formatBibsSoFarText
 import mobile.racemaster.util.withClickSound
 
 private const val BUTTON_HEIGHT_DP = 48
@@ -164,6 +166,7 @@ private fun BibsModeContent(
                     dupCount = uiState.dupCount,
                     unsyncedCount = uiState.unsyncedCount,
                     lastSyncedAtMillis = uiState.lastSyncedAtMillis,
+                    soFarText = formatBibsSoFarText(uiState.entries.count { it.type !in NON_ENTRY_ACTIONS }),
                     expectedCount = uiState.expectedCount,
                     outstandingCount = uiState.outstandingCount,
                     duplicateBibNumbers = uiState.duplicateBibNumbers,

@@ -40,8 +40,8 @@ data class LoginResponse(val token: String, val username: String, val isAdmin: B
 @Serializable
 private data class ServerSyncRecord(
     val action: String,
-    val bibNumber: String?,
-    val splitTime: String?,
+    val bibNumber: Int?,
+    val splitTime: Int?,
     val splitNumber: Int?,
     val lineNumber: Long,
     val refLineNumber: Long? = null,

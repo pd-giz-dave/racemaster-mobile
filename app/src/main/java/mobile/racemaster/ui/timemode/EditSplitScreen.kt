@@ -1,5 +1,6 @@
 package mobile.racemaster.ui.timemode
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,6 +33,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import mobile.racemaster.data.db.entity.formatSplitRef
+import mobile.racemaster.ui.components.DiscardChangesDialog
 import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.util.formatElapsedSplitTime
 import mobile.racemaster.util.withClickSound
@@ -44,7 +46,7 @@ import mobile.racemaster.util.withClickSound
  * don't reliably report the keyboard's real height there, leaving Save/Cancel genuinely
  * unreachable with no way to scroll to them. A full screen of its own gets the same simple,
  * already-working Scaffold/imePadding/verticalScroll layout RaceDetailsScreen uses, with its
- * own always-visible TopAppBar (Cancel — title — [HideKeyboardButton]) immune to body scroll
+ * own always-visible TopAppBar (title — [HideKeyboardButton] — Back) immune to body scroll
  * entirely — dismissing the keyboard from there reveals Save without needing to scroll at all,
  * since this form is short enough to fit on screen on its own.
  */
@@ -64,12 +66,26 @@ fun EditSplitScreen(
     // RaceDetailsScreen uses, so a later recomposition never stomps on what the operator's
     // already typing.
     var prefilled by remember { mutableStateOf(false) }
+    // The exact value this screen was seeded with, so leaving can tell whether the operator
+    // actually changed anything this visit — see showDiscardConfirm's own doc below.
+    var initialNote by remember { mutableStateOf("") }
     LaunchedEffect(uiState.loaded) {
         if (uiState.loaded && !prefilled) {
             noteText = uiState.note.orEmpty()
+            initialNote = noteText
             prefilled = true
         }
     }
+
+    val hasChanges = noteText != initialNote
+    // Leaving with an unsaved note edit still on screen needs a confirm — wired to the top
+    // bar's own Back button, the in-body Cancel button, and the system back gesture/button, so
+    // none of the three bypasses this.
+    var showDiscardConfirm by remember { mutableStateOf(false) }
+    val attemptExit = {
+        if (hasChanges) showDiscardConfirm = true else onCancel()
+    }
+    BackHandler(onBack = attemptExit)
 
     Scaffold(
         topBar = {
@@ -83,8 +99,10 @@ fun EditSplitScreen(
                         },
                     )
                 },
-                navigationIcon = { TextButton(onClick = withClickSound(onCancel)) { Text("Cancel") } },
-                actions = { HideKeyboardButton() },
+                actions = {
+                    HideKeyboardButton()
+                    TextButton(onClick = withClickSound(attemptExit)) { Text("Back") }
+                },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },
@@ -118,8 +136,18 @@ fun EditSplitScreen(
                     enabled = uiState.loaded,
                     modifier = Modifier.weight(1f),
                 ) { Text("Save") }
-                OutlinedButton(onClick = withClickSound(onCancel), modifier = Modifier.weight(1f)) { Text("Cancel") }
+                OutlinedButton(onClick = withClickSound(attemptExit), modifier = Modifier.weight(1f)) { Text("Cancel") }
             }
         }
+    }
+
+    if (showDiscardConfirm) {
+        DiscardChangesDialog(
+            onConfirm = {
+                showDiscardConfirm = false
+                onCancel()
+            },
+            onDismiss = { showDiscardConfirm = false },
+        )
     }
 }

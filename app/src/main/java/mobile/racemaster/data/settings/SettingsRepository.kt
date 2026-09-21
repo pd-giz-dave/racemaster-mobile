@@ -16,6 +16,13 @@ import mobile.racemaster.util.generateDeviceName
 @Serializable
 data class ServerSetupDraft(val url: String, val username: String, val password: String)
 
+// What the operator has typed/picked into Setup Race before Save — kept separate from a real
+// RaceEntity (which doesn't exist yet at this point) so the form survives navigating away and
+// back (e.g. via Setup Device) without losing progress, same sticky-draft convention
+// ServerSetupDraft above already established for the Setup Server form.
+@Serializable
+data class SetupRaceDraft(val name: String = "", val location: String = "", val mode: String? = null)
+
 // Capped so History picker menus stay a manageable length and DataStore doesn't accumulate an
 // unbounded JSON blob over a device's lifetime — most-recent-first, oldest entries drop off.
 private const val MAX_HISTORY_ENTRIES = 20
@@ -46,6 +53,9 @@ class SettingsRepository(
         val DRAFT_PASSWORD = stringPreferencesKey("draft_password")
         val RACE_NAME_HISTORY = stringPreferencesKey("race_name_history")
         val LOCATION_HISTORY = stringPreferencesKey("location_history")
+        val DRAFT_RACE_NAME = stringPreferencesKey("draft_race_name")
+        val DRAFT_RACE_LOCATION = stringPreferencesKey("draft_race_location")
+        val DRAFT_RACE_MODE = stringPreferencesKey("draft_race_mode")
         val SERVER_CREDENTIAL_HISTORY = stringPreferencesKey("server_credential_history")
         // Key string itself is unchanged from when this was server-sync-specific (see
         // raceStaleAfterDays's own doc) — renaming it would silently reset every existing
@@ -264,6 +274,25 @@ class SettingsRepository(
     val locationHistory: Flow<List<String>> = stringHistoryFlow(Keys.LOCATION_HISTORY, DEFAULT_LOCATIONS)
 
     suspend fun addLocationToHistory(location: String) = addToStringHistory(Keys.LOCATION_HISTORY, location)
+
+    // Setup Race's own sticky draft — see [SetupRaceDraft]'s own doc. runCatching for the same
+    // reason [appMode] above uses it: a stored mode string that no longer names a real AppMode
+    // value must degrade to "nothing chosen yet", never crash the app on launch.
+    val setupRaceDraft: Flow<SetupRaceDraft> = dataStore.data.map { prefs ->
+        SetupRaceDraft(
+            name = prefs[Keys.DRAFT_RACE_NAME].orEmpty(),
+            location = prefs[Keys.DRAFT_RACE_LOCATION].orEmpty(),
+            mode = prefs[Keys.DRAFT_RACE_MODE]?.let { raw -> runCatching { AppMode.valueOf(raw) }.getOrNull() }?.name,
+        )
+    }
+
+    suspend fun saveSetupRaceDraft(name: String, location: String, mode: AppMode?) {
+        dataStore.edit { prefs ->
+            prefs[Keys.DRAFT_RACE_NAME] = name
+            prefs[Keys.DRAFT_RACE_LOCATION] = location
+            if (mode != null) prefs[Keys.DRAFT_RACE_MODE] = mode.name else prefs.remove(Keys.DRAFT_RACE_MODE)
+        }
+    }
 
     private fun stringHistoryFlow(key: Preferences.Key<String>, defaults: List<String> = emptyList()): Flow<List<String>> =
         dataStore.data.map { prefs ->

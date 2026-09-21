@@ -64,7 +64,7 @@ class SyncRecordMappingTest {
     @Test
     fun finishSplitMapsElapsedTimeRelativeToRaceStart() {
         val record = split(splitNumber = 3, timestampMillis = 90_000L).toSyncRecord(raceStartedAtMillis = 0L)
-        assertEquals("00:01:30", record.splitTime)
+        assertEquals(90, record.splitTime)
         assertEquals(3, record.splitNumber)
         assertEquals(null, record.bibNumber)
         assertEquals("Split", record.action)
@@ -73,19 +73,19 @@ class SyncRecordMappingTest {
     @Test
     fun finishSplitWithNullRaceStartFormatsAsZero() {
         val record = split(splitNumber = 1, timestampMillis = 12_345L).toSyncRecord(raceStartedAtMillis = null)
-        assertEquals("00:00:00", record.splitTime)
+        assertEquals(0, record.splitTime)
     }
 
     @Test
     fun finishSplitRoundsDownBelowHalfASecond() {
         val record = split(splitNumber = 1, timestampMillis = 1_490L).toSyncRecord(raceStartedAtMillis = 0L)
-        assertEquals("00:00:01", record.splitTime)
+        assertEquals(1, record.splitTime)
     }
 
     @Test
     fun finishSplitRoundsUpAtHalfASecondOrMore() {
         val record = split(splitNumber = 1, timestampMillis = 1_530L).toSyncRecord(raceStartedAtMillis = 0L)
-        assertEquals("00:00:02", record.splitTime)
+        assertEquals(2, record.splitTime)
     }
 
     @Test
@@ -114,17 +114,17 @@ class SyncRecordMappingTest {
     }
 
     @Test
-    fun timeModeModeStartSendsNAAsSplitTimeNotZeroElapsed() {
+    fun timeModeModeStartSendsNullSplitTimeNotZeroElapsed() {
         // MODE_START is written at the exact same instant as the real Start marker right after
-        // it, so a naive elapsed calculation would also read "00:00:00" — indistinguishable on
-        // the wire from a genuine Start. It must send "n/a" instead (mirroring the same sentinel
-        // Bibs/CP's own non-bib markers already use for bibNumber), never a real-looking time.
+        // it, so a naive elapsed calculation would also read 0 — indistinguishable on the wire
+        // from a genuine Start. It sends null instead — its own explicit mode declaration lives
+        // in `note` (see AppMode.wireName()), so there's nothing for splitTime to signal here.
         val modeStart = line(HistoryMode.TIME, HistoryAction.MODE_START, splitNumber = 0, timestampMillis = 5_000L).toSyncRecord(raceStartedAtMillis = 5_000L)
-        assertEquals("n/a", modeStart.splitTime)
+        assertNull(modeStart.splitTime)
         // The real Start marker immediately after it, at the same timestamp, still reports a
-        // genuine elapsed "00:00:00" — only MODE_START gets the sentinel.
+        // genuine elapsed 0 — only MODE_START gets null.
         val start = line(HistoryMode.TIME, HistoryAction.START, splitNumber = 0, timestampMillis = 5_000L).toSyncRecord(raceStartedAtMillis = 5_000L)
-        assertEquals("00:00:00", start.splitTime)
+        assertEquals(0, start.splitTime)
     }
 
     // Bibs-mode HistoryLineEntity.toSyncRecord
@@ -133,8 +133,8 @@ class SyncRecordMappingTest {
     fun finishTypeMapsToFinishAction() {
         val record = bibEntry(101, HistoryAction.FINISH, splitNumber = 1, timestampMillis = 60_000L).toSyncRecord(null)
         assertEquals("Finish", record.action)
-        // Wire bibNumber is a string, not the raw Int — see SyncRecord's own doc.
-        assertEquals("101", record.bibNumber)
+        // Wire bibNumber is a straight passthrough of the local Int? column — see SyncRecord's own doc.
+        assertEquals(101, record.bibNumber)
     }
 
     @Test
@@ -150,25 +150,24 @@ class SyncRecordMappingTest {
     }
 
     @Test
-    fun clockTypeMapsToClockActionWithNAOnTheWireNotNull() {
-        // A Bibs record must never send bibNumber = null — that's reserved to mean "this is a
-        // Time record" (see SyncRecord's own doc) — so an action with no bib of its own sends
-        // the sentinel "n/a" instead, same as the history list already displays it.
+    fun clockTypeMapsToClockActionWithNullBibNumber() {
+        // No discriminator role left for bibNumber (see SyncRecord's own doc) — an action with
+        // no bib of its own now just sends a genuine null, same as the local column already is.
         val record = bibEntry(null, HistoryAction.CLOCK, splitNumber = 0, timestampMillis = 0L, note = "5:30").toSyncRecord(null)
         assertEquals("Clock", record.action)
-        assertEquals("n/a", record.bibNumber)
+        assertNull(record.bibNumber)
         assertEquals("5:30", record.note)
     }
 
     @Test
-    fun everyNonBibBibsActionSendsNAOnTheWireNotNull() {
+    fun everyNonBibBibsActionSendsNullBibNumber() {
         // Not just Clock — every Bibs action outside BIB_REQUIRED_ACTIONS (Stop, Reset, Ignore,
-        // Seniors, Juniors, Male, Female, Undo) has a null bibNumber locally and must equally
-        // avoid a null wire bibNumber, for the same reason as clockTypeMapsToClockActionWithNAOnTheWireNotNull.
-        assertEquals("n/a", bibEntry(null, HistoryAction.STOP, 1, 0L).toSyncRecord(null).bibNumber)
-        assertEquals("n/a", bibEntry(null, HistoryAction.RESET, 1, 0L).toSyncRecord(null).bibNumber)
-        assertEquals("n/a", bibEntry(null, HistoryAction.IGNORE, 1, 0L).toSyncRecord(null).bibNumber)
-        assertEquals("n/a", bibEntry(null, HistoryAction.UNDO, 1, 0L).toSyncRecord(null).bibNumber)
+        // Seniors, Juniors, Male, Female, Undo) has a null bibNumber locally and passes straight
+        // through as null on the wire too now.
+        assertNull(bibEntry(null, HistoryAction.STOP, 1, 0L).toSyncRecord(null).bibNumber)
+        assertNull(bibEntry(null, HistoryAction.RESET, 1, 0L).toSyncRecord(null).bibNumber)
+        assertNull(bibEntry(null, HistoryAction.IGNORE, 1, 0L).toSyncRecord(null).bibNumber)
+        assertNull(bibEntry(null, HistoryAction.UNDO, 1, 0L).toSyncRecord(null).bibNumber)
     }
 
     @Test
@@ -209,15 +208,14 @@ class SyncRecordMappingTest {
         assertNull(bibOriginal.refLineNumber)
     }
 
-    // CP-mode HistoryLineEntity.toSyncRecord — CP shares Bibs' wire shape exactly (bibNumber as
-    // a non-null string, splitTime always null) rather than getting its own — see
-    // SyncRecordMapping's own wireBibNumber condition.
+    // CP-mode HistoryLineEntity.toSyncRecord — CP shares Bibs' wire shape exactly (bibNumber
+    // passed straight through, splitTime always null) rather than getting its own.
 
     @Test
-    fun passTypeMapsToPassActionAndSendsBibNumberAsString() {
+    fun passTypeMapsToPassAction() {
         val record = cpEntry(101, HistoryAction.PASS, splitNumber = 1, timestampMillis = 60_000L).toSyncRecord(null)
         assertEquals("Pass", record.action)
-        assertEquals("101", record.bibNumber)
+        assertEquals(101, record.bibNumber)
     }
 
     @Test
@@ -233,10 +231,10 @@ class SyncRecordMappingTest {
     }
 
     @Test
-    fun cpMarkerActionsSendNAOnTheWireNotNull() {
-        assertEquals("n/a", cpEntry(null, HistoryAction.STOP, 1, 0L).toSyncRecord(null).bibNumber)
-        assertEquals("n/a", cpEntry(null, HistoryAction.RESET, 1, 0L).toSyncRecord(null).bibNumber)
-        assertEquals("n/a", cpEntry(null, HistoryAction.UNDO, 1, 0L).toSyncRecord(null).bibNumber)
+    fun cpMarkerActionsSendNullBibNumber() {
+        assertNull(cpEntry(null, HistoryAction.STOP, 1, 0L).toSyncRecord(null).bibNumber)
+        assertNull(cpEntry(null, HistoryAction.RESET, 1, 0L).toSyncRecord(null).bibNumber)
+        assertNull(cpEntry(null, HistoryAction.UNDO, 1, 0L).toSyncRecord(null).bibNumber)
     }
 
     @Test
@@ -271,30 +269,33 @@ class SyncRecordMappingTest {
     }
 
     @Test
-    fun setupMarkerRoundTripsThroughTheWireCarryingLocationInNote() {
-        // HistoryMode.ANY/HistoryAction.SETUP — Setup Race's own location-announcement marker
-        // (see RaceRepository.recordSetupMarker). No bib, no split time, just an honest "Setup"
-        // action and whatever location the race was set up with, now carried in `note` rather
-        // than a dedicated wire field (see SyncRecord's own doc).
-        val record = line(HistoryMode.ANY, HistoryAction.SETUP, splitNumber = 0, timestampMillis = 0L, note = "CP2").toSyncRecord(null)
-        assertEquals("Setup", record.action)
-        assertNull(record.bibNumber)
-        assertNull(record.splitTime)
-        assertEquals("CP2", record.note)
-        assertEquals(HistoryAction.SETUP, record.toHistoryAction())
-    }
-
-    @Test
     fun locationMarkerRoundTripsThroughTheWireCarryingTheNewLocationInNote() {
-        // HistoryAction.LOCATION — the Relocate screen's own boundary marker (see
-        // RaceRepository.insertLocationMarkerAndReset). The destination location travels in
-        // `note`, same convention SETUP now also uses.
+        // HistoryAction.LOCATION — Setup Race/Relocate's own boundary marker (see
+        // RaceRepository.recordModeStart). The destination location travels in `note`.
         val record = bibEntry(null, HistoryAction.LOCATION, splitNumber = 0, timestampMillis = 0L, note = "CP2")
             .toSyncRecord(null)
         assertEquals("Location", record.action)
-        assertEquals("n/a", record.bibNumber) // Bibs/CP's own non-bib sentinel, same as any other marker
+        assertNull(record.bibNumber) // no discriminator sentinel any more — see SyncRecord's own doc
         assertEquals("CP2", record.note)
         assertEquals(HistoryAction.LOCATION, record.toHistoryAction())
+    }
+
+    @Test
+    fun modeStartCarriesNoBibNumberOrSplitTimeRegardlessOfMode() {
+        // Its own explicit mode declaration lives in `note` instead (see AppMode.wireName()) —
+        // bibNumber/splitNumber are always null, and splitTime is always null too now (even for
+        // a Time-mode MODE_START, which used to send the "n/a" sentinel there).
+        val timeModeStart = line(HistoryMode.TIME, HistoryAction.MODE_START, splitNumber = 0, timestampMillis = 5_000L, note = "Time")
+            .toSyncRecord(raceStartedAtMillis = 5_000L)
+        assertNull(timeModeStart.bibNumber)
+        assertNull(timeModeStart.splitTime)
+        assertEquals("Time", timeModeStart.note)
+
+        val bibsModeStart = bibEntry(null, HistoryAction.MODE_START, splitNumber = 0, timestampMillis = 0L, note = "Bibs")
+            .toSyncRecord(null)
+        assertNull(bibsModeStart.bibNumber)
+        assertNull(bibsModeStart.splitTime)
+        assertEquals("Bibs", bibsModeStart.note)
     }
 
     @Test
@@ -318,8 +319,8 @@ class SyncRecordMappingTest {
         // A Time split is sent as its own honest "Split" (see toServerAction's own doc), so
         // "Finish" on the wire now means exactly one thing — a genuine Bibs Finish — regardless
         // of whether `splitTime` happens to be set.
-        assertEquals(HistoryAction.SPLIT, SyncRecord(action = "Split", bibNumber = null, splitTime = "00:00:00", splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
-        assertEquals(HistoryAction.FINISH, SyncRecord(action = "Finish", bibNumber = "101", splitTime = null, splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
+        assertEquals(HistoryAction.SPLIT, SyncRecord(action = "Split", bibNumber = null, splitTime = 0, splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
+        assertEquals(HistoryAction.FINISH, SyncRecord(action = "Finish", bibNumber = 101, splitTime = null, splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction())
     }
 
     @Test

@@ -12,6 +12,8 @@ import mobile.racemaster.data.db.entity.LineSyncEntity
 import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
+import mobile.racemaster.data.settings.toHistoryMode
+import mobile.racemaster.data.settings.wireName
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 
@@ -22,10 +24,11 @@ class RaceRepository(
     private val lineSyncDao: LineSyncDao,
     private val settingsRepository: SettingsRepository,
 ) {
-    // The only place a race gets created from a manually-typed name now (Setup Race's offline/
-    // manual branch; see adoptRaceLabel below for the online-pick path). course is always blank
-    // (see buildRaceLabel — the segment is simply omitted), matching the dropped "course"
-    // concept from phase 1.
+    // The only place a race gets created now (Setup Race's own save — see SetupRaceViewModel.save;
+    // scanning the server only ever fills in `name` there, it never adopts a race directly). The
+    // label is the name verbatim (see buildRaceLabel — no date or course is ever appended: a name
+    // inherited from the server, or already following its own naming convention, must never be
+    // silently modified).
     suspend fun startNewRace(
         name: String,
         location: String = "Finish",
@@ -37,7 +40,7 @@ class RaceRepository(
             RaceEntity(
                 name = name,
                 location = location,
-                label = buildRaceLabel(name, course = "", createdAtMillis),
+                label = buildRaceLabel(name),
                 createdAtMillis = createdAtMillis,
                 deviceRole = deviceRole,
                 serverUrl = serverUrl,
@@ -45,64 +48,87 @@ class RaceRepository(
             ),
         )
 
-    // Setup Race's online branch (see SetupRaceViewModel.pickAvailableRace): adopts an existing
-    // server-side race label exactly, rather than reconstructing one from name+today's date the
-    // way startNewRace does — the picked race may have been registered on an earlier date, and
-    // this device must deposit its device file in that exact existing folder (TODO.md's phase 2:
-    // "the device becomes that race and deposits its device file in the selected folder"), not a
-    // fresh same-named one dated today. [raceLabel]'s own name portion (see RaceLabels.kt's
-    // raceNameFromLabel) already carries any Seniors/Juniors suffix as plain text, same as a
-    // manually-typed name would.
-    suspend fun adoptRaceLabel(raceLabel: String, location: String): Long =
-        raceDao.insert(
-            RaceEntity(
-                name = raceNameFromLabel(raceLabel),
-                location = location,
-                label = raceLabel,
-                createdAtMillis = System.currentTimeMillis(),
-                createdByDeviceName = settingsRepository.getOrCreateDeviceName(),
-            ),
-        )
-
-    // Setup Race's own "this device is in the field" signal (see MuleRepository.announceRaceSetup)
-    // — a single HistoryMode.ANY/HistoryAction.SETUP marker, written right after the race is
-    // created/adopted, before any mode has been chosen. Follows the exact same
-    // read-nextLineNumber/insert/increment shape TimeModeRepository.startStopwatch's own
-    // MODE_START row uses, so this row consumes a real, permanent, never-reused lineNumber like
-    // every other row — no synthetic/reserved-only numbering scheme needed. mode = ANY (not one
-    // of TIME/BIBS/CP) is what keeps it out of every mode's own live current-segment queries for
-    // free (those are SQL-filtered on `mode = :thisMode`, see HistoryLineDao.observeCurrentSegment)
-    // without needing an action-based exclusion list the way MODE_START needs one within its own
-    // shared family. It's still a completely real, synced, permanent row — it flows through
-    // RaceRepository.getHistorySinceLineNumber/observeLastActivityAtMillis (both raceId-scoped,
-    // not mode-scoped) exactly like any other, which is what lets MuleRepository.pushToServer and
-    // PeripheralSyncService's own pull-serving pick it up with no transport-specific code of their
-    // own — see HistoryAction.SETUP's own doc.
-    suspend fun recordSetupMarker(raceId: Long, timestampMillis: Long = System.currentTimeMillis()) {
-        val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
-        historyLineDao.insert(
-            HistoryLineEntity(
-                raceId = raceId,
-                mode = HistoryMode.ANY,
-                action = HistoryAction.SETUP,
-                bibNumber = null,
-                splitNumber = null,
-                lineNumber = race.nextLineNumber,
-                note = race.location,
-                timestampMillis = timestampMillis,
-            ),
-        )
-        raceDao.incrementLineNumber(raceId)
+    // Setup Race's own "this device is in the field, recording this mode at this station" write
+    // (SetupRaceViewModel.save), and Relocate's own write when the operator
+    // changes station and/or mode mid-race (RaceDetailsViewModel.save) — one function covers
+    // both, since both need exactly the same pair: a HistoryAction.LOCATION marker (this
+    // device's new station, in `note`) immediately followed by a HistoryAction.MODE_START marker
+    // (the explicit mode, in `note` — see SyncRecord's own doc for why neither travels via
+    // bibNumber/splitTime any more), both scoped to [mode], each consuming a real, permanent line
+    // number. RaceEntity.mode/location are updated to match in the same transaction — a race
+    // records at most one mode at a time now, replacing the old separate
+    // HistoryMode.ANY/HistoryAction.SETUP marker (mode not yet known at Setup Race time) plus a
+    // Relocate that could only ever touch location, never mode.
+    //
+    // previousMode/previousLocation on the LOCATION row let a later Undo restore exactly what
+    // this call is about to overwrite (see EntryLogModeEngine/TimeModeRepository's own
+    // LOCATION-undo branch) — for a brand-new race (Setup Race's own call), that's simply this
+    // race's just-created defaults (mode = null, location = "Finish"), so undoing a race's very
+    // first LOCATION+MODE_START pair correctly leaves it back in "no mode chosen yet" state.
+    // priorSplitCounter is [mode]'s own counter as it stood immediately before this call resets
+    // it to 1 — scoped to the NEW mode (not whichever was active before), since this LOCATION row
+    // itself is mode-scoped to [mode] and only ever visible/undoable from that mode's own screen.
+    suspend fun recordModeStart(raceId: Long, mode: AppMode, location: String, timestampMillis: Long = System.currentTimeMillis()) {
+        db.withTransaction {
+            val historyMode = mode.toHistoryMode()
+            val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            val priorSplitCounter = when (historyMode) {
+                HistoryMode.TIME -> race.timeModeNextSplit
+                HistoryMode.BIBS -> race.bibsModeNextSplit
+                HistoryMode.CP -> race.cpModeNextSplit
+            }
+            historyLineDao.insert(
+                HistoryLineEntity(
+                    raceId = raceId,
+                    mode = historyMode,
+                    action = HistoryAction.LOCATION,
+                    bibNumber = null,
+                    splitNumber = null,
+                    lineNumber = race.nextLineNumber,
+                    note = location,
+                    timestampMillis = timestampMillis,
+                    priorSplitCounter = priorSplitCounter,
+                    previousLocation = race.location,
+                    previousMode = race.mode,
+                ),
+            )
+            raceDao.incrementLineNumber(raceId)
+            val raceAfterLocation = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            historyLineDao.insert(
+                HistoryLineEntity(
+                    raceId = raceId,
+                    mode = historyMode,
+                    action = HistoryAction.MODE_START,
+                    bibNumber = null,
+                    splitNumber = null,
+                    lineNumber = raceAfterLocation.nextLineNumber,
+                    note = mode.wireName(),
+                    timestampMillis = timestampMillis,
+                ),
+            )
+            raceDao.incrementLineNumber(raceId)
+            when (historyMode) {
+                HistoryMode.TIME -> raceDao.setTimeModeNextSplit(raceId, 1)
+                HistoryMode.BIBS -> raceDao.setBibsModeNextSplit(raceId, 1)
+                HistoryMode.CP -> raceDao.setCpModeNextSplit(raceId, 1)
+            }
+            raceDao.updateModeAndLocation(raceId, mode.name, location)
+        }
+        // Keeps the device-wide SettingsRepository.appMode setting in sync with this race's own
+        // mode — PeripheralSyncService's advertised mode byte and AppEntryViewModel's own
+        // last-mode auto-forward both still key off this flat setting rather than needing to
+        // reactively observe whichever race happens to be active; this is the one place that
+        // now updates it, replacing ModePickerViewModel's old direct setAppMode call (mode is no
+        // longer chosen there — see that screen's own doc).
+        settingsRepository.setAppMode(mode)
     }
 
-    // The date portion of the label is rebuilt from the race's original createdAtMillis, not
-    // the edit time — the date is always auto-derived and fixed once the race is created.
     // name/location genuinely can change here now — RaceDetailsScreen only locks them once the
     // race has actually started a mode (see its own identityFieldsEnabled doc); before that, no
     // history can possibly exist for this race yet (every mode's own startXxxMode is what both
     // sets its *ModeStartedAtMillis and inserts its first history row, in the same transaction),
-    // so nothing anywhere could already be referencing the old label. `course` is always blank
-    // (the concept was dropped in phase 1), so the label is always rebuilt with one. serverUrl is
+    // so nothing anywhere could already be referencing the old label. The label is just the new
+    // name verbatim (see buildRaceLabel — no date/course is ever appended). serverUrl is
     // untouched here — it's not on this screen (see RaceDao.updateDetails). No Mule-inbox
     // retagging needed on a rename (there used to be one here) — MuleRepository.pushToServer now
     // reads this race's own current label fresh from RaceEntity on every attempt rather than
@@ -111,8 +137,8 @@ class RaceRepository(
     // RaceEntity.location's own doc) — a change here just takes effect the same way, on the next
     // record this device pushes.
     suspend fun updateRaceDetails(raceId: Long, name: String, location: String) {
-        val race = raceDao.getById(raceId) ?: return
-        val label = buildRaceLabel(name, course = "", race.createdAtMillis)
+        raceDao.getById(raceId) ?: return
+        val label = buildRaceLabel(name)
         raceDao.updateDetails(raceId, name, location, label)
     }
 
@@ -121,20 +147,26 @@ class RaceRepository(
     // branch) is being told, via a targeted BLE progress delivery, which real server-side race it
     // actually belongs to (see PeripheralSyncService.handleProgressPayload for where this is
     // called). Rewrites the existing row in place — same [raceId], same
-    // SettingsRepository.activeRaceId pointer, same history — to [raceLabel]'s own identity
-    // instead of creating a new race the way [adoptRaceLabel] (Setup Race's online-pick path)
-    // does: unlike that path, this one must never lose already-recorded history, and
+    // SettingsRepository.activeRaceId pointer, same history — to [raceLabel]'s own identity: unlike
+    // creating a fresh race, this must never lose already-recorded history, and
     // [HistoryLineEntity.raceId] is a stable Room FK, never derived from name/label, so nothing
     // downstream needs migrating — every screen already observes this race reactively off
     // [raceId] via Room Flows, so the new identity reaches all of them on their very next
-    // emission. [raceLabel]'s own name portion (see [raceNameFromLabel] — the same helper
-    // [adoptRaceLabel] already uses) becomes this race's new name; location is left exactly as
-    // it was (this device's own physical station, unrelated to which race it now records). A
-    // no-op if [raceId] no longer exists (defensive — the race this delivery was addressed to
-    // could in principle have been deleted between the delivery being cached and this running).
+    // emission. [raceLabel]'s own name portion (see [raceNameFromLabel]) becomes this race's new
+    // name; location is left exactly as it was (this device's own physical station, unrelated to
+    // which race it now records). Also updates the persisted Setup Race draft's own name (only
+    // name — location/mode are left as whatever the operator already has there) to the same value,
+    // so a later reopen of Setup Race shows the web app's own confirmed name rather than whatever
+    // was there before adoption — this is also what makes the device's own re-synced history (and
+    // hence the web app's Devices list) visibly reflect the adoption back to the operator. A no-op
+    // if [raceId] no longer exists (defensive — the race this delivery was addressed to could in
+    // principle have been deleted between the delivery being cached and this running).
     suspend fun adoptRaceIdentity(raceId: Long, raceLabel: String) {
         val race = raceDao.getById(raceId) ?: return
-        raceDao.updateDetails(raceId, raceNameFromLabel(raceLabel), race.location, raceLabel)
+        val newName = raceNameFromLabel(raceLabel)
+        raceDao.updateDetails(raceId, newName, race.location, raceLabel)
+        val draft = settingsRepository.setupRaceDraft.first()
+        settingsRepository.saveSetupRaceDraft(newName, draft.location, draft.mode?.let { AppMode.valueOf(it) })
     }
 
     fun observeRace(id: Long): Flow<RaceEntity?> = raceDao.observeById(id)
@@ -250,68 +282,6 @@ class RaceRepository(
             HistoryMode.TIME -> raceDao.resetTimeMode(raceId)
             HistoryMode.BIBS -> raceDao.resetBibsMode(raceId)
             HistoryMode.CP -> raceDao.resetCpMode(raceId)
-            // Never actually reachable — forceResetActiveModes (this function's only caller)
-            // only ever passes TIME/BIBS/CP, gated on that mode's own *ModeStartedAtMillis.
-            // HistoryMode.ANY never starts (it's Setup Race's own one-off marker, not a
-            // recording mode an operator can reset) — see HistoryMode.ANY's own doc.
-            HistoryMode.ANY -> error("HistoryMode.ANY is never an active mode to reset")
-        }
-    }
-
-    // The "This Race"/Relocate screen's own write path (RaceDetailsViewModel.save, only once the
-    // race is active — before that, a location edit is still just a plain field overwrite via
-    // updateRaceDetails, nothing recorded yet to segment). Writes one HistoryAction.LOCATION
-    // marker PER currently-active mode — mirrors forceResetActiveModes' own per-mode-conditional
-    // loop exactly, and for the same reason: mode-scoped, never HistoryMode.ANY, since
-    // observeCurrentSegment's own query filters `mode = :mode` and an ANY-scoped row would be
-    // invisible to every mode's own live segment/duplicate-detection. Wrapped in one transaction
-    // so a crash mid-loop (relocating a race active in more than one mode) can't leave some
-    // modes' markers written and others not.
-    suspend fun relocateActiveModes(raceId: Long, newLocation: String) {
-        db.withTransaction {
-            val race = raceDao.getById(raceId) ?: return@withTransaction
-            if (race.timeModeStartedAtMillis != null) insertLocationMarkerAndReset(raceId, HistoryMode.TIME, newLocation)
-            if (race.bibsModeStartedAtMillis != null) insertLocationMarkerAndReset(raceId, HistoryMode.BIBS, newLocation)
-            if (race.cpModeStartedAtMillis != null) insertLocationMarkerAndReset(raceId, HistoryMode.CP, newLocation)
-            raceDao.updateLocationOnly(raceId, newLocation)
-        }
-    }
-
-    // Mirrors insertResetMarkerAndReset's own 3-step shape (insert marker consuming a real
-    // lineNumber, increment, reset that mode's own counter) with two differences: the marker
-    // carries the new location (in `note`) plus what to restore on undo (priorSplitCounter/
-    // previousLocation — see HistoryLineEntity's own doc for why these need their own dedicated
-    // columns rather than reusing splitNumber), and the "reset" is the narrower
-    // setXModeNextSplit(raceId, 1) rather than resetXMode, which would also wrongly clear
-    // started/stoppedAtMillis mid-recording (see RaceDao's own doc on those queries).
-    private suspend fun insertLocationMarkerAndReset(raceId: Long, mode: HistoryMode, newLocation: String, relocatedAtMillis: Long = System.currentTimeMillis()) {
-        val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
-        val priorSplitCounter = when (mode) {
-            HistoryMode.TIME -> race.timeModeNextSplit
-            HistoryMode.BIBS -> race.bibsModeNextSplit
-            HistoryMode.CP -> race.cpModeNextSplit
-            HistoryMode.ANY -> error("HistoryMode.ANY is never an active mode to relocate")
-        }
-        historyLineDao.insert(
-            HistoryLineEntity(
-                raceId = raceId,
-                mode = mode,
-                action = HistoryAction.LOCATION,
-                bibNumber = null,
-                splitNumber = null,
-                lineNumber = race.nextLineNumber,
-                note = newLocation,
-                timestampMillis = relocatedAtMillis,
-                priorSplitCounter = priorSplitCounter,
-                previousLocation = race.location,
-            ),
-        )
-        raceDao.incrementLineNumber(raceId)
-        when (mode) {
-            HistoryMode.TIME -> raceDao.setTimeModeNextSplit(raceId, 1)
-            HistoryMode.BIBS -> raceDao.setBibsModeNextSplit(raceId, 1)
-            HistoryMode.CP -> raceDao.setCpModeNextSplit(raceId, 1)
-            HistoryMode.ANY -> error("HistoryMode.ANY is never an active mode to relocate")
         }
     }
 
@@ -319,26 +289,23 @@ class RaceRepository(
     // MuleRepository.pushToServer's own self-push path.
     suspend fun getRaceByLabel(label: String): RaceEntity? = raceDao.getByLabel(label)
 
-    // Bibs and CP are mutually exclusive for the same race — both are alternate ways of
-    // logging the same physical station, so switching from one to the other while it still
-    // holds live, un-reset activity would leave both writing independently into what's meant
-    // to be one station's log. Requires the *other* of the two to be Stopped AND Reset first —
-    // merely Stopped isn't enough, same "still counts as active" reasoning as [isRaceActive]
-    // (bibsModeStartedAtMillis/cpModeStartedAtMillis only clear on Reset, not on Stop). Every
-    // other switch (into or out of Time/Mule, or re-selecting the same mode) is always allowed.
-    // Returns null when the switch is fine, or a message to show the operator when it isn't.
-    // Called from ModePickerViewModel.selectModeForExistingRace, the one place a mode switch
-    // for an already-active race actually happens.
     // Time/Bibs/CP are mutually exclusive for a given race's current segment — only one of the
-    // three may be started at once, the same interlock this originally only enforced between
-    // Bibs and CP. Checks every other mode generically (via isModeStarted) rather than a fixed
-    // pair of if-checks, so a 4th recording mode would only ever need adding to AppMode.entries
-    // for this to already cover it.
+    // three may be actively recording at once, since two would otherwise write independently into
+    // what's meant to be one station's log. Requires the *other* mode to be Stopped first — merely
+    // Stopped is enough, a full Reset is NOT required (see [isModeInProgress]: it clears the moment
+    // the other mode is Stopped, unlike [isModeStarted], which stays true until Reset) — the same
+    // relaxed rule a pure location-only Relocate already gets for free, since that never checks this
+    // at all. Every other switch (re-selecting the same mode, or switching while the other mode was
+    // never started) is always allowed. Checks every other mode generically (via [isModeInProgress])
+    // rather than a fixed pair of if-checks, so a 4th recording mode would only ever need adding to
+    // AppMode.entries for this to already cover it. Returns null when the switch is fine, or a
+    // message to show the operator when it isn't. Called from RaceDetailsViewModel.save, the one
+    // place a mode switch for an already-active race actually happens (via Relocate).
     suspend fun blockedModeSwitchReason(raceId: Long, targetMode: AppMode): String? {
         val race = raceDao.getById(raceId) ?: return null
-        val conflicting = AppMode.entries.firstOrNull { it != targetMode && isModeStarted(it, race) }
+        val conflicting = AppMode.entries.firstOrNull { it != targetMode && isModeInProgress(it, race) }
             ?: return null
-        return "${conflicting.displayName()} still has an active race — Stop and Reset it before " +
+        return "${conflicting.displayName()} still has an active race — Stop it before " +
             "switching to ${targetMode.displayName()}."
     }
 

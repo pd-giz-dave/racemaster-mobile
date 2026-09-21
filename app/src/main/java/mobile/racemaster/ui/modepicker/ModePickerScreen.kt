@@ -29,7 +29,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.data.mule.PeripheralSyncService
+import mobile.racemaster.data.repository.displayName
 import mobile.racemaster.data.settings.AppMode
+import mobile.racemaster.ui.components.RaceProgressSummary
 import mobile.racemaster.util.withClickSound
 
 @Composable
@@ -44,21 +46,21 @@ fun ModePickerScreen(
     viewModel: ModePickerViewModel = viewModel(factory = ModePickerViewModel.Factory),
 ) {
     val hasActiveRace by viewModel.hasActiveRace.collectAsStateWithLifecycle()
-    val activeRaceStatus by viewModel.activeRaceStatus.collectAsStateWithLifecycle()
+    val activeModes by viewModel.activeModes.collectAsStateWithLifecycle()
+    val raceSummary by viewModel.raceSummary.collectAsStateWithLifecycle()
+    val raceMode by viewModel.raceMode.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
+    val btPollingStatus by viewModel.btPollingStatus.collectAsStateWithLifecycle()
     val muleSyncEnabled by viewModel.muleSyncEnabled.collectAsStateWithLifecycle()
-    val modeSwitchError by viewModel.modeSwitchError.collectAsStateWithLifecycle()
 
-    // A device now records against exactly one race, set up up front via Setup Device > Setup
-    // Race (see TODO.md's phase 1) — there's no more "create one for this mode" fallback here,
-    // so a mode tap with nothing set up yet routes straight there instead, the same way an
-    // off Mule Mode routes through Options first (see the Mule ModeButton's own doc below).
-    fun handleModeTap(mode: AppMode) {
-        if (hasActiveRace) {
-            viewModel.selectModeForExistingRace(mode) { onModeSelected(mode) }
-        } else {
-            onSetupRaceNeeded()
-        }
+    // A device now records against exactly one race and mode, set up up front via Setup
+    // Device > Setup Race (see TODO.md's phase 1) — mode is no longer switched here at all
+    // (only via Relocate, once a race exists — see RaceDetailsScreen). Nothing set up yet
+    // routes straight to Setup Race, same as an off Mule Mode routes through Options first (see
+    // the Mule ModeButton's own doc below).
+    fun handleStartTap() {
+        val mode = raceMode
+        if (hasActiveRace && mode != null) onModeSelected(mode) else onSetupRaceNeeded()
     }
 
     // The mode picker is always the root of the back stack (see RacemasterNavHost), so
@@ -93,16 +95,28 @@ fun ModePickerScreen(
         ) {
             Text(deviceName?.let { "Setup: $it" } ?: "Setup Device", style = MaterialTheme.typography.titleMedium)
         }
-        Text("Select device mode", style = MaterialTheme.typography.titleMedium)
-        // "-active" mirrors the race-in-progress card just below (same activeModes set, see
-        // ActiveRaceStatus's own doc) right on the button itself — a race can be active in a
-        // mode other than whichever screen the operator currently has open (switching modes
-        // doesn't start a new race), so this is what actually tells them where without reading
-        // the card's own prose.
-        val activeModes = activeRaceStatus?.activeModes ?: emptySet()
-        ModeButton(activeLabel("Time Mode", AppMode.TIME in activeModes)) { handleModeTap(AppMode.TIME) }
-        ModeButton(activeLabel("Bibs Mode", AppMode.BIBS in activeModes)) { handleModeTap(AppMode.BIBS) }
-        ModeButton(activeLabel("CP Mode", AppMode.CP in activeModes)) { handleModeTap(AppMode.CP) }
+        // Replaces the old static "Select device mode" text — a mode is now chosen once, at
+        // Setup Race (or changed later via Relocate), not picked here every time, so this is a
+        // live status line instead: what's set up and ready, or a nudge toward Setup Race when
+        // nothing is yet.
+        val currentMode = raceMode
+        Text(
+            when {
+                hasActiveRace && currentMode != null -> "Ready to record ${currentMode.displayName()}"
+                hasActiveRace -> "Race set up — mode not yet chosen"
+                else -> "Set up a race above to begin"
+            },
+            style = MaterialTheme.typography.titleMedium,
+        )
+        // "- active" — a race can still have un-reset activity sitting in a mode it's since been
+        // relocated away from (Relocate switches RaceEntity.mode but never resets the mode being
+        // left), so this is what tells the operator "yes, this mode you're about to open is the
+        // one that's actually live", reading "<mode> - active" instead of "Start <mode>" once it
+        // genuinely is.
+        val startLabel = raceMode?.let { mode ->
+            if (mode in activeModes) "${mode.displayName()} - active" else "Start ${mode.displayName()}"
+        } ?: "Start"
+        ModeButton(startLabel, enabled = hasActiveRace && raceMode != null) { handleStartTap() }
         // Mule syncing is its own independent on/off flag now (see
         // SettingsRepository.muleSyncEnabled's own doc), not a 4th mode mutually exclusive with
         // the three above, echoed right in the button label so it reads correctly whether or not
@@ -138,8 +152,31 @@ fun ModePickerScreen(
                 Text("Help", style = MaterialTheme.typography.titleMedium)
             }
         }
-        activeRaceStatus?.let { status ->
-            ActiveRaceStatusCard(status)
+        // Once a race has genuinely been set up (a race exists and its mode is known), the same
+        // summary block the live mode screens themselves show — same common function, not a
+        // separate, differently-shaped card.
+        if (hasActiveRace && raceMode != null) {
+            raceSummary?.let { summary ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.medium)
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    RaceProgressSummary(
+                        deviceName = deviceName,
+                        raceLabel = summary.raceLabel,
+                        raceLocation = summary.raceLocation,
+                        nextSplitNumber = summary.nextSplitNumber,
+                        unsyncedCount = summary.unsyncedCount,
+                        lastSyncedAtMillis = summary.lastSyncedAtMillis,
+                        serverStatus = summary.serverStatus,
+                        btPollingStatus = btPollingStatus,
+                        progressText = summary.progressText,
+                    )
+                }
+            }
         }
     }
 
@@ -167,63 +204,13 @@ fun ModePickerScreen(
             },
         )
     }
-
-    modeSwitchError?.let { message ->
-        AlertDialog(
-            onDismissRequest = viewModel::dismissModeSwitchError,
-            title = { Text("Can't switch mode") },
-            text = { Text(message) },
-            confirmButton = {
-                TextButton(onClick = withClickSound(viewModel::dismissModeSwitchError)) { Text("OK") }
-            },
-        )
-    }
 }
 
 @Composable
-private fun ActiveRaceStatusCard(status: ActiveRaceStatus, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.medium)
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        val statusLabel = if (status.isStopped) "Race stopped" else "Race in progress"
-        Text("$statusLabel: ${status.raceLabel}", style = MaterialTheme.typography.bodyMedium)
-        if (status.splitCount > 0) {
-            Text(
-                "${status.splitCount} split${if (status.splitCount == 1) "" else "s"} recorded",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-        if (status.bibCount > 0) {
-            Text(
-                "${status.bibCount} bib${if (status.bibCount == 1) "" else "s"} recorded",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-        if (status.cpCount > 0) {
-            Text(
-                "${status.cpCount} checkpoint entr${if (status.cpCount == 1) "y" else "ies"} recorded",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-        val continueText = if (status.isStopped) {
-            "Go back to ${status.currentModeLabel} to review or reset it."
-        } else {
-            "You can continue by going back to ${status.currentModeLabel}."
-        }
-        Text(continueText, style = MaterialTheme.typography.bodySmall)
-    }
-}
-
-private fun activeLabel(label: String, isActive: Boolean): String = if (isActive) "$label - active" else label
-
-@Composable
-private fun ModeButton(label: String, onClick: () -> Unit) {
+private fun ModeButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
     Button(
         onClick = withClickSound(onClick),
+        enabled = enabled,
         modifier = Modifier
             .fillMaxWidth()
             .height(64.dp),

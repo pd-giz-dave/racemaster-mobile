@@ -37,7 +37,6 @@ class HistoryLineDaoTest {
         splitNumber = splitNumber,
         lineNumber = lineNumber,
         timestampMillis = timestampMillis,
-        recordUuid = "uuid-$lineNumber",
     )
 
     @Before
@@ -137,20 +136,18 @@ class HistoryLineDaoTest {
         assertEquals(1, dao.observeUnsyncedCountForRace(raceId, HistoryMode.BIBS).first())
         assertEquals(1, dao.observeUnsyncedCountForRace(raceId, HistoryMode.TIME).first())
 
-        dao.markSynced(listOf("uuid-1"), syncedAtMillis = 1_000L)
+        dao.markSynced(raceId, listOf(1L), syncedAtMillis = 1_000L)
         assertEquals(0, dao.observeUnsyncedCountForRace(raceId, HistoryMode.BIBS).first())
         assertEquals(1, dao.observeUnsyncedCountForRace(raceId, HistoryMode.TIME).first())
     }
 
     @Test
-    fun markSyncedIsKeyedByRecordUuidRegardlessOfMode() = runTest {
+    fun markSyncedByLineNumberAppliesRegardlessOfMode() = runTest {
         dao.insert(line(HistoryMode.BIBS, HistoryAction.FINISH, lineNumber = 1))
         dao.insert(line(HistoryMode.TIME, HistoryAction.SPLIT, lineNumber = 2))
 
-        dao.markSynced(listOf("uuid-1", "uuid-2"), syncedAtMillis = 5_000L)
+        dao.markSynced(raceId, listOf(1L, 2L), syncedAtMillis = 5_000L)
 
-        val lineNumbers = dao.getLineNumbersForUuids(listOf("uuid-1", "uuid-2"))
-        assertEquals(setOf(1L, 2L), lineNumbers.toSet())
         assertEquals(0, dao.observeUnsyncedCountForRace(raceId, HistoryMode.BIBS).first())
         assertEquals(0, dao.observeUnsyncedCountForRace(raceId, HistoryMode.TIME).first())
     }
@@ -172,13 +169,12 @@ class HistoryLineDaoTest {
                 splitNumber = 1,
                 lineNumber = 1L,
                 timestampMillis = 0L,
-                recordUuid = "other-race-uuid",
             ),
         )
 
         assertEquals(2, dao.observeUnsyncedCountAcrossAllRaces().first())
 
-        dao.markSynced(listOf("uuid-1"), syncedAtMillis = 1_000L)
+        dao.markSynced(raceId, listOf(1L), syncedAtMillis = 1_000L)
         assertEquals(1, dao.observeUnsyncedCountAcrossAllRaces().first())
     }
 
@@ -194,13 +190,12 @@ class HistoryLineDaoTest {
                 splitNumber = 1,
                 lineNumber = 1L,
                 timestampMillis = 0L,
-                recordUuid = "other-race-uuid",
             ),
         )
         assertNull(dao.observeLastSyncedAtMillisAcrossAllRaces().first())
 
-        dao.markSynced(listOf("uuid-1"), syncedAtMillis = 1_000L)
-        dao.markSynced(listOf("other-race-uuid"), syncedAtMillis = 5_000L)
+        dao.markSynced(raceId, listOf(1L), syncedAtMillis = 1_000L)
+        dao.markSynced(otherRaceId, listOf(1L), syncedAtMillis = 5_000L)
         assertEquals(5_000L, dao.observeLastSyncedAtMillisAcrossAllRaces().first())
     }
 
@@ -217,7 +212,6 @@ class HistoryLineDaoTest {
                 splitNumber = 1,
                 lineNumber = 1L,
                 timestampMillis = 9_000L,
-                recordUuid = "other-race-uuid",
             ),
         )
 

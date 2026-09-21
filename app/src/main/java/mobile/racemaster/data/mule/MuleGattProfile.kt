@@ -468,20 +468,17 @@ data class AckPayload(
  * same shape. Lands in the racemaster server's own `mobile` array (kept distinct from its
  * existing `finishers` array, not merged into it), deduped by `lineNumber` there — the
  * server's own per-device file already makes that field unambiguous (see this class's own
- * doc on why no `deviceName` rides along either). `splitTime`
- * (elapsed-since-race-start) is only meaningful for Time Mode splits — Bibs Mode has no
- * stopwatch of its own, so its records leave `splitTime` null and rely purely on
- * `timestampMillis`, the raw wall-clock instant the record was created.
+ * doc on why no `deviceName` rides along either).
  *
- * `bibNumber` is a *string*, not an Int, and is null only for a genuine Time Mode record
- * (which has no bib concept at all) — that's the signal the server's own discriminator uses
- * to tell a Time record from a Bibs one (see server.js's own doc: `bibNumber == null` means
- * Time, `splitTime == null` means Bibs). Every Bibs record therefore always carries a non-null
- * `bibNumber`, even one with no bib of its own (Clock, Stop, Reset, ...) — those send the
- * literal string `"n/a"` (matching how the app's own history list already displays them; see
- * HistoryLineRow) rather than null, so a Bibs record can never accidentally read as
- * wire-identical to a Time record (both `bibNumber` and `splitTime` null) just because it
- * happens to have no bib of its own. See [toSyncRecord] for where this is computed.
+ * `bibNumber` and `splitTime` are both plain, real-valued nullable fields now — an `Int` bib
+ * number, and elapsed seconds since race start as a raw `Int` (formatted to `HH:MM:SS` only at
+ * display time, never on the wire — see `formatElapsedSplitTime`'s own doc). Neither carries any
+ * discriminator meaning any more: which family (Time/Bibs/CP) a record belongs to is the
+ * enclosing `HistoryAction.MODE_START` marker's own job (its `note` explicitly states the mode —
+ * see [toSyncRecord] and `AppMode.wireName()`), not something inferred from these fields being
+ * null. `bibNumber` is simply null whenever a row genuinely has none (Clock, Stop, Reset, ...,
+ * and every Time record) and `splitTime` is simply null for every non-Time record and for
+ * MODE_START itself (regardless of mode) — no more `"n/a"` sentinel needed on either.
  *
  * Deliberately carries no `deviceName`: every place this travels (a BLE pull stream, a
  * `PulledRecordEntity` row, a server push/status entry) is already scoped to one originating
@@ -492,17 +489,15 @@ data class AckPayload(
  * Deliberately carries no `location` either, even though `RaceEntity.location` is otherwise
  * constant for a whole race — unlike `deviceName`, there's no separate per-race metadata channel
  * in this wire protocol to send it through once, so it used to be repeated on every single
- * record instead. It now travels only on the three boundary-marker rows whose own `note` field
- * already means "location as of this point" — SETUP, MODE_START and `HistoryAction.LOCATION`
- * (see that action's own doc) — a consumer reconstructs "what location was record X recorded at"
- * by walking a device's history in lineNumber order and tracking the most recent such marker's
- * `note`.
+ * record instead. It now travels only on `HistoryAction.LOCATION` marker rows, in their own
+ * `note` field — a consumer reconstructs "what location was record X recorded at" by walking a
+ * device's history in lineNumber order and tracking the most recent such marker's `note`.
  */
 @Serializable
 data class SyncRecord(
     val action: String,
-    val bibNumber: String?,
-    val splitTime: String?,
+    val bibNumber: Int?,
+    val splitTime: Int?,
     val splitNumber: Int?,
     // Permanent, ascending history position — see RaceEntity.nextLineNumber. What delta-sync
     // (both the BLE pull protocol and the server's mobile-sync endpoint) keys off.

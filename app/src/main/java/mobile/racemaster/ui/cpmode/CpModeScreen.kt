@@ -27,8 +27,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.data.db.entity.HistoryAction
+import mobile.racemaster.data.db.entity.NON_ENTRY_ACTIONS
 import mobile.racemaster.data.mule.BtPollingStatus
-import mobile.racemaster.data.repository.isValidCpLocation
 import mobile.racemaster.ui.components.DigitKeypad
 import mobile.racemaster.ui.components.EntryLogList
 import mobile.racemaster.ui.components.EntryModeHeaderInfo
@@ -36,6 +37,7 @@ import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.StopOrResetButton
 import mobile.racemaster.ui.components.UndoLastButton
 import mobile.racemaster.ui.components.rememberListClickGuard
+import mobile.racemaster.util.formatCpSoFarText
 import mobile.racemaster.util.withClickSound
 
 private const val BUTTON_HEIGHT_DP = 48
@@ -144,6 +146,7 @@ private fun CpModeContent(
                     dupCount = uiState.dupCount,
                     unsyncedCount = uiState.unsyncedCount,
                     lastSyncedAtMillis = uiState.lastSyncedAtMillis,
+                    soFarText = formatCpSoFarText(uiState.entries.count { it.type !in NON_ENTRY_ACTIONS }),
                     expectedCount = uiState.expectedCount,
                     outstandingCount = uiState.outstandingCount,
                     duplicateBibNumbers = uiState.duplicateBibNumbers,
@@ -153,21 +156,9 @@ private fun CpModeContent(
                     btPollingStatus = btPollingStatus,
                 )
                 if (!uiState.started) {
-                    // Setup Race no longer knows the mode at setup time (see TODO.md's phase
-                    // 1), so it can't enforce CP's own location format the way the old race
-                    // details form used to — checked here instead, the one place CP Mode
-                    // actually needs it: a station's entries are told apart by this location,
-                    // so a wrongly-shaped one is caught before Start rather than after.
-                    val locationValid = isValidCpLocation(uiState.raceLocation)
-                    if (uiState.raceId != null && !locationValid) {
-                        Text(
-                            "This race's location (\"${uiState.raceLocation}\") isn't a valid CP " +
-                                "location yet — it must look like CP1, CP2-Bridge, etc. Fix it via " +
-                                "\"This Race\" before starting.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
+                    // Setup Race/Relocate now enforce CP's own location format up front (see
+                    // isValidLocationForMode) before a race can ever be set to CP Mode at all —
+                    // no need to re-check it here too.
                     // Nothing recorded yet for this segment (a fresh race, a race switched
                     // into from a different mode, or one just Reset) — side-effect-free to
                     // just look at, exactly like Time/Bibs Mode's own pre-Start state. Unlike
@@ -175,7 +166,7 @@ private fun CpModeContent(
                     // CpModeRepository.startCpMode's own doc.
                     Button(
                         onClick = withClickSound(onStart),
-                        enabled = uiState.raceId != null && locationValid,
+                        enabled = uiState.raceId != null,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(96.dp),

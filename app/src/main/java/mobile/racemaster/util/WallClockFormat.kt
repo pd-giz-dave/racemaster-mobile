@@ -18,3 +18,11 @@ fun formatWallClock(millis: Long): String =
  *  locale mid-session. */
 fun formatTimeOfDay(millis: Long, locale: Locale): String =
     SimpleDateFormat("HH:mm", locale).format(Date(millis))
+
+/** Short "yy-MM-dd" date — used only to keep Setup Race's own "unknown" fallback name (a device
+ *  that hasn't been given a real name yet — see SetupRaceScreen's own doc) distinguishable across
+ *  devices/days, since unlike a real name (typed, inherited from the server, or following its
+ *  own convention — see buildRaceLabel's own doc for why those are never modified), "unknown" on
+ *  its own would collide identically for every such device. */
+fun formatShortDate(millis: Long): String =
+    SimpleDateFormat("yy-MM-dd", Locale.getDefault()).format(Date(millis))

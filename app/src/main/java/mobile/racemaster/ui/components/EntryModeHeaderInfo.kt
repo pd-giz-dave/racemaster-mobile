@@ -1,15 +1,9 @@
 package mobile.racemaster.ui.components
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import mobile.racemaster.data.db.entity.formatSplitRef
 import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.util.formatBibsExpectedText
@@ -20,7 +14,9 @@ import mobile.racemaster.util.formatBibsExpectedText
  *  `data/repository/BibValidation.kt`), so this is one shared block rather than two
  *  copy-pasted ones. Rendered directly into whatever Column the caller already has open (no
  *  Column of its own) — matches how these lines were laid out inline in BibsModeScreen before
- *  this was extracted. */
+ *  this was extracted. Wraps [RaceProgressSummary] for the prefix common to every mode's own
+ *  header (and Mode Picker's own summary), appending the dup-count badge into its "Next" row and
+ *  then this pair's own extra bib/CP-specific lines below it. */
 @Composable
 fun EntryModeHeaderInfo(
     deviceName: String?,
@@ -30,6 +26,11 @@ fun EntryModeHeaderInfo(
     dupCount: Int,
     unsyncedCount: Int,
     lastSyncedAtMillis: Long?,
+    // Each caller's own mode-appropriate "N so far" text (see RaceProgressSummary.progressText's
+    // own doc) — e.g. `formatBibsSoFarText`/`formatCpSoFarText` from util/ExpectedRunnersText.kt —
+    // passed in pre-formatted since this composable is shared by both modes and can't itself know
+    // which noun ("bibs" vs "checkpoint entries") applies.
+    soFarText: String,
     expectedCount: Int,
     outstandingCount: Int,
     duplicateBibNumbers: List<Int>,
@@ -38,19 +39,17 @@ fun EntryModeHeaderInfo(
     serverStatus: ServerStatusState,
     btPollingStatus: BtPollingStatus,
 ) {
-    ServerStatusLine(serverStatus)
-    BtPollingStatusLine(btPollingStatus)
-    if (!deviceName.isNullOrBlank()) {
-        Text(text = "Device name: $deviceName", style = MaterialTheme.typography.labelMedium)
-    }
-    Text(text = "Race name: $raceLabel", style = MaterialTheme.typography.labelMedium)
-    Text(text = "Location: $raceLocation", style = MaterialTheme.typography.labelMedium)
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(
-            text = "Next: ${formatSplitRef(nextSplitNumber)}",
-            style = MaterialTheme.typography.labelMedium,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    RaceProgressSummary(
+        deviceName = deviceName,
+        raceLabel = raceLabel,
+        raceLocation = raceLocation,
+        nextSplitNumber = nextSplitNumber,
+        unsyncedCount = unsyncedCount,
+        lastSyncedAtMillis = lastSyncedAtMillis,
+        serverStatus = serverStatus,
+        btPollingStatus = btPollingStatus,
+        progressText = soFarText,
+        nextRowTrailingContent = {
             if (dupCount > 0) {
                 Text(
                     text = "$dupCount dup${if (dupCount == 1) "" else "s"}",
@@ -58,9 +57,8 @@ fun EntryModeHeaderInfo(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            SyncStatusLine(unsyncedCount, lastSyncedAtMillis)
-        }
-    }
+        },
+    )
     formatBibsExpectedText(expectedCount, outstandingCount)?.let { text ->
         Text(text = text, style = MaterialTheme.typography.labelMedium)
     }

@@ -43,7 +43,7 @@ fun ProgressDetailScreen(
         topBar = {
             TopAppBar(
                 title = { Text(uiState.raceName.ifBlank { uiState.raceLabel }.ifBlank { "Progress" }) },
-                navigationIcon = { TextButton(onClick = withClickSound(onBack)) { Text("Back") } },
+                actions = { TextButton(onClick = withClickSound(onBack)) { Text("Back") } },
                 windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },

@@ -117,35 +117,9 @@ class SettingsRepositoryTest {
         scope.cancel()
     }
 
-    // courseHistory/locationHistory — see RaceDetailsScreen's Course/Location fields. Both
-    // offer a fixed set of defaults even before the operator has ever typed anything, appended
-    // after whatever's actually been saved for real.
-
-    @OptIn(ExperimentalCoroutinesApi::class)
-    @Test
-    fun courseHistoryOffersItsDefaultsBeforeAnythingHasBeenSaved() = runTest {
-        val file = tempFolder.newFile("test.preferences_pb")
-        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
-        val repository = SettingsRepository(dataStoreOverFile(file, scope))
-
-        assertEquals(listOf("Seniors", "Juniors", "Mixed"), repository.courseHistory.first())
-        scope.cancel()
-    }
-
-    @OptIn(ExperimentalCoroutinesApi::class)
-    @Test
-    fun courseHistoryListsRealEntriesBeforeDefaultsWithoutDuplicatingAMatchingDefault() = runTest {
-        val file = tempFolder.newFile("test.preferences_pb")
-        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
-        val repository = SettingsRepository(dataStoreOverFile(file, scope))
-
-        repository.addCourseToHistory("10K")
-        // Saving a default for real must not list it twice.
-        repository.addCourseToHistory("Seniors")
-
-        assertEquals(listOf("Seniors", "10K", "Juniors", "Mixed"), repository.courseHistory.first())
-        scope.cancel()
-    }
+    // locationHistory — see RaceDetailsScreen's Location field. Offers a fixed set of defaults
+    // even before the operator has ever typed anything, appended after whatever's actually been
+    // saved for real.
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
