@@ -71,7 +71,7 @@ enum class HistoryAction {
     NEW_RACE,
 }
 
-/** Actions that carry a real bib number and participate in range/duplicate checks. */
+/** Actions that carry a real bib number and participate in expected/duplicate checks. */
 val BIB_REQUIRED_ACTIONS = setOf(HistoryAction.START, HistoryAction.FINISH, HistoryAction.RETIRE, HistoryAction.PASS)
 
 /** Boundary/marker rows that a Bibs/CP "N so far" running-tally count (see

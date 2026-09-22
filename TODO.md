@@ -89,3 +89,8 @@ race setup fields) and it stops advertising itself and stops updating the web.
 - [ ] when attempt to relocate an active race instead of rejecting it offer the option of stopping
       and then doing the relocate (auto add the stop record as if the user pressed STOP in the
       mode screen)
+- [ ] need to allow for relocating back to some previous location, which case it must pick up
+      where it left off, typical scenario - finish time mode records a split for the race start
+      then relocates to CPn, then back to the finish before the first finisher arrives and starts
+      recording finish splits, when returning to a previous location the mode screen should look
+      like it was when they left

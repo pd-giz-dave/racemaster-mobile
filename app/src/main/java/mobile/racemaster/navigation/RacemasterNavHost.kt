@@ -207,7 +207,18 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                     val raceId = backStackEntry.arguments?.getLong("raceId") ?: return@composable
                     RaceDetailsScreen(
                         existingRaceId = raceId,
-                        onSaved = { navController.popBackStack() },
+                        // A mode-only-or-unchanged relocate pops back onto the same mode screen
+                        // as always — it's still showing the right race, live. A mode-CHANGING
+                        // relocate instead lands on Mode Picker (same idiom RaceHistoryScreen's
+                        // own onRaceResumed already uses) rather than popping back onto the mode
+                        // screen just left — that screen has no way to know its race switched to
+                        // a different mode out from under it (see RaceDetailsScreen's own
+                        // onSaved doc), so staying there would strand the operator looking at a
+                        // stale screen with no path to the new mode but backing out manually.
+                        onSaved = { modeChanged ->
+                            if (modeChanged) navController.popBackStack(Routes.MODE_PICKER, false)
+                            else navController.popBackStack()
+                        },
                         onCancel = { navController.popBackStack() },
                     )
                 }

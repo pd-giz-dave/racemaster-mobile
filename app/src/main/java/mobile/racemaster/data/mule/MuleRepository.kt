@@ -529,12 +529,8 @@ class MuleRepository(
             // the field: self stayed permanently red, and lastSyncedAtMillis stayed "never",
             // despite the server genuinely having the data).
             //
-            val selfRecords = if (localRace != null) {
-                raceRepository.getHistorySinceLineNumber(localRace.id, 0L)
-                    .map { row -> row.toSyncRecord(localRace.timeModeStartedAtMillis) }
-            } else {
-                emptyList()
-            }
+            val selfRows = if (localRace != null) raceRepository.getHistorySinceLineNumber(localRace.id, 0L) else emptyList()
+            val selfRecords = selfRows.map { row -> row.toSyncRecord(localRace?.timeModeStartedAtMillis) }
 
             // Genuinely pulled from other devices — decoded from the inbox. A single row whose
             // payloadJson no longer matches SyncRecord's current shape (e.g. stored before a
@@ -553,7 +549,38 @@ class MuleRepository(
             } else {
                 pulledByDevice + (myDeviceName to selfRecords)
             }
-            val devicesToSend = recordsDueForDevices(byDevice, status)
+            // Which devices' own `status` value is impossible for it to legitimately hold —
+            // i.e. HIGHER than the highest lineNumber we ourselves have ever seen for that
+            // device (our own current history for self; every row ever pulled for a relayed
+            // one). The server can never legitimately know about more lines than we've produced
+            // for that exact race — line numbers are strictly local-monotonic per raceId — so a
+            // status this high can only be stale leftover data from a different, since-
+            // superseded race that used to share this exact label. This is what
+            // recordsDueForDevices below uses to decide whether to bypass the normal delta
+            // filter for a device (see its own doc for why sending everything unfiltered in
+            // that case is what actually guarantees a fresh race's own NewRace marker reaches
+            // the server at all).
+            //
+            // Deliberately NOT keyed off whether the local NewRace row's own syncedAtMillis is
+            // still null (a real, confirmed bug in an earlier version of this fix): that would
+            // create a deadlock, not just a wrong answer — bypassing keeps `justSent` equal to
+            // this device's entire history forever, so the "only mark synced what this round's
+            // status check independently confirms, never what was merely just sent" rule further
+            // down could never fire, so syncedAtMillis could never actually be set, so the
+            // bypass could never turn itself off. This comparison has no such problem: once the
+            // server's file is wiped-and-replaced (server/routes/mobile.js, triggered by that
+            // same push), its own reported status naturally drops to (at most) our own real max,
+            // and the bypass naturally, permanently stops on its own — no confirmation-state
+            // bookkeeping needed at all.
+            val startingFreshDevices = buildSet {
+                val selfMax = selfRows.maxOfOrNull { it.lineNumber } ?: 0L
+                if ((status[myDeviceName] ?: 0L) > selfMax) add(myDeviceName)
+                for ((deviceName, rows) in pulledForRace.groupBy { it.deviceName }) {
+                    val pulledMax = rows.maxOfOrNull { it.lineNumber } ?: 0L
+                    if ((status[deviceName] ?: 0L) > pulledMax) add(deviceName)
+                }
+            }
+            val devicesToSend = recordsDueForDevices(byDevice, status, startingFreshDevices)
             if (devicesToSend.isNotEmpty()) {
                 // See reauthenticate's own doc: a 401/403 here — this device's saved token no
                 // longer being accepted, most often a server-side session reset rather than
@@ -649,21 +676,27 @@ private fun maxOfNullable(a: Long?, b: Long?): Long? = when {
 // already carries that distinction end to end). Pulled out as a pure function so this logic can
 // be tested directly, without faking pushToServer's network round-trip.
 //
-// A device whose records include a "NewRace" marker (see HistoryAction.NEW_RACE's own doc) is
-// the one deliberate exception to the delta filter above: its own fresh race's lineNumbers (1,
-// 2, 3…) are, by construction, all lower than whatever stale max the server's own `status` still
-// reports from the race this label previously belonged to — filtering by that stale max would
+// A device named in [startingFreshDevices] (see pushToServer's own doc for exactly how that's
+// computed — `status[deviceName]` reporting a max the caller itself could never legitimately
+// have produced, the signature of stale leftover data from a different, since-superseded race
+// that used to share this exact label) is the one deliberate exception to the delta filter
+// below: its own fresh race's lineNumbers (1, 2, 3…, including its own NewRace marker — see
+// HistoryAction.NEW_RACE's own doc) may be lower than that stale max — filtering by it would
 // silently drop the entire new race, marker included, and it would never reach the server at
 // all. Sending that device's full record set unfiltered in that case is what actually
-// guarantees the marker's delivery; the server's own merge logic (see server/routes/mobile.js)
-// is what wipes its stale file on seeing it.
+// guarantees delivery; the server's own merge logic (see server/routes/mobile.js) is what wipes
+// its stale file on seeing the marker. The bypass is self-limiting: once that wipe-and-replace
+// lands, the server's own next-reported status can no longer exceed the caller's real max, so
+// the caller naturally stops naming this device on its own, with no confirmation-state
+// bookkeeping needed.
 internal fun recordsDueForDevices(
     byDevice: Map<String, List<SyncRecord>>,
     status: Map<String, Long>,
+    startingFreshDevices: Set<String> = emptySet(),
 ): Map<String, List<SyncRecord>> =
     byDevice
         .mapValues { (deviceName, records) ->
-            if (records.any { it.action == "NewRace" }) records
+            if (deviceName in startingFreshDevices) records
             else records.filter { it.lineNumber > (status[deviceName] ?: 0) }
         }
         .filterValues { it.isNotEmpty() }

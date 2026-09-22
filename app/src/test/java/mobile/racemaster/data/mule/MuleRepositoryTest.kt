@@ -100,7 +100,7 @@ class MuleRepositoryTest {
     )
 
     @Test
-    fun aDeviceWithANewRaceMarkerIgnoresTheStaleServerStatusAndSendsEverything() {
+    fun aDeviceNamedInStartingFreshIgnoresTheStaleServerStatusAndSendsEverything() {
         // The server's own status reports this device far ahead (line 8) — stale, from a
         // different, since-superseded race that happened to reuse the same label. Without the
         // NewRace exception, every one of these low-numbered fresh records would be filtered
@@ -108,9 +108,30 @@ class MuleRepositoryTest {
         val byDevice = mapOf("quiet-thicket" to listOf(newRaceRecord(1), timeRecord(2), timeRecord(3)))
         val status = mapOf("quiet-thicket" to 8L)
 
-        val due = recordsDueForDevices(byDevice, status)
+        val due = recordsDueForDevices(byDevice, status, startingFreshDevices = setOf("quiet-thicket"))
 
         assertEquals(setOf(1L, 2L, 3L), due.getValue("quiet-thicket").map { it.lineNumber }.toSet())
+    }
+
+    @Test
+    fun aNewRaceMarkerNoLongerNamedInStartingFreshUsesTheOrdinaryDeltaFilterEvenIfStillPresentInTheFullHistory() {
+        // Regression test for a real, confirmed bug: pushToServer's own `selfRecords` is always
+        // this device's COMPLETE local history (fetched from line 0 on every single call), so a
+        // NewRace marker written once stays present in it for the entire lifetime of the race —
+        // not just its first push. Bypassing on the marker's mere presence (rather than whether
+        // pushToServer's own caller still considers it "starting fresh", i.e. genuinely
+        // unconfirmed) meant every subsequent push kept sending, and therefore kept "just
+        // sending" without ever confirming, this device's ENTIRE history forever — so it could
+        // never be marked synced locally even though the server genuinely already had all of it.
+        // Once the caller stops naming this device (the real signal, computed from local
+        // syncedAtMillis — see pushToServer's own doc), the ordinary per-line delta filter must
+        // apply, exactly as if no NewRace marker were involved at all.
+        val byDevice = mapOf("quiet-thicket" to listOf(newRaceRecord(1), timeRecord(2), timeRecord(3)))
+        val status = mapOf("quiet-thicket" to 2L)
+
+        val due = recordsDueForDevices(byDevice, status, startingFreshDevices = emptySet())
+
+        assertEquals(listOf(3L), due.getValue("quiet-thicket").map { it.lineNumber })
     }
 
     // decodeSyncRecord — a row whose payloadJson no longer matches SyncRecord's current shape

@@ -53,7 +53,15 @@ import mobile.racemaster.util.withClickSound
 @Composable
 fun RaceDetailsScreen(
     existingRaceId: Long,
-    onSaved: () -> Unit,
+    // true when this save actually changed the mode (not just location) — lets the caller
+    // navigate away from whichever mode screen Relocate was launched from, rather than popping
+    // back onto it: that screen has no idea its race just switched to a different mode out from
+    // under it (its own started/stopped columns and mode-scoped current-segment/Undo are
+    // untouched by a mode-only Relocate — see RaceRepository.recordModeStart's own doc), so
+    // popping back there left the operator stranded looking at a stale screen for the mode they
+    // just left, with its own Undo silently targeting an unrelated entry from that old mode
+    // instead of the relocate itself (confirmed in the field).
+    onSaved: (modeChanged: Boolean) -> Unit,
     onCancel: () -> Unit,
     viewModel: RaceDetailsViewModel = viewModel(factory = RaceDetailsViewModel.factory(existingRaceId)),
 ) {
@@ -207,7 +215,7 @@ fun RaceDetailsScreen(
                     scope.launch {
                         val succeeded = viewModel.save(name, location, chosenMode)
                         isSaving = false
-                        if (succeeded) onSaved()
+                        if (succeeded) onSaved(chosenMode != initialMode)
                     }
                 },
                 enabled = canSave,
