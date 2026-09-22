@@ -54,58 +54,45 @@ class HistoryLineDaoTest {
         db.close()
     }
 
+    // observeAllForRaceAndMode/getAllForRaceAndMode — unfiltered by action (RESET is no longer a
+    // SQL-level boundary; the current-segment computation now happens entirely at the app layer,
+    // see HistoryFold's own doc), but still strictly scoped by `mode`, since RESET/UNDO/START are
+    // all shared action values across both families (see HistoryAction's own doc) and must never
+    // leak across a `mode` scope regardless of which `action` they happen to carry.
+
     @Test
-    fun timeModeResetBoundaryNeverPicksUpABibsModeReset() = runTest {
-        // RESET is one shared action value across both families (see HistoryAction's own doc)
-        // — a Bibs RESET landing between two Time rows must not act as a segment boundary for
-        // Time Mode's own current-segment query, since every query is scoped by `mode` first
-        // regardless of `action`.
+    fun scopedStrictlyByModeRegardlessOfSharedActionValues() = runTest {
         dao.insert(line(HistoryMode.TIME, HistoryAction.START, lineNumber = 1))
         dao.insert(line(HistoryMode.TIME, HistoryAction.SPLIT, lineNumber = 2))
         dao.insert(line(HistoryMode.BIBS, HistoryAction.RESET, lineNumber = 3))
         dao.insert(line(HistoryMode.TIME, HistoryAction.SPLIT, lineNumber = 4))
 
-        val timeSegment = dao.observeCurrentSegment(raceId, HistoryMode.TIME, HistoryAction.RESET).first()
-        // No RESET has been logged for Time, so the whole Time history is still "current".
-        assertEquals(setOf(1L, 2L, 4L), timeSegment.map { it.lineNumber }.toSet())
+        val timeRows = dao.observeAllForRaceAndMode(raceId, HistoryMode.TIME).first()
+        assertEquals(listOf(1L, 2L, 4L), timeRows.map { it.lineNumber })
     }
 
     @Test
-    fun bibsModeResetBoundaryNeverPicksUpATimeModeReset() = runTest {
-        dao.insert(line(HistoryMode.BIBS, HistoryAction.FINISH, lineNumber = 1))
-        dao.insert(line(HistoryMode.TIME, HistoryAction.RESET, lineNumber = 2))
-        dao.insert(line(HistoryMode.BIBS, HistoryAction.FINISH, lineNumber = 3))
-
-        val bibsSegment = dao.observeCurrentSegment(raceId, HistoryMode.BIBS, HistoryAction.RESET).first()
-        // No Bibs RESET has been logged, so both Bibs rows are still "current" despite the
-        // Time-mode RESET sitting in between.
-        assertEquals(setOf(1L, 3L), bibsSegment.map { it.lineNumber }.toSet())
-    }
-
-    @Test
-    fun eachModesResetActuallyBoundsItsOwnSegment() = runTest {
-        dao.insert(line(HistoryMode.BIBS, HistoryAction.FINISH, lineNumber = 1))
-        dao.insert(line(HistoryMode.BIBS, HistoryAction.RESET, lineNumber = 2))
-        dao.insert(line(HistoryMode.BIBS, HistoryAction.FINISH, lineNumber = 3))
-
-        val bibsSegment = dao.observeCurrentSegment(raceId, HistoryMode.BIBS, HistoryAction.RESET).first()
-        assertEquals(listOf(3L), bibsSegment.map { it.lineNumber })
-    }
-
-    @Test
-    fun aSharedUndoRowIsExcludedFromTheOtherModesView() = runTest {
-        // UNDO (like START/STOP/RESET) is one of the action values shared by both modes —
-        // inserting one under BIBS must never leak into a TIME-scoped query, and vice versa,
-        // since every query is scoped by `mode` first regardless of `action`.
+    fun everyRowForTheModeIsReturnedIncludingResetAndUndoMarkers() = runTest {
         dao.insert(line(HistoryMode.BIBS, HistoryAction.FINISH, lineNumber = 1))
         dao.insert(line(HistoryMode.BIBS, HistoryAction.UNDO, lineNumber = 2))
-        dao.insert(line(HistoryMode.TIME, HistoryAction.SPLIT, lineNumber = 3))
+        dao.insert(line(HistoryMode.BIBS, HistoryAction.RESET, lineNumber = 3))
+        dao.insert(line(HistoryMode.BIBS, HistoryAction.FINISH, lineNumber = 4))
+        dao.insert(line(HistoryMode.TIME, HistoryAction.SPLIT, lineNumber = 5))
 
-        val timeSegment = dao.observeCurrentSegment(raceId, HistoryMode.TIME, HistoryAction.RESET).first()
-        assertEquals(listOf(3L), timeSegment.map { it.lineNumber })
+        val bibsRows = dao.observeAllForRaceAndMode(raceId, HistoryMode.BIBS).first()
+        assertEquals(listOf(1L, 2L, 3L, 4L), bibsRows.map { it.lineNumber })
 
-        val bibsSegment = dao.observeCurrentSegment(raceId, HistoryMode.BIBS, HistoryAction.RESET).first()
-        assertEquals(setOf(1L, 2L), bibsSegment.map { it.lineNumber }.toSet())
+        val timeRows = dao.observeAllForRaceAndMode(raceId, HistoryMode.TIME).first()
+        assertEquals(listOf(5L), timeRows.map { it.lineNumber })
+    }
+
+    @Test
+    fun getAllForRaceAndModeIsTheOneShotEquivalentOfTheFlow() = runTest {
+        dao.insert(line(HistoryMode.CP, HistoryAction.PASS, lineNumber = 1))
+        dao.insert(line(HistoryMode.CP, HistoryAction.PASS, lineNumber = 2))
+
+        val snapshot = dao.getAllForRaceAndMode(raceId, HistoryMode.CP)
+        assertEquals(listOf(1L, 2L), snapshot.map { it.lineNumber })
     }
 
     @Test

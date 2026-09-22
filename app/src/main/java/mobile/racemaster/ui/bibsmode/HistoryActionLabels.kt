@@ -15,9 +15,11 @@ fun HistoryAction.displayName(): String = when (this) {
     HistoryAction.FEMALE -> "Female"
     HistoryAction.CLOCK -> "Clock"
     HistoryAction.PASS -> "Pass"
-    HistoryAction.STOP -> "Stop"
     HistoryAction.RESET -> "Reset"
     HistoryAction.UNDO -> "Undo"
+    // Race History's full chronology is the only place this is ever shown (see
+    // HistoryAction.PING's own doc) — a pure heartbeat, never operator-interactive.
+    HistoryAction.PING -> "Ping"
     // Race History is the only place this is ever shown (see HistoryAction.MODE_START's own
     // doc) — same "Start" text its own real Start/Clock marker already shows there, just on
     // its own separate boundary-marker row.
@@ -34,14 +36,13 @@ fun HistoryAction.displayName(): String = when (this) {
     HistoryAction.NEW_RACE -> "New Race"
 }
 
-// Deliberately excludes every marker action (CLOCK/STOP/RESET/UNDO, plus the Time-only SPLIT,
+// Deliberately excludes every marker action (CLOCK/RESET/UNDO/PING, plus the Time-only SPLIT,
 // none of which are ever relevant to this Bibs-only picker): Clock only ever exists once, as
 // the fixed auto-inserted split 0 (re-selecting it ad hoc doesn't fit that model, and none of
-// its web-app time semantics are consumed anywhere in this codebase yet); Stop is only ever
-// inserted by the dedicated Stop button, never operator-selectable here; Reset is only ever
-// inserted by BibsModeRepository.resetBibsMode as a fixed history boundary marker, same as
-// Stop; Undo is only ever inserted by BibsModeRepository.undoMostRecent as a fixed history
-// marker, never operator-selectable either.
+// its web-app time semantics are consumed anywhere in this codebase yet); Reset is only ever
+// inserted by BibsModeRepository.resetBibsMode as a fixed history boundary marker; Undo is only
+// ever inserted by BibsModeRepository.undoMostRecent as a fixed history marker; Ping is only
+// ever inserted by the background heartbeat loop — none are ever operator-selectable here.
 val EVENT_PICKER_OPTIONS: List<HistoryAction> = listOf(
     HistoryAction.FINISH,
     HistoryAction.START,

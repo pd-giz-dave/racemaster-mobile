@@ -19,12 +19,12 @@ class HistoryActionLabelsTest {
         assertEquals("Female", HistoryAction.FEMALE.displayName())
         assertEquals("Clock", HistoryAction.CLOCK.displayName())
         assertEquals("Pass", HistoryAction.PASS.displayName())
-        assertEquals("Stop", HistoryAction.STOP.displayName())
         assertEquals("Reset", HistoryAction.RESET.displayName())
         assertEquals("Undo", HistoryAction.UNDO.displayName())
         assertEquals("Start", HistoryAction.MODE_START.displayName())
         assertEquals("Location", HistoryAction.LOCATION.displayName())
         assertEquals("New Race", HistoryAction.NEW_RACE.displayName())
+        assertEquals("Ping", HistoryAction.PING.displayName())
     }
 
     @Test
@@ -38,9 +38,9 @@ class HistoryActionLabelsTest {
         )
         // Bibs-mode markers.
         assertEquals(false, HistoryAction.CLOCK in EVENT_PICKER_OPTIONS)
-        assertEquals(false, HistoryAction.STOP in EVENT_PICKER_OPTIONS)
         assertEquals(false, HistoryAction.RESET in EVENT_PICKER_OPTIONS)
         assertEquals(false, HistoryAction.UNDO in EVENT_PICKER_OPTIONS)
+        assertEquals(false, HistoryAction.PING in EVENT_PICKER_OPTIONS)
         // The Time-only action never belongs on this Bibs-only picker either.
         assertEquals(false, HistoryAction.SPLIT in EVENT_PICKER_OPTIONS)
         // CP's own action never belongs on the Bibs picker either.

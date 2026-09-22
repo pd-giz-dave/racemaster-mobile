@@ -48,34 +48,21 @@ interface RaceDao {
     @Query("UPDATE races SET timeModeStartedAtMillis = :startedAtMillis WHERE id = :raceId")
     suspend fun setTimeModeStartedAt(raceId: Long, startedAtMillis: Long)
 
-    @Query("UPDATE races SET timeModeStoppedAtMillis = :stoppedAtMillis WHERE id = :raceId")
-    suspend fun setTimeModeStoppedAt(raceId: Long, stoppedAtMillis: Long)
-
     @Query("UPDATE races SET timeModeStartedAtMillis = NULL WHERE id = :raceId")
     suspend fun clearTimeModeStartedAt(raceId: Long)
 
-    @Query("UPDATE races SET timeModeStoppedAtMillis = NULL WHERE id = :raceId")
-    suspend fun clearTimeModeStoppedAt(raceId: Long)
-
-    @Query(
-        "UPDATE races SET timeModeNextSplit = 1, timeModeStartedAtMillis = NULL, " +
-            "timeModeStoppedAtMillis = NULL WHERE id = :raceId",
-    )
+    @Query("UPDATE races SET timeModeNextSplit = 1, timeModeStartedAtMillis = NULL WHERE id = :raceId")
     suspend fun resetTimeMode(raceId: Long)
 
     @Query("UPDATE races SET bibsModeStartedAtMillis = :startedAtMillis WHERE id = :raceId")
     suspend fun setBibsModeStartedAt(raceId: Long, startedAtMillis: Long)
 
-    @Query("UPDATE races SET bibsModeStoppedAtMillis = :stoppedAtMillis WHERE id = :raceId")
-    suspend fun setBibsModeStoppedAt(raceId: Long, stoppedAtMillis: Long)
+    @Query("UPDATE races SET bibsModeStartedAtMillis = NULL WHERE id = :raceId")
+    suspend fun clearBibsModeStartedAt(raceId: Long)
 
-    @Query("UPDATE races SET bibsModeStoppedAtMillis = NULL WHERE id = :raceId")
-    suspend fun clearBibsModeStoppedAt(raceId: Long)
-
-    // Clears bibsModeStartedAtMillis too, same as resetCpMode does for CP — this is what
-    // returns the screen to its pre-Start state (see RaceEntity.bibsModeStartedAtMillis's own
-    // doc).
-    @Query("UPDATE races SET bibsModeNextSplit = 1, bibsModeStoppedAtMillis = NULL, bibsModeStartedAtMillis = NULL WHERE id = :raceId")
+    // Clears bibsModeStartedAtMillis too — this is what returns the screen to its pre-Start
+    // state (see RaceEntity.bibsModeStartedAtMillis's own doc).
+    @Query("UPDATE races SET bibsModeNextSplit = 1, bibsModeStartedAtMillis = NULL WHERE id = :raceId")
     suspend fun resetBibsMode(raceId: Long)
 
     @Query("UPDATE races SET cpModeNextSplit = cpModeNextSplit + 1 WHERE id = :raceId")
@@ -84,19 +71,15 @@ interface RaceDao {
     @Query("UPDATE races SET cpModeNextSplit = cpModeNextSplit - 1 WHERE id = :raceId")
     suspend fun decrementCpCounter(raceId: Long)
 
-    @Query("UPDATE races SET cpModeStoppedAtMillis = :stoppedAtMillis WHERE id = :raceId")
-    suspend fun setCpModeStoppedAt(raceId: Long, stoppedAtMillis: Long)
-
-    @Query("UPDATE races SET cpModeStoppedAtMillis = NULL WHERE id = :raceId")
-    suspend fun clearCpModeStoppedAt(raceId: Long)
-
     @Query("UPDATE races SET cpModeStartedAtMillis = :startedAtMillis WHERE id = :raceId")
     suspend fun setCpModeStartedAt(raceId: Long, startedAtMillis: Long)
 
-    // Clears cpModeStartedAtMillis too, same as resetBibsMode does for Bibs — this is what
-    // returns the screen to its pre-Start state (see RaceEntity.cpModeStartedAtMillis's own
-    // doc).
-    @Query("UPDATE races SET cpModeNextSplit = 1, cpModeStoppedAtMillis = NULL, cpModeStartedAtMillis = NULL WHERE id = :raceId")
+    @Query("UPDATE races SET cpModeStartedAtMillis = NULL WHERE id = :raceId")
+    suspend fun clearCpModeStartedAt(raceId: Long)
+
+    // Clears cpModeStartedAtMillis too — this is what returns the screen to its pre-Start state
+    // (see RaceEntity.cpModeStartedAtMillis's own doc).
+    @Query("UPDATE races SET cpModeNextSplit = 1, cpModeStartedAtMillis = NULL WHERE id = :raceId")
     suspend fun resetCpMode(raceId: Long)
 
     // The permanent, race-wide history line counter — see RaceEntity.nextLineNumber. Only

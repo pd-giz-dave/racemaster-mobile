@@ -56,15 +56,15 @@ class DefaultAppContainer(context: Context) : AppContainer {
     }
 
     override val timeModeRepository: TimeModeRepository by lazy {
-        TimeModeRepository(database, database.raceDao(), database.historyLineDao())
+        TimeModeRepository(database, database.raceDao(), database.historyLineDao(), raceRepository)
     }
 
     override val bibsModeRepository: BibsModeRepository by lazy {
-        BibsModeRepository(database, database.raceDao(), database.historyLineDao())
+        BibsModeRepository(database, database.raceDao(), database.historyLineDao(), raceRepository)
     }
 
     override val cpModeRepository: CpModeRepository by lazy {
-        CpModeRepository(database, database.raceDao(), database.historyLineDao())
+        CpModeRepository(database, database.raceDao(), database.historyLineDao(), raceRepository)
     }
 
     private val muleSyncClient: MuleSyncClient by lazy { MuleSyncClient() }

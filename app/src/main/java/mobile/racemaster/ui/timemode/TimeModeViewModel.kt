@@ -8,13 +8,14 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.BtPollingStatus
+import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.ServerStatus
 import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.repository.LineSyncState
-import mobile.racemaster.data.repository.isRaceInProgress
+import mobile.racemaster.data.repository.isRaceActive
 import mobile.racemaster.data.repository.lineSyncState
 import mobile.racemaster.data.repository.linesWithAnySync
 import mobile.racemaster.data.settings.SettingsRepository
@@ -33,8 +34,6 @@ import kotlinx.coroutines.launch
 
 data class FinishSplitUi(
     val id: Long,
-    // Null for a Stop row — see HistoryLineEntity.splitNumber's own doc — displayed as "–" via
-    // formatSplitRef, with the action column (see SplitRow) carrying "Stop" instead.
     val splitNumber: Int?,
     val action: HistoryAction,
     val elapsedMillis: Long,
@@ -47,7 +46,6 @@ data class TimeModeUiState(
     val raceLabel: String = "",
     val raceLocation: String = "",
     val stopwatchStarted: Boolean = false,
-    val stopwatchStopped: Boolean = false,
     val liveElapsedMillis: Long = 0L,
     val nextSplitNumber: Int = 1,
     val splits: List<FinishSplitUi> = emptyList(),
@@ -55,7 +53,7 @@ data class TimeModeUiState(
     val raceInProgress: Boolean = false,
     val unsyncedCount: Int = 0,
     val lastSyncedAtMillis: Long? = null,
-    // Count of genuine SPLIT actions only (not Start/Stop/Reset markers) — feeds
+    // Count of genuine SPLIT actions only (not Start/Reset markers) — feeds
     // util.formatTimeSplitsText's running tally.
     val splitCount: Int = 0,
     // Shown as another header line (see ui/components/ServerStatusLine.kt) — server
@@ -70,6 +68,7 @@ class TimeModeViewModel(
     private val raceRepository: RaceRepository,
     private val settingsRepository: SettingsRepository,
     private val serverStatusRepository: ServerStatusRepository,
+    private val muleRepository: MuleRepository,
     bluetoothStateRepository: BluetoothStateRepository,
     private val beeper: Beeper,
 ) : ViewModel() {
@@ -108,21 +107,23 @@ class TimeModeViewModel(
                 ) { race, splits, now, (unsyncedCount, lastSyncedAtMillis, serverStatus), lineSyncs ->
                     val linesWithAnySync = linesWithAnySync(lineSyncs)
                     val startedAt = race?.timeModeStartedAtMillis
-                    val stoppedAt = race?.timeModeStoppedAtMillis
-                    val liveElapsed = when {
-                        startedAt == null -> 0L
-                        stoppedAt != null -> stoppedAt - startedAt
-                        else -> now - startedAt
-                    }
+                    val liveElapsed = if (startedAt == null) 0L else now - startedAt
                     TimeModeUiState(
                         raceId = raceId,
                         raceLabel = race?.label.orEmpty(),
                         raceLocation = race?.location.orEmpty(),
                         stopwatchStarted = startedAt != null,
-                        stopwatchStopped = stoppedAt != null,
                         liveElapsedMillis = liveElapsed,
                         nextSplitNumber = race?.timeModeNextSplit ?: 1,
-                        splits = splits.map {
+                        // LOCATION rows are deliberately left out of the rendered list — the
+                        // race's own current location is already echoed on its own line in
+                        // RaceProgressSummary right above, so listing it again here too was just
+                        // confusing noise. Still fully present in (and undoable via) the
+                        // underlying `splits` list this is filtered from — canUndo/splitCount
+                        // below are computed from that unfiltered list, not this one, so
+                        // undoing a relocate the operator can't see listed still works exactly
+                        // as before.
+                        splits = splits.filterNot { it.action == HistoryAction.LOCATION }.map {
                             FinishSplitUi(
                                 id = it.id,
                                 splitNumber = it.splitNumber,
@@ -133,14 +134,7 @@ class TimeModeViewModel(
                             )
                         },
                         canUndo = splits.isNotEmpty(),
-                        raceInProgress = isRaceInProgress(
-                            startedAt,
-                            stoppedAt,
-                            race?.bibsModeStartedAtMillis,
-                            race?.bibsModeStoppedAtMillis,
-                            race?.cpModeStartedAtMillis,
-                            race?.cpModeStoppedAtMillis,
-                        ),
+                        raceInProgress = isRaceActive(startedAt, race?.bibsModeStartedAtMillis, race?.cpModeStartedAtMillis),
                         unsyncedCount = unsyncedCount,
                         lastSyncedAtMillis = lastSyncedAtMillis,
                         splitCount = splits.count { it.action == HistoryAction.SPLIT },
@@ -153,12 +147,12 @@ class TimeModeViewModel(
 
     // A device now records against exactly one race for its whole lifetime (see TODO.md's
     // phase 1 — the course concept is gone), so Start no longer needs to resolve WHICH row to
-    // record into — it's always this device's own active race. Already started means this race
-    // was previously Stopped, not Reset (Reset already clears timeModeStartedAtMillis, so this
-    // branch is never taken right after one) — resume exactly where it left off rather than
-    // starting a fresh segment; see TimeModeRepository.resumeStopwatch's own doc. This is also
-    // the path Race History's own "Resume" action relies on: switching activeRaceId back to a
-    // previously-stopped race, then pressing Start here, picks up exactly where it left off.
+    // record into — it's always this device's own active race. The already-started branch below
+    // is defensive/effectively unreachable through the main button now that there's no separate
+    // stopped state (once started, a mode screen always shows SPLIT, never START, until Reset —
+    // see HistoryAction's own doc) — kept as-is since Race History's own "Resume" action
+    // (RaceRepository.switchActiveRace) could in principle still land here on an already-started,
+    // not-yet-reset race before this screen's own reactive state has caught up.
     fun startStopwatch() {
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch {
@@ -182,14 +176,17 @@ class TimeModeViewModel(
         }
     }
 
-    fun stopStopwatch() {
-        val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch { timeModeRepository.stopStopwatch(raceId) }
-    }
-
+    // See RaceRepository.closeCurrentSegment's own doc for the walk-back-by-segment behavior a
+    // Reset press triggers. A true (abandoned) result means this closed the race's own very
+    // first segment, reverting this device to "no race set up" — announced to the server right
+    // away, mirroring Setup Race's own "push right away" pattern (SetupRaceViewModel.save),
+    // rather than waiting for the next background sync tick.
     fun resetStopwatch() {
         val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch { timeModeRepository.resetStopwatch(raceId) }
+        viewModelScope.launch {
+            val abandoned = timeModeRepository.resetStopwatch(raceId)
+            if (abandoned) muleRepository.announceRaceSetup()
+        }
     }
 
     fun undoLast() {
@@ -214,6 +211,7 @@ class TimeModeViewModel(
                     container.raceRepository,
                     container.settingsRepository,
                     container.serverStatusRepository,
+                    container.muleRepository,
                     container.bluetoothStateRepository,
                     Beeper(applicationContext()),
                 )

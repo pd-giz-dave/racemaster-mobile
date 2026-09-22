@@ -82,84 +82,150 @@ class HistoryFoldTest {
         assertEquals(emptyList<String>(), folded.map { it.content })
     }
 
-    private data class MarkerRow(val lineNumber: Long, val content: String, val isLocation: Boolean = false)
-
-    private fun sinceLocation(rows: List<MarkerRow>): List<MarkerRow> =
-        sinceLastLocationMarker(rows, { it.lineNumber }, { it.isLocation })
-
-    @Test
-    fun noLocationMarkerAtAllIsANoOp() {
-        val rows = listOf(MarkerRow(1L, "a"), MarkerRow(2L, "b"), MarkerRow(3L, "c"))
-
-        assertEquals(rows, sinceLocation(rows))
-    }
-
-    @Test
-    fun keepsOnlyRowsAtOrAfterTheMostRecentLocationMarkerInclusive() {
-        val rows = listOf(
-            MarkerRow(1L, "old-a"),
-            MarkerRow(2L, "old-b"),
-            MarkerRow(3L, "relocated", isLocation = true),
-            MarkerRow(4L, "new-a"),
-            MarkerRow(5L, "new-b"),
-        )
-
-        val sliced = sinceLocation(rows)
-
-        // Inclusive of the marker itself (line 3) — it must stay visible/undoable, same as a
-        // fresh segment's own Clock/Start marker already does.
-        assertEquals(listOf("relocated", "new-a", "new-b"), sliced.map { it.content })
-    }
-
-    @Test
-    fun onlyTheMostRecentOfMultipleLocationMarkersDefinesTheBoundary() {
-        val rows = listOf(
-            MarkerRow(1L, "cp1-a"),
-            MarkerRow(2L, "relocate-to-cp2", isLocation = true),
-            MarkerRow(3L, "cp2-a"),
-            MarkerRow(4L, "relocate-to-cp3", isLocation = true),
-            MarkerRow(5L, "cp3-a"),
-        )
-
-        val sliced = sinceLocation(rows)
-
-        assertEquals(listOf("relocate-to-cp3", "cp3-a"), sliced.map { it.content })
-    }
-
-    // Composed usage — matches TimeModeRepository.observeCurrentSegmentSplits/
-    // EntryLogModeEngine.observeCurrentSegmentEntries's own real call order (fold, then slice by
-    // location). A single row shape carrying both foldLatestVisible's (refLineNumber/isUndo) and
-    // sinceLastLocationMarker's (isLocation) own fields, since a real HistoryLineEntity carries
-    // all of them together.
+    // ---- visits / resetTargets / currentSegmentVisits / currentSegmentRows ----
+    // See HistoryFold.kt's own doc for the design: every LOCATION row starts a "visit"; the
+    // current segment is every not-yet-individually-Reset visit sharing the most recent
+    // LOCATION's own note (which is what makes relocating back to an already-visited, not-yet-
+    // reset location merge its old and new rows back into one view). A single row shape carrying
+    // every field currentSegmentRows needs, since a real HistoryLineEntity carries them all
+    // together.
     private data class SegmentRow(
         val lineNumber: Long,
         val refLineNumber: Long? = null,
+        val note: String? = null,
         val content: String,
         val isUndo: Boolean = false,
         val isLocation: Boolean = false,
+        val isReset: Boolean = false,
+        val isExcluded: Boolean = false, // stands in for MODE_START/NEW_RACE/PING
     )
 
-    private fun foldThenSlice(rows: List<SegmentRow>): List<SegmentRow> {
-        val folded = foldLatestVisible(rows, { it.lineNumber }, { it.refLineNumber }, { it.isUndo })
-        return sinceLastLocationMarker(folded, { it.lineNumber }, { it.isLocation })
+    private fun currentSegment(rows: List<SegmentRow>): List<SegmentRow> =
+        currentSegmentRows(
+            rows,
+            { it.lineNumber },
+            { it.refLineNumber },
+            { it.note },
+            { it.isLocation },
+            { it.isReset },
+            { it.isUndo },
+            { it.isExcluded || it.isReset },
+        )
+
+    @Test
+    fun aSingleOpenVisitIsFullyVisible() {
+        val rows = listOf(
+            SegmentRow(1L, note = "Finish", content = "relocated", isLocation = true),
+            SegmentRow(2L, content = "a"),
+            SegmentRow(3L, content = "b"),
+        )
+
+        assertEquals(listOf("b", "a", "relocated"), currentSegment(rows).map { it.content })
+    }
+
+    @Test
+    fun onlyTheMostRecentLocationsOwnVisitIsCurrentWhenNothingIsRevisited() {
+        val rows = listOf(
+            SegmentRow(1L, note = "CP1", content = "relocate-to-cp1", isLocation = true),
+            SegmentRow(2L, content = "cp1-a"),
+            SegmentRow(3L, note = "CP2", content = "relocate-to-cp2", isLocation = true),
+            SegmentRow(4L, content = "cp2-a"),
+        )
+
+        assertEquals(listOf("cp2-a", "relocate-to-cp2"), currentSegment(rows).map { it.content })
+    }
+
+    @Test
+    fun relocatingBackToAnAlreadyVisitedNotYetResetLocationMergesBothVisits() {
+        val rows = listOf(
+            SegmentRow(1L, note = "Finish", content = "relocate-to-finish", isLocation = true),
+            SegmentRow(2L, content = "finish-a"),
+            SegmentRow(3L, note = "CP1", content = "relocate-to-cp1", isLocation = true),
+            SegmentRow(4L, content = "cp1-a"),
+            SegmentRow(5L, note = "Finish", content = "relocate-back-to-finish", isLocation = true),
+            SegmentRow(6L, content = "finish-b"),
+        )
+
+        // Both of Finish's own visits (lines 1-2 and 5-6) are merged; CP1's own visit is not.
+        assertEquals(
+            listOf("finish-b", "relocate-back-to-finish", "finish-a", "relocate-to-finish"),
+            currentSegment(rows).map { it.content },
+        )
+    }
+
+    @Test
+    fun aResetTargetingTheMostRecentVisitClosesItEntirely() {
+        val rows = listOf(
+            SegmentRow(1L, note = "Finish", content = "relocated", isLocation = true),
+            SegmentRow(2L, content = "a"),
+            SegmentRow(3L, isReset = true, refLineNumber = 1L, content = "reset"),
+        )
+
+        assertEquals(emptyList<String>(), currentSegment(rows).map { it.content })
+    }
+
+    @Test
+    fun aResetTargetingAnOlderVisitLeavesTheCurrentOneUntouched() {
+        val rows = listOf(
+            SegmentRow(1L, note = "Finish", content = "relocate-to-finish", isLocation = true),
+            SegmentRow(2L, content = "finish-a"),
+            SegmentRow(3L, note = "CP1", content = "relocate-to-cp1", isLocation = true),
+            SegmentRow(4L, content = "cp1-a"),
+            SegmentRow(5L, isReset = true, refLineNumber = 1L, content = "reset-of-finish"),
+        )
+
+        assertEquals(listOf("cp1-a", "relocate-to-cp1"), currentSegment(rows).map { it.content })
+    }
+
+    @Test
+    fun relocatingBackAfterTheEarlierVisitWasResetStartsFreshRatherThanResuming() {
+        val rows = listOf(
+            SegmentRow(1L, note = "Finish", content = "relocate-to-finish", isLocation = true),
+            SegmentRow(2L, content = "finish-a"),
+            SegmentRow(3L, isReset = true, refLineNumber = 1L, content = "reset"),
+            SegmentRow(4L, note = "Finish", content = "relocate-back-to-finish", isLocation = true),
+            SegmentRow(5L, content = "finish-b"),
+        )
+
+        // The Reset visit (lines 1-2) is excluded even though its note matches — only the fresh
+        // visit (lines 4-5) is current.
+        assertEquals(listOf("finish-b", "relocate-back-to-finish"), currentSegment(rows).map { it.content })
+    }
+
+    @Test
+    fun excludedMarkerRowsNeverAppearInTheSegment() {
+        val rows = listOf(
+            SegmentRow(1L, isExcluded = true, content = "mode-start"),
+            SegmentRow(2L, note = "Finish", content = "relocated", isLocation = true),
+            SegmentRow(3L, content = "a"),
+            SegmentRow(4L, isExcluded = true, content = "ping"),
+        )
+
+        assertEquals(listOf("a", "relocated"), currentSegment(rows).map { it.content })
     }
 
     @Test
     fun undoingTheMostRecentLocationMarkerRevealsWhateverWasVisibleBeforeIt() {
-        // stop (line 1) -> relocate (LOCATION, line 2) -> undo of the relocate (line 3, ref=2).
+        // "stop" (line 1) -> relocate (LOCATION, line 2) -> undo of the relocate (line 3, ref=2).
         val rows = listOf(
             SegmentRow(1L, content = "stop"),
-            SegmentRow(2L, content = "relocated", isLocation = true),
+            SegmentRow(2L, note = "CP1", content = "relocated", isLocation = true),
             SegmentRow(3L, refLineNumber = 2L, isUndo = true, content = "undo of relocate"),
         )
 
-        val visible = foldThenSlice(rows)
+        // The undone LOCATION marker's whole group is dropped by folding, leaving "stop" with no
+        // real LOCATION row to belong to any more — bucketed into the implicit leading visit (see
+        // HistoryFold.visits' own doc) rather than becoming invisible, correctly re-exposing it as
+        // the entry the operator's next Undo needs to reach.
+        assertEquals(listOf("stop"), currentSegment(rows).map { it.content })
+    }
 
-        // The undone LOCATION marker's whole group is dropped by folding first, so slicing
-        // finds no remaining LOCATION row at all and falls back to its own no-op branch,
-        // correctly re-exposing "stop" — the entry the operator's next Undo needs to reach.
-        // Slicing before folding (the previous, buggy order) would instead still find the
-        // undone LOCATION row's raw, never-deleted lineNumber as the boundary and hide "stop".
-        assertEquals(listOf("stop"), visible.map { it.content })
+    @Test
+    fun rowsWithNoLocationMarkerAtAllAreStillFullyVisible() {
+        // Degrades gracefully for data with no LOCATION marker at all (older/degraded data) —
+        // same "no boundary recognized, show everything" fallback as the undo case above.
+        val rows = listOf(SegmentRow(1L, content = "a"), SegmentRow(2L, content = "b"))
+
+        assertEquals(listOf("b", "a"), currentSegment(rows).map { it.content })
     }
 }

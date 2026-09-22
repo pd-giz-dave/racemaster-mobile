@@ -1,5 +1,6 @@
 package mobile.racemaster.data.repository
 
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -8,38 +9,65 @@ import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.RaceEntity
+import mobile.racemaster.data.settings.AppMode
+import mobile.racemaster.data.settings.SettingsRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class TimeModeRepositoryTest {
 
+    @get:Rule
+    val tempFolder = TemporaryFolder()
+
     private lateinit var db: RacemasterDatabase
+    private lateinit var settingsRepository: SettingsRepository
+    private lateinit var raceRepository: RaceRepository
     private lateinit var repository: TimeModeRepository
     private var raceId: Long = 0
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Before
     fun setUp() = runTest {
         db = Room.inMemoryDatabaseBuilder(
             ApplicationProvider.getApplicationContext(),
             RacemasterDatabase::class.java,
         ).build()
-        repository = TimeModeRepository(db, db.raceDao(), db.historyLineDao())
+        settingsRepository = SettingsRepository(
+            PreferenceDataStoreFactory.create(
+                scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob()),
+                produceFile = { tempFolder.newFile("test.preferences_pb") },
+            ),
+        )
+        raceRepository = RaceRepository(db, db.raceDao(), db.historyLineDao(), db.lineSyncDao(), settingsRepository)
+        repository = TimeModeRepository(db, db.raceDao(), db.historyLineDao(), raceRepository)
         raceId = db.raceDao().insert(RaceEntity(label = "Test Race", createdAtMillis = 0L))
     }
 
     @After
     fun tearDown() {
         db.close()
+    }
+
+    // Mirrors Setup Race's own real write — RaceRepository.recordModeStart — so every test below
+    // that starts the stopwatch has a genuine open segment to write into, exactly like the real
+    // app: NEW_RACE + LOCATION + MODE_START (3 rows) up front, same as production.
+    private suspend fun setupRace(location: String = "Finish") {
+        raceRepository.recordModeStart(raceId, AppMode.TIME, location)
     }
 
     @Test
@@ -83,15 +111,15 @@ class TimeModeRepositoryTest {
 
     @Test
     fun startStopwatchAddsZeroNumberedStartMarkerWithoutConsumingCounter() = runTest {
+        setupRace()
         repository.startStopwatch(raceId, startedAtMillis = 1_000L)
         repository.recordSplit(raceId, timestampMillis = 1_500L)
 
-        // No MODE_START row here any more — that's now written up front by
-        // RaceRepository.recordModeStart (Setup Race / Relocate), not by startStopwatch itself.
+        // NEW_RACE + LOCATION + MODE_START (from setupRace) + START + SPLIT.
         val splits = db.historyLineDao().observeAllForRace(raceId).first()
-        assertEquals(2, splits.size)
-        val startRow = splits.single { it.splitNumber == 0 }
-        assertEquals(HistoryAction.START, startRow.action)
+        assertEquals(5, splits.size)
+        val startRow = splits.single { it.action == HistoryAction.START }
+        assertEquals(0, startRow.splitNumber)
         assertEquals(1_000L, startRow.timestampMillis)
 
         val live = repository.observeCurrentSegmentSplits(raceId).first()
@@ -99,127 +127,136 @@ class TimeModeRepositoryTest {
     }
 
     @Test
-    fun stopStopwatchAddsStopMarkerWithoutConsumingASplitNumber() = runTest {
-        repository.startStopwatch(raceId, startedAtMillis = 1_000L)
-        repository.recordSplit(raceId)
-        repository.recordSplit(raceId)
-        repository.stopStopwatch(raceId, stoppedAtMillis = 5_000L)
-
-        val stopSplit = db.historyLineDao().observeAllForRace(raceId).first().single { it.action == HistoryAction.STOP }
-        assertEquals(null, stopSplit.splitNumber)
-        assertEquals(5_000L, stopSplit.timestampMillis)
-        assertEquals(5_000L, db.raceDao().getById(raceId)?.timeModeStoppedAtMillis)
-
-        // The next real split still gets the number Stop would otherwise have consumed.
-        repository.recordSplit(raceId, timestampMillis = 6_000L)
-        val nextSplit = db.historyLineDao().observeAllForRace(raceId).first().single { it.timestampMillis == 6_000L }
-        assertEquals(3, nextSplit.splitNumber)
-    }
-
-    @Test
-    fun undoingStopMarkerResumesTheRace() = runTest {
-        repository.startStopwatch(raceId, startedAtMillis = 1_000L)
-        repository.recordSplit(raceId)
-        repository.stopStopwatch(raceId, stoppedAtMillis = 5_000L)
-
-        repository.undoMostRecent(raceId)
-
-        assertEquals(null, db.raceDao().getById(raceId)?.timeModeStoppedAtMillis)
-        // Stop never consumed a split number, so undoing it doesn't need to free one up
-        // either — the next real split just continues the sequence normally.
-        repository.recordSplit(raceId)
-        val numbers = repository.observeCurrentSegmentSplits(raceId).first().map { it.splitNumber }.sortedBy { it }
-        assertEquals(listOf(0, 1, 2), numbers)
-    }
-
-    @Test
     fun undoingStartMarkerClearsStartedState() = runTest {
+        setupRace()
         repository.startStopwatch(raceId, startedAtMillis = 1_000L)
 
         repository.undoMostRecent(raceId)
 
         assertEquals(null, db.raceDao().getById(raceId)?.timeModeStartedAtMillis)
-        assertTrue(repository.observeCurrentSegmentSplits(raceId).first().isEmpty())
-        // The Start row itself is never deleted — only an undo-marker was appended. No
-        // MODE_START row here — that's written up front by RaceRepository.recordModeStart
-        // (Setup Race / Relocate), not by startStopwatch itself.
-        assertEquals(2, db.historyLineDao().observeAllForRace(raceId).first().size)
+        // The LOCATION marker itself is still visible/undoable — only the Start marker's own
+        // group was hidden by the undo.
+        assertEquals(
+            listOf(HistoryAction.LOCATION),
+            repository.observeCurrentSegmentSplits(raceId).first().map { it.action },
+        )
+        // Nothing is ever deleted — only an undo-marker was appended on top of the Start row:
+        // NEW_RACE, LOCATION, MODE_START, Start, Undo.
+        assertEquals(5, db.historyLineDao().observeAllForRace(raceId).first().size)
     }
 
     @Test
     fun resetStopwatchInsertsMarkerAndLeavesPriorSplitsIntact() = runTest {
+        setupRace()
         repository.startStopwatch(raceId, startedAtMillis = 1_000L)
         repository.recordSplit(raceId)
         repository.recordSplit(raceId)
-        repository.stopStopwatch(raceId, stoppedAtMillis = 5_000L)
 
-        repository.resetStopwatch(raceId, resetAtMillis = 6_000L)
+        val locationRow = db.historyLineDao().observeAllForRace(raceId).first().single { it.action == HistoryAction.LOCATION }
+        val abandoned = repository.resetStopwatch(raceId, resetAtMillis = 6_000L)
 
-        // Nothing is deleted — every pre-reset row (Start, both splits, Stop) plus the new
-        // Reset marker are all still present in the full-history query. No MODE_START row here
-        // — that's written up front by RaceRepository.recordModeStart (Setup Race / Relocate),
-        // not by startStopwatch itself.
+        // This was the race's very own first segment (NEW_RACE immediately precedes the
+        // LOCATION row) — resetting it walks all the way back and reverts the device to "no
+        // race set up".
+        assertTrue(abandoned)
+
+        // Nothing is deleted — every pre-reset row plus the new Reset marker are all still
+        // present in the full-history query: NEW_RACE, LOCATION, MODE_START, Start, 2 splits, Reset.
         val allSplits = db.historyLineDao().observeAllForRace(raceId).first()
-        assertEquals(5, allSplits.size)
+        assertEquals(7, allSplits.size)
         val resetRow = allSplits.single { it.action == HistoryAction.RESET }
         assertEquals(6_000L, resetRow.timestampMillis)
         // Reset is a boundary marker, not a real logged split — no splitNumber of its own.
         assertEquals(null, resetRow.splitNumber)
+        // Targets the LOCATION row it closed — see RaceRepository.closeCurrentSegment's own doc.
+        assertEquals(locationRow.lineNumber, resetRow.refLineNumber)
 
-        // But the clock/counter state resets, same as before.
+        // The counter/started-at state resets too, same as before.
         val race = db.raceDao().getById(raceId)
         assertEquals(null, race?.timeModeStartedAtMillis)
-        assertEquals(null, race?.timeModeStoppedAtMillis)
         assertEquals(1, race?.timeModeNextSplit)
 
         // The live/current-segment view is empty immediately after reset — nothing pre-reset
         // leaks into what the screen shows.
-        assertTrue(db.historyLineDao().observeCurrentSegment(raceId, HistoryMode.TIME, HistoryAction.RESET).first().isEmpty())
+        assertTrue(repository.observeCurrentSegmentSplits(raceId).first().isEmpty())
 
-        // The race can be started fresh afterward, numbering from scratch in the new segment,
-        // while the full history still contains everything from both segments. The RESET row
-        // itself is excluded here (observeCurrentSegment's own SQL boundary is strictly
-        // greater-than), so only the new segment's Start (splitNumber 0) and split (1) show.
-        repository.startStopwatch(raceId, startedAtMillis = 9_000L)
-        repository.recordSplit(raceId)
-        val currentSegmentNumbers =
-            db.historyLineDao().observeCurrentSegment(raceId, HistoryMode.TIME, HistoryAction.RESET).first().map { it.splitNumber }.sortedBy { it }
-        assertEquals(listOf(0, 1), currentSegmentNumbers)
-        assertEquals(7, db.historyLineDao().observeAllForRace(raceId).first().size)
+        // abandonRaceSetup fired: this device's active-race pointer is cleared.
+        assertEquals(null, settingsRepository.activeRaceId.first())
     }
 
     @Test
-    fun lineNumberNeverRepeatsOrDecreasesAcrossAReset() = runTest {
+    fun resettingASecondSegmentDoesNotAbandonTheRace() = runTest {
+        setupRace() // the race's own first segment, at "Finish"
         repository.startStopwatch(raceId, startedAtMillis = 1_000L)
         repository.recordSplit(raceId)
-        repository.resetStopwatch(raceId, resetAtMillis = 2_000L)
-        repository.startStopwatch(raceId, startedAtMillis = 3_000L)
-        repository.recordSplit(raceId)
+        // Relocate to a new location — a second segment, not preceded by NEW_RACE.
+        raceRepository.recordModeStart(raceId, AppMode.TIME, "CP1")
+        repository.startStopwatch(raceId, startedAtMillis = 5_000L)
 
-        // Sorted by id (true insertion order) rather than lineNumber itself, so this
-        // genuinely verifies lineNumber tracks insertion order strictly ascending with no
-        // repeats.
-        val lineNumbersInInsertionOrder = db.historyLineDao().observeAllForRace(raceId).first().sortedBy { it.id }.map { it.lineNumber }
-        assertEquals(5, lineNumbersInInsertionOrder.size)
-        assertEquals(lineNumbersInInsertionOrder.distinct(), lineNumbersInInsertionOrder)
-        for (i in 1 until lineNumbersInInsertionOrder.size) {
-            assertTrue(lineNumbersInInsertionOrder[i] > lineNumbersInInsertionOrder[i - 1])
-        }
+        val abandoned = repository.resetStopwatch(raceId, resetAtMillis = 6_000L)
+
+        assertTrue(!abandoned)
     }
 
     @Test
-    fun undoCannotReachPastAResetBoundary() = runTest {
+    fun resetWritesOneMarkerPerMergedVisitWhenRelocatedBackWithoutResetting() = runTest {
+        setupRace("Finish")
         repository.startStopwatch(raceId, startedAtMillis = 1_000L)
         repository.recordSplit(raceId)
-        repository.stopStopwatch(raceId, stoppedAtMillis = 2_000L)
+        raceRepository.recordModeStart(raceId, AppMode.TIME, "CP1")
+        repository.recordSplit(raceId)
+        // Relocate back to Finish, without ever resetting — resumes/merges with the earlier
+        // Finish visit (see RaceRepository.recordModeStart's own resume doc).
+        raceRepository.recordModeStart(raceId, AppMode.TIME, "Finish")
+        repository.recordSplit(raceId)
+
+        val locationRows = db.historyLineDao().observeAllForRace(raceId).first().filter { it.action == HistoryAction.LOCATION }
+        val finishLocationLines = locationRows.filter { it.note == "Finish" }.map { it.lineNumber }.toSet()
+        assertEquals(2, finishLocationLines.size)
+
+        repository.resetStopwatch(raceId, resetAtMillis = 9_000L)
+
+        // One RESET row per merged Finish visit — CP1's own visit is untouched.
+        val resetTargets = db.historyLineDao().observeAllForRace(raceId).first()
+            .filter { it.action == HistoryAction.RESET }.mapNotNull { it.refLineNumber }.toSet()
+        assertEquals(finishLocationLines, resetTargets)
+    }
+
+    @Test
+    fun relocatingBackToAnAlreadyVisitedNotYetResetLocationResumesItsCounterAndEntries() = runTest {
+        setupRace("Finish")
+        repository.startStopwatch(raceId, startedAtMillis = 1_000L)
+        repository.recordSplit(raceId) // Finish split 1
+        repository.recordSplit(raceId) // Finish split 2
+        raceRepository.recordModeStart(raceId, AppMode.TIME, "CP1")
+        repository.recordSplit(raceId) // CP1's own split 1 (fresh counter, unrelated to Finish's)
+
+        raceRepository.recordModeStart(raceId, AppMode.TIME, "Finish")
+
+        // Resumes at 3 (one past Finish's own highest split, 2), not reset to 1.
+        assertEquals(3, db.raceDao().getById(raceId)?.timeModeNextSplit)
+
+        // The live view (back at Finish) shows both of Finish's own splits — CP1's own split is
+        // excluded (different note, not merged in).
+        val live = repository.observeCurrentSegmentSplits(raceId).first()
+        assertEquals(2, live.count { it.action == HistoryAction.SPLIT })
+        assertEquals(0, live.count { it.action == HistoryAction.LOCATION && it.note == "CP1" })
+    }
+
+    @Test
+    fun undoCannotReachPastAClosedSegment() = runTest {
+        setupRace()
+        repository.startStopwatch(raceId, startedAtMillis = 1_000L)
+        repository.recordSplit(raceId)
         repository.resetStopwatch(raceId, resetAtMillis = 3_000L)
 
         // Nothing in the new segment yet — Undo must no-op (not even append an undo-marker),
-        // not reach back into the old segment.
+        // not reach back into the closed one.
         repository.undoMostRecent(raceId)
 
-        assertEquals(4, db.historyLineDao().observeAllForRace(raceId).first().size)
-        assertTrue(db.historyLineDao().observeCurrentSegment(raceId, HistoryMode.TIME, HistoryAction.RESET).first().isEmpty())
+        // NEW_RACE, LOCATION, MODE_START, Start, Split, Reset — the no-op Undo added nothing.
+        assertEquals(6, db.historyLineDao().observeAllForRace(raceId).first().size)
+        assertTrue(repository.observeCurrentSegmentSplits(raceId).first().isEmpty())
     }
 
     @Test
@@ -289,75 +326,42 @@ class TimeModeRepositoryTest {
 
     @Test
     fun editingReservedMarkerRowIsRejected() = runTest {
+        setupRace()
         repository.startStopwatch(raceId, startedAtMillis = 1_000L)
         val startRow = db.historyLineDao().observeAllForRace(raceId).first().single { it.action == HistoryAction.START }
 
         repository.updateNote(startRow.id, "Not actually the start")
 
         // No echo was inserted — the repository-level root-guard refuses to edit a row whose
-        // root is a reserved marker. Still just the single Start row from startStopwatch.
-        assertEquals(1, db.historyLineDao().observeAllForRace(raceId).first().size)
+        // root is a reserved marker. Still just NEW_RACE + LOCATION + MODE_START + Start.
+        assertEquals(4, db.historyLineDao().observeAllForRace(raceId).first().size)
     }
 
-    // Regression test for the HistoryFold ordering bug: sinceLastLocationMarker used to be
-    // applied to raw (un-folded) rows, so an already-undone LOCATION marker kept acting as the
-    // live view's boundary, hiding everything before it (including a Stop the operator's next
-    // Undo needed to reach) and disabling Undo one step too early. Fixed by folding first, then
-    // slicing by location — see observeCurrentSegmentSplits's own doc.
     @Test
-    fun undoingARelocateAfterAStopRevealsTheStopAgainAndASecondUndoResumesRecording() = runTest {
+    fun undoingARelocateRevealsWhateverWasVisibleBeforeIt() = runTest {
+        setupRace()
         repository.startStopwatch(raceId, startedAtMillis = 1_000L)
         repository.recordSplit(raceId, timestampMillis = 1_500L)
-        repository.stopStopwatch(raceId, stoppedAtMillis = 2_000L)
 
-        // Simulate RaceRepository.recordModeStart's own LOCATION+MODE_START write for a
-        // same-mode relocate (allowed even while Time is merely Stopped, not Reset).
-        val race = db.raceDao().getById(raceId)!!
-        db.historyLineDao().insert(
-            HistoryLineEntity(
-                raceId = raceId, mode = HistoryMode.TIME, action = HistoryAction.LOCATION,
-                bibNumber = null, splitNumber = null,
-                lineNumber = race.nextLineNumber, note = "CP1", timestampMillis = 3_000L,
-                priorSplitCounter = race.timeModeNextSplit, previousLocation = race.location, previousMode = race.mode,
-            ),
-        )
-        db.raceDao().incrementLineNumber(raceId)
-        val raceAfterLocation = db.raceDao().getById(raceId)!!
-        db.historyLineDao().insert(
-            HistoryLineEntity(
-                raceId = raceId, mode = HistoryMode.TIME, action = HistoryAction.MODE_START,
-                bibNumber = null, splitNumber = null,
-                lineNumber = raceAfterLocation.nextLineNumber, note = "Time", timestampMillis = 3_000L,
-            ),
-        )
-        db.raceDao().incrementLineNumber(raceId)
-        db.raceDao().setTimeModeNextSplit(raceId, 1)
-        db.raceDao().updateModeAndLocation(raceId, "TIME", "CP1")
+        // Relocate mid-race (allowed even while Time is still recording).
+        raceRepository.recordModeStart(raceId, AppMode.TIME, "CP1")
 
-        // Immediately after relocating, only the LOCATION marker is visible.
+        // Immediately after relocating, only the new LOCATION marker is visible (a fresh,
+        // still-empty visit).
         assertEquals(
             listOf(HistoryAction.LOCATION),
             repository.observeCurrentSegmentSplits(raceId).first().map { it.action },
         )
 
-        // First Undo: undoes the relocate — with no LOCATION marker left standing,
-        // sinceLastLocationMarker's own no-boundary-found case returns the folded segment
-        // unchanged (see its own doc), correctly revealing the whole pre-relocate segment as it
-        // stood before the relocate (Stop, the split, and Start) — none of it was ever behind an
-        // earlier LOCATION boundary to begin with, since this was the race's first segment.
+        // Undo: undoes the relocate — with the relocate's own LOCATION group folded away, the
+        // race's own original (setupRace's own) LOCATION marker is what's left standing, so it
+        // correctly reveals the whole pre-relocate segment (the split, the Start marker, and
+        // that original LOCATION row itself) exactly as it stood before.
         repository.undoMostRecent(raceId)
         assertEquals(
-            listOf(HistoryAction.STOP, HistoryAction.SPLIT, HistoryAction.START),
+            listOf(HistoryAction.SPLIT, HistoryAction.START, HistoryAction.LOCATION),
             repository.observeCurrentSegmentSplits(raceId).first().map { it.action },
         )
         assertEquals("Finish", db.raceDao().getById(raceId)?.location)
-        assertEquals(2_000L, db.raceDao().getById(raceId)?.timeModeStoppedAtMillis)
-
-        // Second Undo: undoes the Stop, resuming live recording.
-        repository.undoMostRecent(raceId)
-        assertEquals(null, db.raceDao().getById(raceId)?.timeModeStoppedAtMillis)
-        assertEquals(1_000L, db.raceDao().getById(raceId)?.timeModeStartedAtMillis)
-        assertTrue(repository.observeCurrentSegmentSplits(raceId).first().none { it.action == HistoryAction.STOP })
     }
-
 }

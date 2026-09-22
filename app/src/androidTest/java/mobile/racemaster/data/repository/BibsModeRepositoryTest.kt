@@ -1,43 +1,68 @@
 package mobile.racemaster.data.repository
 
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import mobile.racemaster.data.db.RacemasterDatabase
 import mobile.racemaster.data.db.entity.HistoryAction
-import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.RaceEntity
+import mobile.racemaster.data.settings.AppMode
+import mobile.racemaster.data.settings.SettingsRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class BibsModeRepositoryTest {
 
+    @get:Rule
+    val tempFolder = TemporaryFolder()
+
     private lateinit var db: RacemasterDatabase
+    private lateinit var settingsRepository: SettingsRepository
+    private lateinit var raceRepository: RaceRepository
     private lateinit var repository: BibsModeRepository
     private var raceId: Long = 0
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Before
     fun setUp() = runTest {
         db = Room.inMemoryDatabaseBuilder(
             ApplicationProvider.getApplicationContext(),
             RacemasterDatabase::class.java,
         ).build()
-        repository = BibsModeRepository(db, db.raceDao(), db.historyLineDao())
+        settingsRepository = SettingsRepository(
+            PreferenceDataStoreFactory.create(
+                scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob()),
+                produceFile = { tempFolder.newFile("test.preferences_pb") },
+            ),
+        )
+        raceRepository = RaceRepository(db, db.raceDao(), db.historyLineDao(), db.lineSyncDao(), settingsRepository)
+        repository = BibsModeRepository(db, db.raceDao(), db.historyLineDao(), raceRepository)
         raceId = db.raceDao().insert(RaceEntity(label = "Test Race", createdAtMillis = 0L))
     }
 
     @After
     fun tearDown() {
         db.close()
+    }
+
+    // Mirrors Setup Race's own real write — see TimeModeRepositoryTest's identical helper.
+    private suspend fun setupRace(location: String = "Finish") {
+        raceRepository.recordModeStart(raceId, AppMode.BIBS, location)
     }
 
     @Test
@@ -118,12 +143,12 @@ class BibsModeRepositoryTest {
 
     @Test
     fun startBibsModeInsertsClockAndDoesNotConsumeCounter() = runTest {
+        setupRace()
         repository.startBibsMode(raceId)
 
-        // No MODE_START row here — that's written up front by RaceRepository.recordModeStart
-        // (Setup Race / Relocate), not by startBibsMode itself. Just the Clock row.
+        // NEW_RACE + LOCATION + MODE_START (setupRace) + Clock.
         val entries = db.historyLineDao().observeAllForRace(raceId).first()
-        assertEquals(1, entries.size)
+        assertEquals(4, entries.size)
         val clockEntry = entries.single { it.action == HistoryAction.CLOCK }
         assertEquals(0, clockEntry.splitNumber)
 
@@ -134,18 +159,17 @@ class BibsModeRepositoryTest {
     }
 
     @Test
-    fun startBibsModeInsertsOnlyTheClockMarkerNotItsOwnModeStart() = runTest {
-        // MODE_START is now written up front by RaceRepository.recordModeStart (Setup Race /
-        // Relocate), not by startBibsMode itself — this just writes the real Clock marker.
+    fun startBibsModeInsertsOnlyTheClockMarkerOfItsOwn() = runTest {
+        setupRace()
+        val beforeStart = db.historyLineDao().observeAllForRace(raceId).first().size
+
         repository.startBibsMode(raceId, startedAtMillis = 5_000L)
 
-        val all = db.historyLineDao().observeAllForRace(raceId).first().sortedBy { it.lineNumber }
-        assertEquals(1, all.size)
-        assertEquals(HistoryAction.CLOCK, all[0].action)
-        assertEquals(HistoryMode.BIBS, all[0].mode)
-
-        val live = repository.observeCurrentSegmentEntries(raceId).first()
-        assertTrue(live.none { it.action == HistoryAction.MODE_START })
+        // Exactly one new row — the Clock marker — beyond whatever setupRace already wrote.
+        val all = db.historyLineDao().observeAllForRace(raceId).first()
+        assertEquals(beforeStart + 1, all.size)
+        val clock = all.single { it.action == HistoryAction.CLOCK }
+        assertEquals(HistoryMode.BIBS, clock.mode)
     }
 
     @Test
@@ -153,6 +177,7 @@ class BibsModeRepositoryTest {
         // Shaped identically to Time/CP's own start methods now — see
         // RaceEntity.bibsModeStartedAtMillis's own doc for why this, not the Clock row's mere
         // presence, is what "started" is derived from.
+        setupRace()
         repository.startBibsMode(raceId, startedAtMillis = 5_000L)
 
         assertEquals(5_000L, db.raceDao().getById(raceId)?.bibsModeStartedAtMillis)
@@ -163,6 +188,7 @@ class BibsModeRepositoryTest {
         // This is the whole point of bibsModeStartedAtMillis existing: undoing the very first
         // real entry must leave the screen still showing the keypad rather than reverting to a
         // pre-Start state, same as CP's own cpModeStartedAtMillis already guarantees.
+        setupRace()
         repository.startBibsMode(raceId, startedAtMillis = 5_000L)
         repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
 
@@ -173,6 +199,7 @@ class BibsModeRepositoryTest {
 
     @Test
     fun resetBibsModeClearsStartedAt() = runTest {
+        setupRace()
         repository.startBibsMode(raceId, startedAtMillis = 1_000L)
 
         repository.resetBibsMode(raceId, resetAtMillis = 9_000L)
@@ -180,17 +207,23 @@ class BibsModeRepositoryTest {
         assertNull(db.raceDao().getById(raceId)?.bibsModeStartedAtMillis)
     }
 
+    // TODO.md: "undo last in time mode includes the initial start, in bibs/cp mode it does not,
+    // make them consistent - make bibs/cp like time" — undoing the Clock row now clears
+    // startedAt exactly like Time's own START branch, rather than being an unreachable no-op.
     @Test
-    fun undoIsNoOpWhenClockIsTheOnlyRow() = runTest {
-        repository.startBibsMode(raceId)
+    fun undoingTheClockRowWhenItsTheOnlyRowClearsStartedAt() = runTest {
+        setupRace()
+        repository.startBibsMode(raceId, startedAtMillis = 5_000L)
 
         repository.undoMostRecent(raceId)
 
-        // Still just the Clock row — Undo can't reach past Clock, it's never a valid target.
-        val entries = db.historyLineDao().observeAllForRace(raceId).first()
-        assertEquals(1, entries.size)
-        assertTrue(entries.any { it.action == HistoryAction.CLOCK })
-        assertEquals(1, db.raceDao().getById(raceId)?.bibsModeNextSplit)
+        assertNull(db.raceDao().getById(raceId)?.bibsModeStartedAtMillis)
+        // The LOCATION marker itself is still visible/undoable — only the Clock row's own
+        // group was hidden by the undo.
+        assertEquals(
+            listOf(HistoryAction.LOCATION),
+            repository.observeCurrentSegmentEntries(raceId).first().map { it.action },
+        )
     }
 
     @Test
@@ -257,19 +290,23 @@ class BibsModeRepositoryTest {
     }
 
     @Test
-    fun editingStopOrResetRowIsRejected() = runTest {
+    fun editingAResetRowIsRejected() = runTest {
+        setupRace()
+        repository.startBibsMode(raceId)
         repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
-        repository.stopBibsMode(raceId, stoppedAtMillis = 123L)
-        val stopRow = db.historyLineDao().observeAllForRace(raceId).first().single { it.action == HistoryAction.STOP }
+        repository.resetBibsMode(raceId)
+        val resetRow = db.historyLineDao().observeAllForRace(raceId).first().single { it.action == HistoryAction.RESET }
+        val countBefore = db.historyLineDao().observeAllForRace(raceId).first().size
 
-        repository.updateEntry(stopRow.id, bibNumber = 999, action = HistoryAction.FINISH, note = "hacked")
+        repository.updateEntry(resetRow.id, bibNumber = 999, action = HistoryAction.FINISH, note = "hacked")
 
-        // No echo was inserted — the repository-level root-guard refuses to edit a Stop row.
-        assertEquals(2, db.historyLineDao().observeAllForRace(raceId).first().size)
+        // No echo was inserted — the repository-level root-guard refuses to edit a Reset row.
+        assertEquals(countBefore, db.historyLineDao().observeAllForRace(raceId).first().size)
     }
 
     @Test
     fun updateEntryOnClockRowPinsTypeToClockRegardlessOfRequestedType() = runTest {
+        setupRace()
         repository.startBibsMode(raceId)
         val clockRow = db.historyLineDao().observeAllForRace(raceId).first().single { it.action == HistoryAction.CLOCK }
 
@@ -278,8 +315,6 @@ class BibsModeRepositoryTest {
         // defense-in-depth holds independently of the UI's cooperation.
         repository.updateEntry(clockRow.id, bibNumber = 101, action = HistoryAction.FINISH, note = "5:30")
 
-        // The MODE_START boundary marker (also present, see startBibsMode) is untouched — the
-        // echo is specifically the Clock row's own edit.
         val echo = db.historyLineDao().observeAllForRace(raceId).first().single { it.refLineNumber == clockRow.lineNumber }
         assertEquals(HistoryAction.CLOCK, echo.action)
         assertNull(echo.bibNumber)
@@ -287,137 +322,72 @@ class BibsModeRepositoryTest {
     }
 
     @Test
-    fun stopBibsModeInsertsStopRowAndUndoResumesLogging() = runTest {
+    fun undoingARelocateRevealsWhateverWasVisibleBeforeIt() = runTest {
+        setupRace()
+        repository.startBibsMode(raceId)
         repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
-        repository.stopBibsMode(raceId, stoppedAtMillis = 123L)
 
-        val afterStop = db.historyLineDao().observeAllForRace(raceId).first().sortedBy { it.id }
-        assertEquals(2, afterStop.size)
-        assertEquals(HistoryAction.STOP, afterStop.last().action)
-        // Stop is a boundary marker, not a real logged entry — it gets no splitNumber of its
-        // own and doesn't consume the counter (see EntryLogModeEngine.stop's own doc).
-        assertNull(afterStop.last().splitNumber)
-        assertEquals(123L, db.raceDao().getById(raceId)?.bibsModeStoppedAtMillis)
-
-        repository.undoMostRecent(raceId)
-
-        // Nothing deleted — the Stop row stays in the permanent log, hidden by an
-        // undo-marker instead.
-        assertEquals(3, db.historyLineDao().observeAllForRace(raceId).first().size)
-        assertNull(db.raceDao().getById(raceId)?.bibsModeStoppedAtMillis)
-        assertEquals(2, db.raceDao().getById(raceId)?.bibsModeNextSplit)
-        assertTrue(repository.observeCurrentSegmentEntries(raceId).first().none { it.action == HistoryAction.STOP })
-    }
-
-    // Regression test for the HistoryFold ordering bug — see TimeModeRepositoryTest's identical
-    // twin for the full explanation. Bibs and CP share EntryLogModeEngine, so one mirror here
-    // covers both.
-    @Test
-    fun undoingARelocateAfterAStopRevealsTheStopAgainAndASecondUndoResumesLogging() = runTest {
-        repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
-        repository.stopBibsMode(raceId, stoppedAtMillis = 2_000L)
-
-        // Simulate RaceRepository.recordModeStart's own LOCATION+MODE_START write for a
-        // same-mode relocate (allowed even while Bibs is merely Stopped, not Reset).
-        val race = db.raceDao().getById(raceId)!!
-        db.historyLineDao().insert(
-            HistoryLineEntity(
-                raceId = raceId, mode = HistoryMode.BIBS, action = HistoryAction.LOCATION,
-                bibNumber = null, splitNumber = null,
-                lineNumber = race.nextLineNumber, note = "CP1", timestampMillis = 3_000L,
-                priorSplitCounter = race.bibsModeNextSplit, previousLocation = race.location, previousMode = race.mode,
-            ),
-        )
-        db.raceDao().incrementLineNumber(raceId)
-        val raceAfterLocation = db.raceDao().getById(raceId)!!
-        db.historyLineDao().insert(
-            HistoryLineEntity(
-                raceId = raceId, mode = HistoryMode.BIBS, action = HistoryAction.MODE_START,
-                bibNumber = null, splitNumber = null,
-                lineNumber = raceAfterLocation.nextLineNumber, note = "Bibs", timestampMillis = 3_000L,
-            ),
-        )
-        db.raceDao().incrementLineNumber(raceId)
-        db.raceDao().setBibsModeNextSplit(raceId, 1)
-        db.raceDao().updateModeAndLocation(raceId, "BIBS", "CP1")
+        // Relocate mid-race (allowed even while Bibs is still recording).
+        raceRepository.recordModeStart(raceId, AppMode.BIBS, "CP1")
 
         assertEquals(
             listOf(HistoryAction.LOCATION),
             repository.observeCurrentSegmentEntries(raceId).first().map { it.action },
         )
 
-        // First Undo: undoes the relocate — with no LOCATION marker left standing,
-        // sinceLastLocationMarker's own no-boundary-found case returns the folded segment
-        // unchanged (see its own doc), correctly revealing the whole pre-relocate segment as it
-        // stood before the relocate (Stop and the earlier Finish) — neither was ever behind an
-        // earlier LOCATION boundary to begin with, since this was the race's first segment.
+        // Undo: undoes the relocate — with the relocate's own LOCATION group folded away, the
+        // race's own original (setupRace's own) LOCATION marker is what's left standing, so it
+        // correctly reveals the whole pre-relocate segment (the Finish, the Clock marker, and
+        // that original LOCATION row itself) exactly as it stood before.
         repository.undoMostRecent(raceId)
         assertEquals(
-            listOf(HistoryAction.STOP, HistoryAction.FINISH),
+            listOf(HistoryAction.FINISH, HistoryAction.CLOCK, HistoryAction.LOCATION),
             repository.observeCurrentSegmentEntries(raceId).first().map { it.action },
         )
         assertEquals("Finish", db.raceDao().getById(raceId)?.location)
-        assertEquals(2_000L, db.raceDao().getById(raceId)?.bibsModeStoppedAtMillis)
-
-        // Second Undo: undoes the Stop, resuming live logging.
-        repository.undoMostRecent(raceId)
-        assertNull(db.raceDao().getById(raceId)?.bibsModeStoppedAtMillis)
-        assertTrue(repository.observeCurrentSegmentEntries(raceId).first().none { it.action == HistoryAction.STOP })
     }
 
     @Test
-    fun resumeBibsModeWritesNothingAndLeavesSplitNumberingIntact() = runTest {
-        // Backs "End recording" then picking the same course again (see
-        // RaceRepository.resolveCourseRace/endRecordingForCourse's own docs) — unlike
-        // resetBibsMode, this must never look like a fresh segment: no new Start/Clock row, no
-        // counter reset, the current-segment view (and Undo last) reaching straight back
-        // through the Stop to what came before it, exactly as if it had never happened.
+    fun resumeBibsModeIsANoOpNowThatThereIsNoStoppedStateToClear() = runTest {
+        setupRace()
+        repository.startBibsMode(raceId)
         repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
-        repository.stopBibsMode(raceId, stoppedAtMillis = 123L)
-        val beforeResume = db.historyLineDao().observeAllForRace(raceId).first()
+        val before = db.historyLineDao().observeAllForRace(raceId).first()
+        val raceBefore = db.raceDao().getById(raceId)
 
         repository.resumeBibsMode(raceId)
 
-        // Nothing written — same rows, same count, as right after Stop.
-        assertEquals(beforeResume, db.historyLineDao().observeAllForRace(raceId).first())
-        val race = db.raceDao().getById(raceId)
-        assertNull(race?.bibsModeStoppedAtMillis)
-        assertEquals(2, race?.bibsModeNextSplit)
-        // The Finish (and the Stop marker itself) are both still visible in the live view —
-        // resume never touched RESET, so nothing is excluded from the current segment.
-        assertEquals(2, db.historyLineDao().observeCurrentSegment(raceId, HistoryMode.BIBS, HistoryAction.RESET).first().size)
-
-        // Split numbering carries straight on rather than restarting at S1.
-        repository.recordEntry(raceId, HistoryAction.FINISH, 102, note = null)
-        val finishes = db.historyLineDao().observeAllForRace(raceId).first().filter { it.action == HistoryAction.FINISH }
-        assertEquals(listOf(1, 2), finishes.sortedBy { it.id }.map { it.splitNumber })
+        assertEquals(before, db.historyLineDao().observeAllForRace(raceId).first())
+        assertEquals(raceBefore, db.raceDao().getById(raceId))
     }
 
     @Test
     fun resetBibsModeInsertsMarkerAndLeavesPriorEntriesIntact() = runTest {
+        setupRace()
+        repository.startBibsMode(raceId)
         repository.recordEntry(raceId, HistoryAction.START, 101, note = null)
         repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
-        repository.stopBibsMode(raceId)
 
-        repository.resetBibsMode(raceId, resetAtMillis = 9_000L)
+        val locationRow = db.historyLineDao().observeAllForRace(raceId).first().single { it.action == HistoryAction.LOCATION }
+        val abandoned = repository.resetBibsMode(raceId, resetAtMillis = 9_000L)
 
-        // Nothing is deleted — Start, Finish, Stop, and the new Reset marker are all present
-        // in the full-history query.
+        assertTrue(abandoned) // the race's own first-ever segment
+
+        // Nothing is deleted — NEW_RACE, LOCATION, MODE_START, Clock, Start, Finish, and the
+        // new Reset marker are all present in the full-history query.
         val allEntries = db.historyLineDao().observeAllForRace(raceId).first()
-        assertEquals(4, allEntries.size)
+        assertEquals(7, allEntries.size)
         val resetRow = allEntries.single { it.action == HistoryAction.RESET }
         assertEquals(9_000L, resetRow.timestampMillis)
+        assertEquals(locationRow.lineNumber, resetRow.refLineNumber)
 
-        // The clock/counter state resets, same as before.
+        // The counter/started-at state resets, same as before.
         val race = db.raceDao().getById(raceId)
         assertEquals(1, race?.bibsModeNextSplit)
-        assertNull(race?.bibsModeStoppedAtMillis)
+        assertNull(race?.bibsModeStartedAtMillis)
 
-        // The live/current-segment view is empty for the new segment — no fresh Clock row is
-        // auto-inserted anymore (see BibsModeRepository.resetBibsMode's own doc), so it falls
-        // back to the same Start-button state as a freshly created race.
-        val currentSegment = db.historyLineDao().observeCurrentSegment(raceId, HistoryMode.BIBS, HistoryAction.RESET).first()
-        assertEquals(0, currentSegment.size)
+        // The live/current-segment view is empty for the new segment.
+        assertTrue(repository.observeCurrentSegmentEntries(raceId).first().isEmpty())
     }
 
     @Test
@@ -425,13 +395,13 @@ class BibsModeRepositoryTest {
         repository.recordEntry(raceId, HistoryAction.START, 101, note = null)
         repository.resetBibsMode(raceId)
 
-        // The new segment starts empty (no fresh Clock row — see resetBibsMode's own doc), so
-        // there's nothing in it for Undo to target; it's a no-op, which is what makes Reset
-        // itself effectively non-undoable, with no special-casing needed.
+        // The new segment starts empty, so there's nothing in it for Undo to target; it's a
+        // no-op, which is what makes Reset itself effectively non-undoable, with no
+        // special-casing needed.
         repository.undoMostRecent(raceId)
 
         assertEquals(2, db.historyLineDao().observeAllForRace(raceId).first().size)
-        assertEquals(0, db.historyLineDao().observeCurrentSegment(raceId, HistoryMode.BIBS, HistoryAction.RESET).first().size)
+        assertTrue(repository.observeCurrentSegmentEntries(raceId).first().isEmpty())
     }
 
     @Test

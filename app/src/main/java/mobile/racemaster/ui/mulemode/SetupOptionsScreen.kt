@@ -5,8 +5,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -73,7 +75,10 @@ fun SetupOptionsScreen(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->
         Column(
-            modifier = Modifier.padding(padding).padding(16.dp),
+            modifier = Modifier
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             MuleSyncControl(
@@ -88,6 +93,8 @@ fun SetupOptionsScreen(
             AutoSyncControls(uiState = uiState, viewModel = viewModel)
             HorizontalDivider()
             RaceStalenessControl(viewModel = viewModel)
+            HorizontalDivider()
+            PingIntervalControl(viewModel = viewModel)
         }
     }
 }
@@ -200,6 +207,54 @@ internal fun RaceStalenessControl(viewModel: MuleModeViewModel) {
         }
         Text(
             "Races untouched this long are no longer checked against the server or relayed to other Mules.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+// See SettingsRepository.pingIntervalSeconds's own doc — how often a mode with nothing else
+// happening writes a heartbeat row so the web app can tell the phone is still alive. Mirrors
+// RaceStalenessControl above exactly, except 0 is a valid, meaningful value (disables the
+// heartbeat entirely) rather than an error, so the floor here is >= 0, not >= 1.
+@Composable
+internal fun PingIntervalControl(viewModel: MuleModeViewModel) {
+    val savedSeconds by viewModel.pingIntervalSeconds.collectAsStateWithLifecycle()
+    val focusManager = LocalFocusManager.current
+    var text by remember { mutableStateOf("") }
+    var prefilled by remember { mutableStateOf(false) }
+    LaunchedEffect(savedSeconds) {
+        if (prefilled) return@LaunchedEffect
+        val loaded = savedSeconds ?: return@LaunchedEffect
+        text = loaded.toString()
+        prefilled = true
+    }
+    val value = text.toIntOrNull()
+    val canSave = value != null && value >= 0 && value != savedSeconds
+    // See RaceStalenessControl's own save() doc for why this re-parses text/re-reads the
+    // ViewModel's live value rather than trusting canSave/value as captured above.
+    fun save() {
+        val parsed = text.toIntOrNull() ?: return
+        if (parsed < 0 || parsed == viewModel.pingIntervalSeconds.value) return
+        viewModel.setPingIntervalSeconds(parsed)
+        focusManager.clearFocus()
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it.filter(Char::isDigit).take(4) },
+                singleLine = true,
+                label = { Text("Heartbeat interval (seconds, 0 = off)") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { save() }),
+                modifier = Modifier.weight(1f),
+            )
+            Button(onClick = withClickSound(::save), enabled = canSave) { Text("Save") }
+        }
+        Text(
+            "When a started mode has recorded nothing for this long, it writes a heartbeat row so " +
+                "the web app can tell the phone is still alive — shown in Race History but never on " +
+                "the mode screen itself. 0 disables it.",
             style = MaterialTheme.typography.bodySmall,
         )
     }

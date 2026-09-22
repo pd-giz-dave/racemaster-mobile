@@ -16,36 +16,14 @@ import mobile.racemaster.data.settings.AppMode
 fun List<HistoryLineEntity>.hasRealEntries(): Boolean = any { it.action != HistoryAction.CLOCK }
 
 /**
- * A race is "in progress" if any mode's own stopwatch/segment is running (started but not yet
- * stopped) — all three shaped identically, one started/stopped timestamp pair per mode. Used to
- * block starting a new race (which would orphan the in-progress one) from any mode's screen,
- * and to summarize it on the mode picker.
- */
-fun isRaceInProgress(
-    timeModeStartedAtMillis: Long?,
-    timeModeStoppedAtMillis: Long?,
-    bibsModeStartedAtMillis: Long?,
-    bibsModeStoppedAtMillis: Long?,
-    cpModeStartedAtMillis: Long?,
-    cpModeStoppedAtMillis: Long?,
-): Boolean {
-    val timeRunning = timeModeStartedAtMillis != null && timeModeStoppedAtMillis == null
-    val bibsRunning = bibsModeStartedAtMillis != null && bibsModeStoppedAtMillis == null
-    val cpRunning = cpModeStartedAtMillis != null && cpModeStoppedAtMillis == null
-    return timeRunning || bibsRunning || cpRunning
-}
-
-/**
- * THE single definition of "active" for guarding a destructive/disruptive action against a
- * race — changing the device name, deleting the race itself — as opposed to [isRaceInProgress]
- * above, which answers a different question ("is it currently *running* right now", used only
- * to warn about starting a new race and to summarize on the mode picker). A race is active here
- * once any mode has been started in its *current segment* (since the last Reset) — deliberately
- * ignoring every mode's own "stopped" flag: a race that's merely been Stopped, not Reset, still
- * has live, un-finalized history sitting in this segment and must stay just as protected as one
- * that's still running. Only Reset (which clears the relevant started-at field back to null)
- * ever turns this back to false — same as a race that was never started at all, which is the
- * one case this is meant to *not* protect.
+ * THE single definition of "active"/"in progress" for a race — used both to guard a
+ * destructive/disruptive action (changing the device name, deleting the race itself) and to
+ * block starting a new race / summarize the mode picker. A race is active here once any mode has
+ * been started in its *current segment* (since the last Reset) — there's no separate "running vs.
+ * merely stopped" distinction any more (see HistoryAction's own doc for why Stop was dropped):
+ * once started, a mode stays active until Reset, which is the only thing that ever clears the
+ * relevant started-at field back to null — same as a race that was never started at all, which
+ * is the one case this is meant to *not* protect.
  */
 fun isRaceActive(timeModeStartedAtMillis: Long?, bibsModeStartedAtMillis: Long?, cpModeStartedAtMillis: Long?): Boolean =
     timeModeStartedAtMillis != null || bibsModeStartedAtMillis != null || cpModeStartedAtMillis != null
@@ -94,21 +72,8 @@ fun isModeStarted(mode: AppMode, race: RaceEntity?): Boolean = when (mode) {
     AppMode.TIME -> race?.timeModeStartedAtMillis != null
 }
 
-/**
- * Whether [mode] is currently running (started, not yet stopped) for [race]'s current segment —
- * narrower than [isModeStarted], which stays true through Stop and only clears on Reset. Used by
- * [RaceRepository.blockedModeSwitchReason]: a mode switch should only be blocked by another mode
- * that's still actually *recording*, not merely one that's been Stopped but not yet Reset — the
- * same relaxed "Stop is enough" rule a pure location-only Relocate already gets for free.
- */
-fun isModeInProgress(mode: AppMode, race: RaceEntity?): Boolean = when (mode) {
-    AppMode.BIBS -> race?.bibsModeStartedAtMillis != null && race.bibsModeStoppedAtMillis == null
-    AppMode.CP -> race?.cpModeStartedAtMillis != null && race.cpModeStoppedAtMillis == null
-    AppMode.TIME -> race?.timeModeStartedAtMillis != null && race.timeModeStoppedAtMillis == null
-}
-
-// Shared with RaceRepository.blockedModeSwitchReason's own user-facing message — the one place
-// an AppMode's recording-mode name is spelled out, so the wording can't drift between call sites.
+// The one place an AppMode's recording-mode name is spelled out, so the wording can't drift
+// between call sites (the Mode Picker's own status text and active-mode labels, editing dialogs).
 fun AppMode.displayName(): String = when (this) {
     AppMode.TIME -> "Time Mode"
     AppMode.BIBS -> "Bibs Mode"

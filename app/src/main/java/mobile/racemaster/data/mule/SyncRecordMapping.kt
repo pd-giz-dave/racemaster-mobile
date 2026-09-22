@@ -5,6 +5,14 @@ import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.util.elapsedSeconds
 
+// See toSyncRecord's own doc for why each of these Time-mode actions sends a null splitTime
+// rather than a computed elapsed value — every one of them is a boundary/heartbeat marker, never
+// a real timed crossing.
+private val NON_SPLIT_TIME_ACTIONS = setOf(
+    HistoryAction.MODE_START, HistoryAction.PING, HistoryAction.LOCATION,
+    HistoryAction.RESET, HistoryAction.NEW_RACE,
+)
+
 /**
  * Maps a unified history line into the wire/server record shape. [raceStartedAtMillis] is the
  * race's `timeModeStartedAtMillis` (a Time-mode row's own t=0 reference) — `splitTime` is
@@ -24,9 +32,23 @@ import mobile.racemaster.util.elapsedSeconds
  * TimeModeRepository.startStopwatch), so a naive elapsed calculation would come out "00:00:00",
  * indistinguishable from a genuine Start; its own explicit mode declaration already lives in
  * `note` instead (see `AppMode.wireName()`), so there's nothing left for `splitTime` to signal.
+ * PING is null for the same "never meant to look like a real timed split" reason — see
+ * HistoryAction.PING's own doc: a heartbeat row must never be mistaken for a genuine split by
+ * whatever reads this wire record, on the phone or the web app alike. LOCATION, RESET, and
+ * NEW_RACE are null too, for the same reason again — every one of them is a boundary marker
+ * (LOCATION's own destination travels in `note`), never a real timed crossing, and Bibs/CP's own
+ * rows of these three already send null here unconditionally (mode != TIME), so a Time-mode row
+ * carrying a real elapsed value was the one inconsistent case each time (confirmed in the field:
+ * it looked exactly like a genuine split — RESET's own "when was this closed" and NEW_RACE's own
+ * "when was this race created" are both genuinely meaningful facts, but neither is a *split*, and
+ * NEW_RACE's own elapsed value in particular is actively misleading: it's computed against
+ * whatever timeModeStartedAtMillis happens to be at push time, not what it was — usually still
+ * null — the instant NEW_RACE itself was actually written). Racemaster (the web app)'s own
+ * mobile-files-devices.js:buildSegmentView has to work around the resulting loss of its own
+ * splitTime-based Time/Bibs classification signal for these three actions — see its own doc.
  */
 fun HistoryLineEntity.toSyncRecord(raceStartedAtMillis: Long?): SyncRecord {
-    val splitTime = if (mode == HistoryMode.TIME && action != HistoryAction.MODE_START) {
+    val splitTime = if (mode == HistoryMode.TIME && action !in NON_SPLIT_TIME_ACTIONS) {
         val elapsedMillis = raceStartedAtMillis?.let { timestampMillis - it } ?: 0L
         elapsedSeconds(elapsedMillis).toInt()
     } else {
@@ -60,9 +82,10 @@ private fun HistoryAction.toServerAction(): String = when (this) {
     HistoryAction.PASS -> "Pass"
     // Shared
     HistoryAction.START -> "Start"
-    HistoryAction.STOP -> "Stop"
     HistoryAction.RESET -> "Reset"
     HistoryAction.UNDO -> "Undo"
+    // See HistoryAction.PING's own doc — a periodic heartbeat, not a real logged event.
+    HistoryAction.PING -> "Ping"
     // Deliberately distinct from "Start" on the wire — the whole point is letting the web app
     // tell this boundary marker apart from a mode's own real Start/Clock row (see
     // HistoryAction.MODE_START's own doc), even though both show as "Start" in this app's UI.
@@ -99,12 +122,14 @@ fun SyncRecord.toHistoryAction(): HistoryAction = when (action) {
     "Female" -> HistoryAction.FEMALE
     "Clock" -> HistoryAction.CLOCK
     "Pass" -> HistoryAction.PASS
-    "Stop" -> HistoryAction.STOP
     "Reset" -> HistoryAction.RESET
     "Undo" -> HistoryAction.UNDO
     "ModeStart" -> HistoryAction.MODE_START
     "Location" -> HistoryAction.LOCATION
     "NewRace" -> HistoryAction.NEW_RACE
-    // An unrecognized wire value - should not get here
+    "Ping" -> HistoryAction.PING
+    // An unrecognized wire value — includes a legacy "Stop" from a not-yet-upgraded peer or an
+    // old server-side file (STOP was removed — see HistoryAction's own doc); should otherwise
+    // not get here.
     else -> HistoryAction.IGNORE
 }

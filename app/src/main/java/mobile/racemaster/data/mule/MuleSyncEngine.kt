@@ -33,12 +33,15 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import mobile.racemaster.data.db.dao.PulledSourceSummary
+import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.KnownDeviceEntity
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
+import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
+import mobile.racemaster.data.settings.toHistoryMode
 
 /** A single physical phone Mule has seen — keyed by its stable [deviceId] once known (a
  *  phone can advertise under more than one BLE address over time, e.g. address rotation or
@@ -237,6 +240,9 @@ class MuleSyncEngine(
     // that used to follow (com.juul.kable.UnmetRequirementException, uncaught, from
     // startScan()'s collect).
     private val bluetoothWarningFlow = MutableStateFlow<String?>(null)
+    // Pull-phase busy flag — see pullAllVisibleDevices/autoPullIfArmed/forceSyncNow. Kept
+    // separate from pushBusyFlow below (see its own doc for why) now that pulling and pushing
+    // run as two independent loops rather than one always waiting for the other.
     private val busyFlow = MutableStateFlow(false)
     private var scanJob: Job? = null
     // When the currently-running scanJob actually started — see startBluetoothStateLoop's own
@@ -264,6 +270,16 @@ class MuleSyncEngine(
     // "sometimes works" with 3 phones, "never resolves" with 6.
     private val connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
 
+    // Push-phase busy flag — see pushIfNeeded. A genuinely separate MutableStateFlow from
+    // busyFlow above, not just a second reader of it: pulling (BLE, can legitimately run for up
+    // to OVERALL_TICK_TIMEOUT with several peers visible) and pushing (a plain HTTP round-trip
+    // to the configured server) now run as two independent loops (startAutoSyncLoop/
+    // startPushLoop) rather than push only ever happening after that tick's own pull finishes —
+    // see startPushLoop's own doc for the real-world delay this used to cause. Sharing one flow
+    // between two loops that can now genuinely overlap would have one loop's own try/finally
+    // clear busyFlow while the other is still mid-operation, wrongly reporting "not busy".
+    private val pushBusyFlow = MutableStateFlow(false)
+
     @Volatile
     private var started = false
 
@@ -288,7 +304,13 @@ class MuleSyncEngine(
     // the aggregation itself lives on bluetoothStateRepository since that's the one thing every
     // BLE-attempting part of this app (PeripheralSyncService included) already shares.
     val connectHealth: StateFlow<ConnectHealth> = bluetoothStateRepository.connectHealth
-    val isBusy: StateFlow<Boolean> = busyFlow.asStateFlow()
+    // Busy while EITHER the pull phase or the push phase is in flight — now genuinely
+    // independent operations (see pushBusyFlow's own doc), so this must combine both rather than
+    // read just one. A plain Flow (not stateIn'd to engineScope) is enough: both underlying
+    // MutableStateFlows already carry a synchronous initial value, so combine() itself emits
+    // immediately just like a StateFlow would — and MuleModeViewModel's own uiState combine()
+    // already treats this as one more plain Flow input alongside everything else there.
+    val isBusy: Flow<Boolean> = combine(busyFlow, pushBusyFlow) { pulling, pushing -> pulling || pushing }
 
     // This device's own unsynced data, shaped as one more DiscoveredDevice (isSelf = true) so
     // it can be folded straight into the same list real BLE-discovered devices render in —
@@ -346,8 +368,10 @@ class MuleSyncEngine(
         started = true
         startScan()
         startAutoSyncLoop()
+        startPushLoop()
         startBluetoothStateLoop()
         startProgressPollLoop()
+        startPingLoop()
     }
 
     /** Tears down every loop [start] set up — the central-side counterpart to
@@ -539,7 +563,33 @@ class MuleSyncEngine(
             while (isActive) {
                 val jitter = Random.nextDouble(-1.0, 1.0) * AUTO_SYNC_JITTER_FRACTION
                 delay(AUTO_SYNC_INTERVAL * (1.0 + jitter))
-                autoPullAndPushIfArmed()
+                autoPullIfArmed()
+            }
+        }
+    }
+
+    // This device's own push to the server, on its own independent loop — deliberately NOT
+    // chained after the pull loop's own autoPullIfArmed() any more (see git history: it used to
+    // be the last step of that same function, called from startAutoSyncLoop). Confirmed in the
+    // field: with several BLE peers visible, pullAllVisibleDevices can legitimately run for tens
+    // of seconds (MAX_CONCURRENT_CONNECTS serializes one connect at a time, each bounded by its
+    // own CONNECT_TIMEOUT/PULL_TIMEOUT, capped overall by OVERALL_TICK_TIMEOUT at 90s) — with
+    // push chained after it, this device's own newly-recorded rows sat unconfirmed (red) for a
+    // full pull cycle before pushToServer's own status check even got a chance to run, then
+    // another full cycle again before that same check could come back around and actually
+    // confirm them (see pushToServer's own "only mark synced what this round's status check
+    // independently confirms" doc) — a real, reported delay of "at least a minute" on a phone
+    // that was also recording its own data, while relayed-from-others rows (acked over BLE by
+    // PeripheralSyncService, an entirely different path) kept confirming quickly. Pushing is a
+    // plain HTTP round-trip with no BLE radio contention of its own, so there's no reason it
+    // should ever have had to wait for pulling to finish — this loop runs on the exact same
+    // jittered AUTO_SYNC_INTERVAL cadence as the pull loop, just entirely independently of it.
+    private fun startPushLoop() {
+        engineScope.launch {
+            while (isActive) {
+                val jitter = Random.nextDouble(-1.0, 1.0) * AUTO_SYNC_JITTER_FRACTION
+                delay(AUTO_SYNC_INTERVAL * (1.0 + jitter))
+                pushIfNeeded(auto = true)
             }
         }
     }
@@ -551,7 +601,7 @@ class MuleSyncEngine(
     // sharing a budget with scanning/connecting) — see PROGRESS_POLL_INTERVAL's own doc.
     // Silently does nothing on any tick where there's no active race, no configured server, or
     // no login yet, exactly the same "not an error, just nothing to do right now" posture
-    // autoPullAndPushIfArmed's own gates already use elsewhere in this engine.
+    // autoPullIfArmed's own gates already use elsewhere in this engine.
     private fun startProgressPollLoop() {
         engineScope.launch {
             while (isActive) {
@@ -565,9 +615,47 @@ class MuleSyncEngine(
         }
     }
 
+    // See HistoryAction.PING's own doc — a periodic heartbeat so the web app can tell a phone
+    // with nothing else happening is still alive. Checked far more often than the configured
+    // interval itself (PING_CHECK_INTERVAL, not SettingsRepository.pingIntervalSeconds) so a
+    // short configured interval still gets reasonable resolution. Keyed off RaceEntity.mode — the
+    // one mode this race is CURRENTLY set up to record in (see RaceRepository.recordModeStart) —
+    // rather than any mode's own started-at column: TODO.md's own "heartbeat should start as soon
+    // as a race is setup irrespective of the selected mode starting" means this must fire the
+    // moment Setup Race/Relocate writes a fresh LOCATION+MODE_START pair, before Start is ever
+    // pressed. A race only ever records one mode at a time, so there's only ever one mode to
+    // check here, not three — an older mode this race has since relocated away from correctly
+    // gets no heartbeat of its own any more, the same way it gets no live screen either. No
+    // active race, or a configured interval of 0 (disabled — see
+    // SettingsRepository.pingIntervalSeconds' own doc), is silently skipped, the same "not an
+    // error, just nothing to do right now" posture every other gate in this engine already uses.
+    private fun startPingLoop() {
+        engineScope.launch {
+            while (isActive) {
+                delay(PING_CHECK_INTERVAL)
+                val intervalSeconds = settingsRepository.pingIntervalSeconds.first()
+                if (intervalSeconds <= 0) continue
+                val raceId = settingsRepository.activeRaceId.first() ?: continue
+                val race = raceRepository.getRace(raceId) ?: continue
+                val mode = race.mode?.let { runCatching { AppMode.valueOf(it) }.getOrNull() } ?: continue
+                pingIfQuiet(raceId, mode.toHistoryMode(), intervalSeconds, System.currentTimeMillis())
+            }
+        }
+    }
+
+    private suspend fun pingIfQuiet(raceId: Long, mode: HistoryMode, intervalSeconds: Int, now: Long) {
+        // lastActivityAtMillis is never null once the race is set up — recordModeStart's own
+        // LOCATION/MODE_START rows already count as activity, which is exactly what lets this
+        // fire before Start is ever pressed.
+        val lastActivity = raceRepository.lastActivityAtMillis(raceId, mode) ?: return
+        if (now - lastActivity >= intervalSeconds.seconds.inWholeMilliseconds) {
+            raceRepository.recordPing(raceId, mode, now)
+        }
+    }
+
     // Only used for a newly-discovered device's first resolve (see startScan()) — the
     // periodic loop no longer needs a separate universal refresh pass, since
-    // pullAllVisibleDevices() (called every tick from autoPullAndPushIfArmed) already
+    // pullAllVisibleDevices() (called every tick from autoPullIfArmed) already
     // re-reads every currently-tracked device's info as a side effect regardless of
     // whether it ends up pulling anything, so a second full pass here would just double the
     // BLE traffic (and doubled contention) for no benefit.
@@ -748,20 +836,22 @@ class MuleSyncEngine(
         )
     }
 
-    private suspend fun autoPullAndPushIfArmed() {
+    // Pull-only now — see startPushLoop's own doc for why push was split out into its own,
+    // independent loop rather than always running as this function's own last step.
+    private suspend fun autoPullIfArmed() {
         if (busyFlow.value) return
         // Deliberately *not* gated on bluetoothOff or login here — pulling from another device
         // over BLE is a purely local operation into Mule's own inbox, and every such device
         // visible should end up captured there (and colored green once caught up) regardless
         // of whether *this* phone is logged in to push anywhere yet (in which case
-        // discoveredFlow is simply empty and this loop does nothing). Only the push phase
-        // below needs the login/server-sync gates, and pushIfNeeded() already no-ops quietly
-        // if it isn't configured. This device's own "self" status (see selfDevice) is a
-        // different story now: since pushToServer builds and confirms self's own data directly
-        // against the server rather than staging it into a local inbox first, self's own
-        // green/red genuinely does depend on being logged in and reachable — an honest change
-        // from the old design, where self could show green the instant it was merely handed
-        // off locally, before ever actually reaching the server.
+        // discoveredFlow is simply empty and this loop does nothing). Login/server-sync gates
+        // live on the push loop instead (pushIfNeeded() already no-ops quietly if it isn't
+        // configured). This device's own "self" status (see selfDevice) is a different story
+        // now: since pushToServer builds and confirms self's own data directly against the
+        // server rather than staging it into a local inbox first, self's own green/red
+        // genuinely does depend on being logged in and reachable — an honest change from the
+        // old design, where self could show green the instant it was merely handed off
+        // locally, before ever actually reaching the server.
         if (muleRepository.autoSyncStopped.first()) return
 
         // try/finally, not a bare set-true/set-false either side of the call: MulePullClient's
@@ -774,13 +864,13 @@ class MuleSyncEngine(
         busyFlow.value = true
         val tickFailure = try {
             // A last-resort ceiling on top of MulePullClient's own per-operation timeouts —
-            // this engine's while(isActive) { delay(...); autoPullAndPushIfArmed() } loop
-            // (see startAutoSyncLoop) is one coroutine, so if this call ever failed to return
-            // (any unbounded suspend anywhere in its call chain, present or future), not just
-            // this tick's push but every future tick — pull and push alike — would wedge
-            // forever, with nothing left to recover it. Deliberately generous: with several
-            // peers queued behind connectSemaphore's small permit pool, a legitimate tick can
-            // take a while without that being a bug.
+            // this engine's while(isActive) { delay(...); autoPullIfArmed() } loop (see
+            // startAutoSyncLoop) is one coroutine, so if this call ever failed to return (any
+            // unbounded suspend anywhere in its call chain, present or future), every future
+            // pull tick would wedge forever, with nothing left to recover it. Deliberately
+            // generous: with several peers queued behind connectSemaphore's small permit pool,
+            // a legitimate tick can take a while without that being a bug — which is exactly
+            // why push no longer waits behind this (see startPushLoop's own doc).
             try {
                 withTimeout(OVERALL_TICK_TIMEOUT) { pullAllVisibleDevices() }
             } catch (e: TimeoutCancellationException) {
@@ -793,8 +883,6 @@ class MuleSyncEngine(
         // synced and there was nothing to attempt) wipes out any earlier stale warning,
         // instead of it sticking around after the connection has actually recovered.
         autoWarningFlow.value = tickFailure
-
-        pushIfNeeded(auto = true)
     }
 
     /** Pulls from every currently-visible BLE device — no attach step, no per-role limit, no
@@ -909,7 +997,7 @@ class MuleSyncEngine(
                         // see MulePullClient.readDeviceInfoOnce's own doc for why that's
                         // deliberately non-fatal. Routed into this function's own tickFailure
                         // (same channel as a failed pull below, not autoWarningFlow directly —
-                        // autoPullAndPushIfArmed unconditionally overwrites autoWarningFlow with
+                        // autoPullIfArmed unconditionally overwrites autoWarningFlow with
                         // this function's return value right after it returns, so setting the
                         // flow itself from in here would just get clobbered) so a still-broken
                         // confirmation relay — TODO.md's Sony-Mule report — isn't silently
@@ -1047,11 +1135,11 @@ class MuleSyncEngine(
     fun forceSyncNow() {
         engineScope.launch {
             // No bluetoothOff/serverSyncOff guard here — same reasoning as
-            // autoPullAndPushIfArmed: this degrades gracefully (pullAllVisibleDevices' BLE loop
+            // autoPullIfArmed: this degrades gracefully (pullAllVisibleDevices' BLE loop
             // is naturally a no-op with an empty discoveredFlow, and pushIfNeeded checks
             // serverSyncOff itself), rather than needing to know about every combination here.
             //
-            // try/finally — see autoPullAndPushIfArmed's own doc for why: without it, a stuck
+            // try/finally — see autoPullIfArmed's own doc for why: without it, a stuck
             // device (bounded now, but still worth the backstop) would leave this button
             // permanently disabled (isBusy never clears) rather than just this one tick failing.
             busyFlow.value = true
@@ -1086,12 +1174,13 @@ class MuleSyncEngine(
             if (!auto) statusMessageFlow.value = "Push failed: not logged in"
             return
         }
-        // try/finally, same reasoning as the pull-phase callers above.
-        busyFlow.value = true
+        // try/finally, same reasoning as the pull-phase callers above — pushBusyFlow (not
+        // busyFlow), see its own doc for why the two are separate now.
+        pushBusyFlow.value = true
         val result = try {
             runCatching { muleRepository.pushToServer() }
         } finally {
-            busyFlow.value = false
+            pushBusyFlow.value = false
         }
         pushResultMessage(auto, result)?.let { statusMessageFlow.value = it }
     }
@@ -1128,6 +1217,13 @@ class MuleSyncEngine(
         // AUTO_SYNC_INTERVAL: this is a plain HTTP request against the configured server, not a
         // BLE radio operation competing with this engine's own scan/connect budget.
         private val PROGRESS_POLL_INTERVAL = 30_000L.milliseconds
+
+        // How often startPingLoop() above re-checks whether any started mode has gone quiet
+        // long enough to need a heartbeat — deliberately much finer-grained than
+        // SettingsRepository.pingIntervalSeconds' own default (60s), so a shorter configured
+        // interval still gets reasonable resolution. A plain local DB check, not a network or BLE
+        // operation, so a short interval here costs nothing worth budgeting against.
+        private val PING_CHECK_INTERVAL = 10_000L.milliseconds
 
         // The periodic backstop behind shouldConnect's version-gate: even a device whose
         // advertised counter never seems to move still gets a real GATT connect+DeviceInfo
@@ -1178,7 +1274,7 @@ class MuleSyncEngine(
         // out even with connectSemaphore already bounding how many run at once.
         private val FIRST_SIGHTING_JITTER = 2.seconds
 
-        // See autoPullAndPushIfArmed's own doc for why this ceiling exists at all.
+        // See autoPullIfArmed's own doc for why this ceiling exists at all.
         private val OVERALL_TICK_TIMEOUT = 90.seconds
         private val UNREACHABLE_DROP_THRESHOLD = 60.minutes
         private val UNRESOLVED_DROP_THRESHOLD = 2.minutes

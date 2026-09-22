@@ -105,6 +105,15 @@ class MuleModeViewModel(
         viewModelScope.launch { settingsRepository.setRaceStaleAfterDays(days) }
     }
 
+    // See SettingsRepository.pingIntervalSeconds's own doc — same null-until-loaded reasoning as
+    // raceStaleAfterDays above.
+    val pingIntervalSeconds: StateFlow<Int?> = settingsRepository.pingIntervalSeconds
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun setPingIntervalSeconds(seconds: Int) {
+        viewModelScope.launch { settingsRepository.setPingIntervalSeconds(seconds) }
+    }
+
     // See SettingsRepository.muleSyncEnabled's own doc — the explicit "Enable/Disable Mule
     // syncing" control on SetupOptionsScreen, independent of whichever recording mode (if any)
     // this phone is itself in.

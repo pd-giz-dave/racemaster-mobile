@@ -39,7 +39,7 @@ import mobile.racemaster.ui.components.DigitKeypad
 import mobile.racemaster.ui.components.EntryLogList
 import mobile.racemaster.ui.components.EntryModeHeaderInfo
 import mobile.racemaster.ui.components.ModeScreenTopBar
-import mobile.racemaster.ui.components.StopOrResetButton
+import mobile.racemaster.ui.components.ResetButton
 import mobile.racemaster.ui.components.UndoLastButton
 import mobile.racemaster.ui.components.rememberListClickGuard
 import mobile.racemaster.util.formatBibsSoFarText
@@ -49,7 +49,7 @@ private const val BUTTON_HEIGHT_DP = 48
 
 // Default Material button horizontal padding (24dp/side) leaves almost no room for text once
 // three buttons share a row — cut it down instead of shrinking the font, so labels like
-// "Event"/"Stopped" stay readable.
+// "Event"/"Reset" stay readable.
 private val BUTTON_ROW_CONTENT_PADDING = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -91,7 +91,6 @@ fun BibsModeScreen(
             onBackspace = viewModel::onBackspace,
             onClear = viewModel::onClear,
             onEventTypeSelected = viewModel::onEventTypeSelected,
-            onStop = viewModel::stopBibsMode,
             onReset = viewModel::resetBibsMode,
             onUndo = viewModel::undoLast,
             onEditEntry = onEditEntry,
@@ -114,7 +113,6 @@ private fun BibsModeContent(
     onBackspace: () -> Unit,
     onClear: () -> Unit,
     onEventTypeSelected: (HistoryAction) -> Unit,
-    onStop: () -> Unit,
     onReset: () -> Unit,
     onUndo: () -> Unit,
     onEditEntry: (entryId: Long) -> Unit,
@@ -204,11 +202,7 @@ private fun BibsModeContent(
                         onDigit = { digit -> listClickGuard.trigger(); onDigit(digit) },
                         onBackspace = onBackspace,
                         onClear = onClear,
-                        // Stopped disables entry entirely — a digit reaching 3 auto-saves (see
-                        // BibsModeViewModel.onDigit), so with no separate Submit button left to
-                        // gate, the keypad itself is what must stay disabled once stopped,
-                        // matching Event's own `!uiState.stopped` below.
-                        enabled = uiState.raceId != null && !uiState.stopped,
+                        enabled = uiState.raceId != null,
                         buttonHeight = 52.dp,
                         spacing = 4.dp,
                     )
@@ -219,14 +213,12 @@ private fun BibsModeContent(
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         OutlinedButton(
                             onClick = withClickSound { showEventPicker = true },
-                            enabled = uiState.raceId != null && !uiState.stopped,
+                            enabled = uiState.raceId != null,
                             contentPadding = BUTTON_ROW_CONTENT_PADDING,
                             modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
                         ) { Text("Event") }
-                        StopOrResetButton(
-                            isStopped = uiState.stopped,
-                            resetDescription = "Adds a reset marker and starts a fresh count from scratch — nothing is deleted, every bib entry stays in Race History.",
-                            onStop = onStop,
+                        ResetButton(
+                            resetDescription = "Closes out everything recorded since this segment started — nothing is deleted, every bib entry stays in Race History. Reset again to walk back through earlier segments the same way.",
                             onReset = onReset,
                             enabled = uiState.raceId != null,
                             contentPadding = BUTTON_ROW_CONTENT_PADDING,

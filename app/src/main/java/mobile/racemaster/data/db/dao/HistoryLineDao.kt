@@ -3,7 +3,6 @@ package mobile.racemaster.data.db.dao
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
-import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
 import kotlinx.coroutines.flow.Flow
@@ -20,30 +19,18 @@ interface HistoryLineDao {
     @Query("SELECT * FROM history_lines WHERE raceId = :raceId ORDER BY lineNumber DESC")
     fun observeAllForRace(raceId: Long): Flow<List<HistoryLineEntity>>
 
-    // Only the rows since the most recent reset marker for THIS mode (0/none if never reset)
-    // — what a mode's own live screen shows, once folded (see HistoryFold) by its repository.
-    @Query(
-        """
-        SELECT * FROM history_lines WHERE raceId = :raceId AND mode = :mode AND lineNumber >
-            (SELECT COALESCE(MAX(lineNumber), 0) FROM history_lines
-                WHERE raceId = :raceId AND mode = :mode AND action = :resetAction)
-        ORDER BY lineNumber DESC
-        """,
-    )
-    fun observeCurrentSegment(raceId: Long, mode: HistoryMode, resetAction: HistoryAction): Flow<List<HistoryLineEntity>>
+    // Every row this race has ever written for ONE mode, completely unfiltered by action —
+    // RESET is no longer a hard SQL boundary (see HistoryFold's own doc): the current segment is
+    // now computed entirely at the app layer, from LOCATION/RESET's own refLineNumber
+    // relationships, which requires seeing every row, not just whatever's after the last Reset.
+    @Query("SELECT * FROM history_lines WHERE raceId = :raceId AND mode = :mode ORDER BY lineNumber")
+    fun observeAllForRaceAndMode(raceId: Long, mode: HistoryMode): Flow<List<HistoryLineEntity>>
 
-    // One-shot (non-Flow) snapshot of the exact same rows as observeCurrentSegment — for use
-    // inside a transactional Undo/Edit, which needs to fold the raw rows itself rather than
-    // subscribe to a live Flow.
-    @Query(
-        """
-        SELECT * FROM history_lines WHERE raceId = :raceId AND mode = :mode AND lineNumber >
-            (SELECT COALESCE(MAX(lineNumber), 0) FROM history_lines
-                WHERE raceId = :raceId AND mode = :mode AND action = :resetAction)
-        ORDER BY lineNumber DESC
-        """,
-    )
-    suspend fun getCurrentSegmentSnapshot(raceId: Long, mode: HistoryMode, resetAction: HistoryAction): List<HistoryLineEntity>
+    // One-shot (non-Flow) snapshot of the exact same rows as observeAllForRaceAndMode — for use
+    // inside a transactional Undo/Edit/Reset, which needs to compute the current segment itself
+    // rather than subscribe to a live Flow.
+    @Query("SELECT * FROM history_lines WHERE raceId = :raceId AND mode = :mode ORDER BY lineNumber")
+    suspend fun getAllForRaceAndMode(raceId: Long, mode: HistoryMode): List<HistoryLineEntity>
 
     // Fetches whatever row the UI is currently pointing at for an edit — may itself already
     // be an edit-echo, not necessarily the root.
@@ -100,6 +87,13 @@ interface HistoryLineDao {
     // from the real data's own timestamps, not a sync-bookkeeping proxy.
     @Query("SELECT MAX(timestampMillis) FROM history_lines WHERE raceId = :raceId")
     fun observeLastActivityAtMillis(raceId: Long): Flow<Long?>
+
+    // Mode-scoped counterpart to observeLastActivityAtMillis above — used by the Ping heartbeat
+    // loop (see HistoryAction.PING's own doc) to decide whether a started mode has gone quiet
+    // long enough to write one. A one-shot suspend query (not a Flow) since it's only ever
+    // consulted from a periodic background loop, never observed by the UI.
+    @Query("SELECT MAX(timestampMillis) FROM history_lines WHERE raceId = :raceId AND mode = :mode")
+    suspend fun getLastActivityAtMillis(raceId: Long, mode: HistoryMode): Long?
 
     // Keyed by raceId + lineNumber, not local id or mode: that's the identity a BLE ack (or this
     // device's own self-push confirmation) carries back for its own-race case (see AckedOrigin's

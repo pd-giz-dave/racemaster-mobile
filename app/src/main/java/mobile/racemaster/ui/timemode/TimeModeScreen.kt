@@ -39,8 +39,8 @@ import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.RaceProgressSummary
+import mobile.racemaster.ui.components.ResetButton
 import mobile.racemaster.ui.components.SplitRow
-import mobile.racemaster.ui.components.StopOrResetButton
 import mobile.racemaster.ui.components.UndoLastButton
 import mobile.racemaster.ui.components.rememberListClickGuard
 import mobile.racemaster.util.formatTimeSplitsText
@@ -63,12 +63,12 @@ fun TimeModeScreen(
     // button exactly, including its own START/SPLIT toggle (see TimeModeContent's identical
     // `if (uiState.stopwatchStarted) onSplit else onStart` below), so a clicker fires whichever
     // of the two the operator would otherwise have tapped. Same enabled condition as that
-    // button too: a race must exist and not already be stopped.
+    // button too: a race must exist.
     val activity = LocalActivity.current as MainActivity
     val currentOnMainAction by rememberUpdatedState {
         if (uiState.stopwatchStarted) viewModel.recordSplit() else viewModel.startStopwatch()
     }
-    val canExternalTrigger by rememberUpdatedState(uiState.raceId != null && !uiState.stopwatchStopped)
+    val canExternalTrigger by rememberUpdatedState(uiState.raceId != null)
     DisposableEffect(activity) {
         activity.onExternalSplitTrigger = { if (canExternalTrigger) currentOnMainAction() }
         onDispose { activity.onExternalSplitTrigger = null }
@@ -95,7 +95,6 @@ fun TimeModeScreen(
             btPollingStatus = btPollingStatus,
             onStart = viewModel::startStopwatch,
             onSplit = viewModel::recordSplit,
-            onStop = viewModel::stopStopwatch,
             onReset = viewModel::resetStopwatch,
             onUndo = viewModel::undoLast,
             onEditSplit = onEditSplit,
@@ -115,7 +114,6 @@ private fun TimeModeContent(
     btPollingStatus: BtPollingStatus,
     onStart: () -> Unit,
     onSplit: () -> Unit,
-    onStop: () -> Unit,
     onReset: () -> Unit,
     onUndo: () -> Unit,
     onEditSplit: (splitId: Long) -> Unit,
@@ -188,16 +186,12 @@ private fun TimeModeContent(
                             onStart()
                         }
                     },
-                    enabled = uiState.raceId != null && !uiState.stopwatchStopped,
+                    enabled = uiState.raceId != null,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(96.dp),
                 ) {
-                    val label = when {
-                        uiState.stopwatchStopped -> "STOPPED"
-                        uiState.stopwatchStarted -> "SPLIT"
-                        else -> "START"
-                    }
+                    val label = if (uiState.stopwatchStarted) "SPLIT" else "START"
                     Text(label, style = MaterialTheme.typography.displaySmall)
                 }
 
@@ -206,10 +200,8 @@ private fun TimeModeContent(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        StopOrResetButton(
-                            isStopped = uiState.stopwatchStopped,
-                            resetDescription = "Adds a reset marker and starts a fresh count from scratch (under the same race name) — nothing is deleted, every split stays in Race History.",
-                            onStop = onStop,
+                        ResetButton(
+                            resetDescription = "Closes out everything recorded since this segment started (under the same race name) — nothing is deleted, every split stays in Race History. Reset again to walk back through earlier segments the same way.",
                             onReset = onReset,
                             modifier = Modifier.weight(1f),
                         )
@@ -235,10 +227,10 @@ private fun TimeModeContent(
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     items(uiState.splits, key = { it.id }) { split ->
-                        // Start/Stop marker rows are never editable — retyping either one's
+                        // Start/Location marker rows are never editable — retyping either one's
                         // own note would break every query keyed off it (the repository also
                         // refuses this as a backstop, but the UI shouldn't offer it at all).
-                        val isMarkerRow = split.action == HistoryAction.START || split.action == HistoryAction.STOP || split.action == HistoryAction.LOCATION
+                        val isMarkerRow = split.action == HistoryAction.START || split.action == HistoryAction.LOCATION
                         SplitRow(
                             splitNumber = split.splitNumber,
                             elapsedMillis = split.elapsedMillis,

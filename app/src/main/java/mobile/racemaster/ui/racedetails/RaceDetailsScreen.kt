@@ -12,7 +12,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -70,7 +69,6 @@ fun RaceDetailsScreen(
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     val raceNameHistory by viewModel.raceNameHistory.collectAsStateWithLifecycle()
     val locationHistory by viewModel.locationHistory.collectAsStateWithLifecycle()
-    val modeSwitchError by viewModel.modeSwitchError.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
@@ -222,17 +220,6 @@ fun RaceDetailsScreen(
                 modifier = Modifier.fillMaxWidth(),
             ) { Text(if (raceIsActive) "Save (relocate)" else "Save") }
         }
-    }
-
-    modeSwitchError?.let { message ->
-        AlertDialog(
-            onDismissRequest = viewModel::dismissModeSwitchError,
-            title = { Text("Can't switch mode") },
-            text = { Text(message) },
-            confirmButton = {
-                TextButton(onClick = withClickSound(viewModel::dismissModeSwitchError)) { Text("OK") }
-            },
-        )
     }
 
     if (showDiscardConfirm) {

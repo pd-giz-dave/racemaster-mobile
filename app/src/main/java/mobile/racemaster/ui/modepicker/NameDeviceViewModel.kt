@@ -26,8 +26,8 @@ import mobile.racemaster.util.generateDeviceName
  *  never while the active race is active per [isRaceCurrentlyActive] (the centralized
  *  definition — see its own doc), so an active race never ends up with some of its history
  *  tagged under the old name and some under the new one. A race that's merely selected/defined
- *  but never started, or one that's been stopped *and* Reset, doesn't count as active for this
- *  purpose — but one that's merely been Stopped (not Reset) still does. */
+ *  but never started, or one that's been Reset, doesn't count as active for this purpose — only
+ *  a still-unreset started race does. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class NameDeviceViewModel(
     private val settingsRepository: SettingsRepository,

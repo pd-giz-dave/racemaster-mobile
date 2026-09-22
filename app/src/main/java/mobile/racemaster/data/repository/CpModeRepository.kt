@@ -8,17 +8,16 @@ import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.RaceEntity
+import mobile.racemaster.data.settings.AppMode
 import kotlinx.coroutines.flow.Flow
 
 private class CpProgressColumns(private val raceDao: RaceDao) : ModeProgressColumns {
     override fun nextSplitOf(race: RaceEntity) = race.cpModeNextSplit
-    override fun stoppedAtOf(race: RaceEntity) = race.cpModeStoppedAtMillis
     override suspend fun incrementCounter(raceId: Long) = raceDao.incrementCpCounter(raceId)
     override suspend fun decrementCounter(raceId: Long) = raceDao.decrementCpCounter(raceId)
-    override suspend fun setStoppedAt(raceId: Long, stoppedAtMillis: Long) = raceDao.setCpModeStoppedAt(raceId, stoppedAtMillis)
-    override suspend fun clearStoppedAt(raceId: Long) = raceDao.clearCpModeStoppedAt(raceId)
     override suspend fun resetCounters(raceId: Long) = raceDao.resetCpMode(raceId)
     override suspend fun setCounterTo(raceId: Long, value: Int) = raceDao.setCpModeNextSplit(raceId, value)
+    override suspend fun clearStartedAt(raceId: Long) = raceDao.clearCpModeStartedAt(raceId)
 }
 
 /** CP Mode's own thin wrapper around [EntryLogModeEngine] — structurally identical to
@@ -39,8 +38,9 @@ class CpModeRepository(
     private val db: RacemasterDatabase,
     private val raceDao: RaceDao,
     private val historyLineDao: HistoryLineDao,
+    raceRepository: RaceRepository,
 ) {
-    private val engine = EntryLogModeEngine(HistoryMode.CP, db, raceDao, historyLineDao, CpProgressColumns(raceDao))
+    private val engine = EntryLogModeEngine(HistoryMode.CP, AppMode.CP, db, raceDao, historyLineDao, raceRepository, CpProgressColumns(raceDao))
 
     fun observeCurrentSegmentEntries(raceId: Long): Flow<List<HistoryLineEntity>> = engine.observeCurrentSegmentEntries(raceId)
 
@@ -52,6 +52,7 @@ class CpModeRepository(
     // front, by RaceRepository.recordModeStart (Setup Race / Relocate) — this only writes the
     // real Clock marker itself.
     suspend fun startCpMode(raceId: Long, startedAtMillis: Long = System.currentTimeMillis()) {
+        engine.ensureOpenSegment(raceId)
         db.withTransaction {
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
             raceDao.setCpModeStartedAt(raceId, startedAtMillis)
@@ -80,9 +81,7 @@ class CpModeRepository(
 
     suspend fun undoMostRecent(raceId: Long) = engine.undoMostRecent(raceId)
 
-    suspend fun stopCpMode(raceId: Long, stoppedAtMillis: Long = System.currentTimeMillis()) = engine.stop(raceId, stoppedAtMillis)
-
-    suspend fun resetCpMode(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()) = engine.reset(raceId, resetAtMillis)
+    suspend fun resetCpMode(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()): Boolean = engine.reset(raceId, resetAtMillis)
 
     suspend fun resumeCpMode(raceId: Long) = engine.resume(raceId)
 }

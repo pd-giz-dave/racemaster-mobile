@@ -34,6 +34,9 @@ private val DEFAULT_LOCATIONS = listOf("Finish", "Start") + (1..9).map { "CP$it"
 // See SettingsRepository.raceStaleAfterDays's own doc.
 const val DEFAULT_RACE_STALE_AFTER_DAYS = 2
 
+// See SettingsRepository.pingIntervalSeconds's own doc.
+const val DEFAULT_PING_INTERVAL_SECONDS = 60
+
 class SettingsRepository(
     private val dataStore: DataStore<Preferences>,
 ) {
@@ -61,6 +64,7 @@ class SettingsRepository(
         // raceStaleAfterDays's own doc) — renaming it would silently reset every existing
         // install's setting back to the default on upgrade for no benefit.
         val RACE_STALE_AFTER_DAYS = intPreferencesKey("server_sync_max_age_days")
+        val PING_INTERVAL_SECONDS = intPreferencesKey("ping_interval_seconds")
     }
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -294,6 +298,19 @@ class SettingsRepository(
         }
     }
 
+    // RaceRepository.abandonRaceSetup's own doc — walking Reset all the way back to a race's
+    // very first segment reverts this device to "no race set up", which must include wiping the
+    // Setup Race form's own sticky draft, not just activeRaceId: left behind, the very next visit
+    // to Setup Race would silently re-offer the just-abandoned race's own name/location/mode as
+    // if it were still a fresh, unsaved draft, defeating the whole point of the reversion.
+    suspend fun clearSetupRaceDraft() {
+        dataStore.edit { prefs ->
+            prefs.remove(Keys.DRAFT_RACE_NAME)
+            prefs.remove(Keys.DRAFT_RACE_LOCATION)
+            prefs.remove(Keys.DRAFT_RACE_MODE)
+        }
+    }
+
     private fun stringHistoryFlow(key: Preferences.Key<String>, defaults: List<String> = emptyList()): Flow<List<String>> =
         dataStore.data.map { prefs ->
             val stored = decodeList<String>(prefs[key])
@@ -361,5 +378,16 @@ class SettingsRepository(
 
     suspend fun setRaceStaleAfterDays(days: Int) {
         dataStore.edit { prefs -> prefs[Keys.RACE_STALE_AFTER_DAYS] = days }
+    }
+
+    // How often a mode with nothing else happening writes a PING heartbeat row (see that
+    // action's own doc) — 0 means the heartbeat is disabled entirely, nothing is ever written.
+    // Mirrors raceStaleAfterDays' own plumbing exactly, just with a >= 0 floor instead of >= 1
+    // (0 is a real, meaningful value here, not an error).
+    val pingIntervalSeconds: Flow<Int> =
+        dataStore.data.map { prefs -> prefs[Keys.PING_INTERVAL_SECONDS] ?: DEFAULT_PING_INTERVAL_SECONDS }
+
+    suspend fun setPingIntervalSeconds(seconds: Int) {
+        dataStore.edit { prefs -> prefs[Keys.PING_INTERVAL_SECONDS] = seconds }
     }
 }

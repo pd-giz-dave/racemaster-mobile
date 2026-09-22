@@ -105,12 +105,12 @@ class SyncRecordMappingTest {
     @Test
     fun clockMarkersMapToTheirOwnHonestActionsNotHardcodedFinish() {
         // Previously every Time row hardcoded action = "Finish" regardless of whether it was
-        // really a Start/Stop/Reset/Undo marker — the real type only ever reached `note`. Now
+        // really a Start/Reset/Undo marker — the real type only ever reached `note`. Now
         // the wire action is honest for markers too.
         assertEquals("Start", line(HistoryMode.TIME, HistoryAction.START, 0, 0L).toSyncRecord(0L).action)
-        assertEquals("Stop", line(HistoryMode.TIME, HistoryAction.STOP, 1, 0L).toSyncRecord(0L).action)
         assertEquals("Reset", line(HistoryMode.TIME, HistoryAction.RESET, 1, 0L).toSyncRecord(0L).action)
         assertEquals("Undo", line(HistoryMode.TIME, HistoryAction.UNDO, 1, 0L).toSyncRecord(0L).action)
+        assertEquals("Ping", line(HistoryMode.TIME, HistoryAction.PING, 1, 0L).toSyncRecord(0L).action)
     }
 
     @Test
@@ -161,13 +161,13 @@ class SyncRecordMappingTest {
 
     @Test
     fun everyNonBibBibsActionSendsNullBibNumber() {
-        // Not just Clock — every Bibs action outside BIB_REQUIRED_ACTIONS (Stop, Reset, Ignore,
-        // Seniors, Juniors, Male, Female, Undo) has a null bibNumber locally and passes straight
-        // through as null on the wire too now.
-        assertNull(bibEntry(null, HistoryAction.STOP, 1, 0L).toSyncRecord(null).bibNumber)
+        // Not just Clock — every Bibs action outside BIB_REQUIRED_ACTIONS (Reset, Ignore,
+        // Seniors, Juniors, Male, Female, Undo, Ping) has a null bibNumber locally and passes
+        // straight through as null on the wire too now.
         assertNull(bibEntry(null, HistoryAction.RESET, 1, 0L).toSyncRecord(null).bibNumber)
         assertNull(bibEntry(null, HistoryAction.IGNORE, 1, 0L).toSyncRecord(null).bibNumber)
         assertNull(bibEntry(null, HistoryAction.UNDO, 1, 0L).toSyncRecord(null).bibNumber)
+        assertNull(bibEntry(null, HistoryAction.PING, 1, 0L).toSyncRecord(null).bibNumber)
     }
 
     @Test
@@ -177,8 +177,8 @@ class SyncRecordMappingTest {
         assertEquals("Male", bibEntry(null, HistoryAction.MALE, 1, 0L).toSyncRecord(null).action)
         assertEquals("Female", bibEntry(null, HistoryAction.FEMALE, 1, 0L).toSyncRecord(null).action)
         assertEquals("Ignore", bibEntry(null, HistoryAction.IGNORE, 1, 0L).toSyncRecord(null).action)
-        assertEquals("Stop", bibEntry(null, HistoryAction.STOP, 1, 0L).toSyncRecord(null).action)
         assertEquals("Undo", bibEntry(null, HistoryAction.UNDO, 1, 0L).toSyncRecord(null).action)
+        assertEquals("Ping", bibEntry(null, HistoryAction.PING, 1, 0L).toSyncRecord(null).action)
     }
 
     @Test
@@ -232,18 +232,18 @@ class SyncRecordMappingTest {
 
     @Test
     fun cpMarkerActionsSendNullBibNumber() {
-        assertNull(cpEntry(null, HistoryAction.STOP, 1, 0L).toSyncRecord(null).bibNumber)
         assertNull(cpEntry(null, HistoryAction.RESET, 1, 0L).toSyncRecord(null).bibNumber)
         assertNull(cpEntry(null, HistoryAction.UNDO, 1, 0L).toSyncRecord(null).bibNumber)
+        assertNull(cpEntry(null, HistoryAction.PING, 1, 0L).toSyncRecord(null).bibNumber)
     }
 
     @Test
     fun roundTripsEveryCpModeActionThroughTheWireAndBack() {
         assertEquals(HistoryAction.PASS, cpEntry(101, HistoryAction.PASS, 1, 0L).toSyncRecord(null).toHistoryAction())
         assertEquals(HistoryAction.RETIRE, cpEntry(101, HistoryAction.RETIRE, 1, 0L).toSyncRecord(null).toHistoryAction())
-        assertEquals(HistoryAction.STOP, cpEntry(null, HistoryAction.STOP, 1, 0L).toSyncRecord(null).toHistoryAction())
         assertEquals(HistoryAction.RESET, cpEntry(null, HistoryAction.RESET, 1, 0L).toSyncRecord(null).toHistoryAction())
         assertEquals(HistoryAction.UNDO, cpEntry(null, HistoryAction.UNDO, 1, 0L).toSyncRecord(null).toHistoryAction())
+        assertEquals(HistoryAction.PING, cpEntry(null, HistoryAction.PING, 1, 0L).toSyncRecord(null).toHistoryAction())
     }
 
     // SyncRecord.toHistoryAction — the exact inverse of toServerAction, exercised via a full
@@ -254,9 +254,20 @@ class SyncRecordMappingTest {
     fun roundTripsEveryTimeModeActionThroughTheWireAndBack() {
         assertEquals(HistoryAction.SPLIT, split(splitNumber = 1, timestampMillis = 0L).toSyncRecord(0L).toHistoryAction())
         assertEquals(HistoryAction.START, line(HistoryMode.TIME, HistoryAction.START, 0, 0L).toSyncRecord(0L).toHistoryAction())
-        assertEquals(HistoryAction.STOP, line(HistoryMode.TIME, HistoryAction.STOP, 1, 0L).toSyncRecord(0L).toHistoryAction())
         assertEquals(HistoryAction.RESET, line(HistoryMode.TIME, HistoryAction.RESET, 1, 0L).toSyncRecord(0L).toHistoryAction())
         assertEquals(HistoryAction.UNDO, line(HistoryMode.TIME, HistoryAction.UNDO, 1, 0L).toSyncRecord(0L).toHistoryAction())
+        assertEquals(HistoryAction.PING, line(HistoryMode.TIME, HistoryAction.PING, 1, 0L).toSyncRecord(0L).toHistoryAction())
+    }
+
+    @Test
+    fun unrecognizedWireActionStopFallsBackToIgnore() {
+        // STOP was removed from the enum (see HistoryAction's own doc) — a legacy "Stop" wire
+        // string, from an old server file or a not-yet-upgraded peer, must decode gracefully
+        // rather than crash.
+        assertEquals(
+            HistoryAction.IGNORE,
+            SyncRecord(action = "Stop", bibNumber = null, splitTime = null, splitNumber = 1, lineNumber = 1L, note = null, timestampMillis = 0L).toHistoryAction(),
+        )
     }
 
     @Test
@@ -278,6 +289,38 @@ class SyncRecordMappingTest {
         assertNull(record.bibNumber) // no discriminator sentinel any more — see SyncRecord's own doc
         assertEquals("CP2", record.note)
         assertEquals(HistoryAction.LOCATION, record.toHistoryAction())
+    }
+
+    @Test
+    fun timeModeLocationMarkerSendsNullSplitTimeNotARealElapsedValue() {
+        // Confirmed in the field: a Time-mode LOCATION row used to compute a genuine elapsed
+        // value here, looking exactly like a real split — inconsistent with Bibs/CP's own
+        // LOCATION rows, which always send null (mode != TIME gates every action there). See
+        // toSyncRecord's own doc for why LOCATION now joins MODE_START/PING's null treatment.
+        val record = line(HistoryMode.TIME, HistoryAction.LOCATION, splitNumber = 0, timestampMillis = 90_000L, note = "CP2")
+            .toSyncRecord(raceStartedAtMillis = 0L)
+        assertNull(record.splitTime)
+        assertEquals("CP2", record.note)
+    }
+
+    @Test
+    fun timeModeResetMarkerSendsNullSplitTime() {
+        // Confirmed in the field, same bug as LOCATION above — see toSyncRecord's own doc.
+        val record = line(HistoryMode.TIME, HistoryAction.RESET, splitNumber = 0, timestampMillis = 90_000L)
+            .toSyncRecord(raceStartedAtMillis = 0L)
+        assertNull(record.splitTime)
+    }
+
+    @Test
+    fun timeModeNewRaceMarkerSendsNullSplitTime() {
+        // Confirmed in the field, same bug as LOCATION above — see toSyncRecord's own doc. Also
+        // the most actively misleading of the three: NEW_RACE is always written before
+        // timeModeStartedAtMillis is ever set, so computing its own elapsed value against
+        // whatever that field happens to be BY PUSH TIME (long after NEW_RACE's own real
+        // instant) would be pure noise even by this bug's own low bar.
+        val record = line(HistoryMode.TIME, HistoryAction.NEW_RACE, splitNumber = 0, timestampMillis = 90_000L)
+            .toSyncRecord(raceStartedAtMillis = 100_000L)
+        assertNull(record.splitTime)
     }
 
     @Test
@@ -321,9 +364,9 @@ class SyncRecordMappingTest {
         assertEquals(HistoryAction.MALE, bibEntry(null, HistoryAction.MALE, 1, 0L).toSyncRecord(null).toHistoryAction())
         assertEquals(HistoryAction.FEMALE, bibEntry(null, HistoryAction.FEMALE, 1, 0L).toSyncRecord(null).toHistoryAction())
         assertEquals(HistoryAction.CLOCK, bibEntry(null, HistoryAction.CLOCK, 0, 0L).toSyncRecord(null).toHistoryAction())
-        assertEquals(HistoryAction.STOP, bibEntry(null, HistoryAction.STOP, 1, 0L).toSyncRecord(null).toHistoryAction())
         assertEquals(HistoryAction.RESET, bibEntry(null, HistoryAction.RESET, 1, 0L).toSyncRecord(null).toHistoryAction())
         assertEquals(HistoryAction.UNDO, bibEntry(null, HistoryAction.UNDO, 1, 0L).toSyncRecord(null).toHistoryAction())
+        assertEquals(HistoryAction.PING, bibEntry(null, HistoryAction.PING, 1, 0L).toSyncRecord(null).toHistoryAction())
     }
 
     @Test

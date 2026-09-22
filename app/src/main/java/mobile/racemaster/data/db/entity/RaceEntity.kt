@@ -40,20 +40,19 @@ data class RaceEntity(
     // number forever, letting devices sync by delta ("everything after line N").
     val nextLineNumber: Long = 1,
     val timeModeStartedAtMillis: Long? = null,
-    val timeModeStoppedAtMillis: Long? = null,
-    // Bibs' own started/stopped pair, shaped identically to Time's and CP's own — Bibs still
-    // writes a Clock marker row on Start (see BibsModeRepository.startBibsMode/
-    // CLOCK_SPLIT_NUMBER), but that row's mere presence is deliberately not what "started" is
-    // derived from anymore: relying on it made Bibs the one mode whose "started"/"active"
-    // signal couldn't be read directly off this row, for no real reason beyond that marker
-    // happening to exist. This is what lets undoing Bibs' very first real entry leave the
-    // screen still showing the keypad rather than reverting to a pre-Start state — same as
-    // cpModeStartedAtMillis below already does for CP, which never had a marker row to lean on
-    // in the first place.
+    // Bibs' own started field, shaped identically to Time's and CP's own — Bibs still writes a
+    // Clock marker row on Start (see BibsModeRepository.startBibsMode/CLOCK_SPLIT_NUMBER), but
+    // that row's mere presence is deliberately not what "started" is derived from anymore:
+    // relying on it made Bibs the one mode whose "started"/"active" signal couldn't be read
+    // directly off this row, for no real reason beyond that marker happening to exist. This is
+    // what lets undoing Bibs' very first real entry leave the screen still showing the keypad
+    // rather than reverting to a pre-Start state — same as cpModeStartedAtMillis below already
+    // does for CP, which never had a marker row to lean on in the first place. (There used to be
+    // a *StoppedAtMillis sibling per mode too, driving a "paused" screen state — removed: a
+    // stopped/paused state turned out to carry no semantic weight nothing else already
+    // provided, see HistoryAction's own doc for the full reasoning.)
     val bibsModeStartedAtMillis: Long? = null,
-    val bibsModeStoppedAtMillis: Long? = null,
     val cpModeNextSplit: Int = 1,
-    val cpModeStoppedAtMillis: Long? = null,
     // Time/Bibs' own started-at fields' own sibling — CP also writes a Clock marker row on
     // Start (see CpModeRepository.startCpMode), but exactly like Bibs' own row, its mere
     // presence is deliberately not what "started" is derived from (see

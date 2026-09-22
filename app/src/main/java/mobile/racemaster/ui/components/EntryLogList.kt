@@ -54,7 +54,7 @@ fun EntryLogList(
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         items(entries, key = { it.id }) { entry ->
-            val isMarkerRow = entry.type == HistoryAction.STOP || entry.type == HistoryAction.RESET || entry.type == HistoryAction.LOCATION
+            val isMarkerRow = entry.type == HistoryAction.RESET || entry.type == HistoryAction.LOCATION
             BibEntryRow(
                 splitNumber = entry.splitNumber,
                 bibNumber = entry.bibNumber,

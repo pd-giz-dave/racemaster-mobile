@@ -21,6 +21,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 
+// Every Time-mode boundary/heartbeat marker whose own elapsed time would be meaningless or
+// actively misleading if computed the same way a real split's is — see
+// SyncRecordMapping.toSyncRecord's identical exclusion list on the wire for the full reasoning
+// behind each one; this is the same set, just local to this screen's own display.
+private val NON_ELAPSED_TIME_ACTIONS = setOf(
+    HistoryAction.MODE_START, HistoryAction.PING, HistoryAction.LOCATION,
+    HistoryAction.RESET, HistoryAction.NEW_RACE,
+)
+
 data class ArchivedHistoryLineUi(
     val id: Long,
     val mode: HistoryMode,
@@ -107,10 +116,14 @@ class RaceHistoryDetailViewModel(
                 // A Time-mode MODE_START row always reads 0 — it's written in the same instant
                 // as (immediately before) the real Start marker that's about to set
                 // segmentStartedAt, so computing against whatever the PREVIOUS segment's own
-                // start was would show a stale, misleading number instead.
+                // start was would show a stale, misleading number instead. PING/LOCATION/RESET/
+                // NEW_RACE read 0 too — none of them is a genuine timed split (see
+                // HistoryAction.PING's own doc and SyncRecordMapping.toSyncRecord's identical
+                // treatment of all five on the wire) — matching Bibs/CP's own rows for these,
+                // which already show nothing here (any non-Time mode always reads 0 below).
                 elapsedMillis = when {
                     it.mode != HistoryMode.TIME -> 0L
-                    it.action == HistoryAction.MODE_START -> 0L
+                    it.action in NON_ELAPSED_TIME_ACTIONS -> 0L
                     else -> segmentStartedAt?.let { s -> it.timestampMillis - s } ?: 0L
                 },
                 note = it.note,

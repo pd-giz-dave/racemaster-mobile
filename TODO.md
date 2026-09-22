@@ -65,15 +65,14 @@ one.
 
 ## What does reset mean?
 
-It means invalidate the current segment (location+mode).
-Do it again to walk up the history segment by segment.
-So add a refLineNumber for reset pointing at the Location record for the segment(s) being reset.
-When the first segment is reset - the phone reverts to no race setup (clears the persisted
-race setup fields) and it stops advertising itself and stops updating the web.
+- [x] It means invalidate the current segment (location+mode).
+      Do it again to walk up the history segment by segment.
+      So add a refLineNumber for reset pointing at the Location record for the segment(s) being reset.
+      When the first segment is reset - the phone reverts to no race setup (clears the persisted
+      race setup fields) and it stops advertising itself and stops updating the web.
+      This means an Undo across segment boundaries is not necessary, just reset the segment.
 
 ## Tweaks from observations of using the app
-
-### mobile app
 
 - [ ] races history is showing multiple (self) lists for the same race
 - [ ] races history is showing multiple progress lists for the same race
@@ -85,12 +84,43 @@ race setup fields) and it stops advertising itself and stops updating the web.
 - [ ] if a self history file is deleted, delete it on the web too and tell any connected mules
       to dump it as well (ie. ensure it gets flushed from everywhere, mule should also tell the
       web-app its gone and remove it from the server, else it keeps coming back
-- [ ] on setup race screen, add a "No race" button alongside "Save" that when selected resets
-- [ ] when attempt to relocate an active race instead of rejecting it offer the option of stopping
-      and then doing the relocate (auto add the stop record as if the user pressed STOP in the
-      mode screen)
-- [ ] need to allow for relocating back to some previous location, which case it must pick up
+- [x] drop the STOP notion altogether, its redundant, replace the dual mode STOP/RESET button
+      in the mode screens with just a RESET (to mean as above, the confirm dialog to explain this)
+- [x] need to allow for relocating back to some previous location, which case it must pick up
       where it left off, typical scenario - finish time mode records a split for the race start
       then relocates to CPn, then back to the finish before the first finisher arrives and starts
       recording finish splits, when returning to a previous location the mode screen should look
       like it was when they left
+- [x] add a heartbeat mechanism so the web app user can tell the phone is alive and well, either
+      via the server (file timestamp) or via BT - do it via a PING record in the history every
+      N seconds (N is another setup option - default 60) when there is no other activity, 
+      shows in history files but is ignored, but does not show in the mode screen lists
+- [x] undo last in time mode includes the initial start, in bibs/cp mode it does not, make them
+      consistent - make bibs/cp like time
+
+## More bugs
+
+- [x] options screen needs a vertical scroll so all options fit on small screens
+- [x] heartbeat should start as soon as a race is setup irrespective of the selected mode starting
+- [x] cannot relocate from time mode to cp mode - the legacy 'reset' guard is still in place
+- [x] time mode ping is showing a split time
+- [ ] bibs mode not being syn'c to server until a ping comes along (the phone showing this is
+      also a mule and also logged in to the server) - couldn't find a mechanism in the push
+      code that ties bibs sync to ping specifically; the leading theory is this described the
+      old pre-heartbeat gap (a quiet bibs station had nothing to push until something wrote a
+      new line), which the heartbeat itself + the "start as soon as setup" fix above should
+      already close - please re-test and reopen with more detail if it's still happening
+- [x] when a reset walk goes right back to the beginning it should keep sync'ing until any
+      pending lines (including the final reset) are sync'd (so the rest of the world knows its
+      gone)
+- [x] suppress location lines in the mode screen lists, it adds no information (its already echoed
+      in the summary block) and just confuses the phone operator
+- [x] time mode's location/reset/new race records are still getting a split time, they should be
+      null like bibs/cp's own records for these (fixed on the wire and in Race History's own
+      local display; the web-app's Time/Bibs classification, which used to lean on splitTime
+      nullness to tell these shared-action rows apart, now resolves each via its own structural
+      neighbour instead)
+- [ ] progress records are not getting propagated from the server/web-app BT to the phones
+- [ ] history line formats on the phones are not consistent with modern system, specifically
+      null times are being shown as 00:00:00 and null bibs are being shown as n/a
+

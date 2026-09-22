@@ -11,10 +11,8 @@ import mobile.racemaster.data.repository.isRaceActive
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
@@ -54,10 +52,6 @@ class RaceDetailsViewModel(
     val locationHistory: StateFlow<List<String>> = settingsRepository.locationHistory
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private val modeSwitchErrorFlow = MutableStateFlow<String?>(null)
-    val modeSwitchError: StateFlow<String?> = modeSwitchErrorFlow.asStateFlow()
-    fun dismissModeSwitchError() { modeSwitchErrorFlow.value = null }
-
     // One save path now covers both the pre-race case (nothing recorded yet — name, location and
     // mode are all still a plain field overwrite) and the mid-race "Relocate" case (name is
     // locked, see RaceDetailsScreen's own nameFieldEnabled, but location and/or mode can still
@@ -67,27 +61,21 @@ class RaceDetailsViewModel(
     // HistoryAction.LOCATION's own doc) — a bare field update would silently lose all of that.
     // A no-op on that part if neither actually changed, so re-pressing Save on an unmodified form
     // never writes a spurious, undo-able "relocated to the same place" event. Switching into a
-    // different mode than the one being left is blocked (see
-    // [RaceRepository.blockedModeSwitchReason]) only while the mode being left is still actually
-    // recording (started, not yet stopped) — merely Stopped is enough to permit the switch,
-    // same relaxed rule a pure location-only Relocate already gets for free — surfaced via
-    // [modeSwitchError].
-    // Returns true once the save actually applied (or there was nothing to apply), false if it
-    // was blocked (see [modeSwitchError]) — the screen must only navigate away on true, otherwise
-    // the blocked-switch dialog gets replaced by navigation before the operator ever sees it.
+    // different mode than the one being left is always allowed now, with no "Reset the other mode
+    // first" guard — that guard used to require at least a Stop (see git history), which no longer
+    // exists, and requiring a full Reset instead would actively fight recordModeStart's own
+    // resume-on-relocate-back behavior (see its own doc): a mode left mid-recording is always
+    // safely resumable later via Relocate, exactly the same freedom a pure location-only relocate
+    // already had.
+    // Returns true once the save actually applied (or there was nothing to apply) — kept as a
+    // Boolean (rather than Unit) so a future blocking condition can still say so without changing
+    // every call site's shape again.
     suspend fun save(name: String, location: String, mode: AppMode): Boolean {
         val race = existingRace.value ?: return true
         val trimmedName = name.trim()
         val trimmedLocation = location.trim()
         val currentMode = race.mode?.let { raw -> runCatching { AppMode.valueOf(raw) }.getOrNull() }
         val locationOrModeChanged = trimmedLocation != race.location || mode != currentMode
-        if (locationOrModeChanged) {
-            val blockedReason = raceRepository.blockedModeSwitchReason(existingRaceId, mode)
-            if (blockedReason != null) {
-                modeSwitchErrorFlow.value = blockedReason
-                return false
-            }
-        }
         if (!raceIsActive.value && trimmedName != race.name) {
             settingsRepository.addRaceNameToHistory(trimmedName)
             raceRepository.updateRaceDetails(existingRaceId, trimmedName, race.location)

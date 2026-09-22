@@ -34,7 +34,7 @@ import mobile.racemaster.ui.components.DigitKeypad
 import mobile.racemaster.ui.components.EntryLogList
 import mobile.racemaster.ui.components.EntryModeHeaderInfo
 import mobile.racemaster.ui.components.ModeScreenTopBar
-import mobile.racemaster.ui.components.StopOrResetButton
+import mobile.racemaster.ui.components.ResetButton
 import mobile.racemaster.ui.components.UndoLastButton
 import mobile.racemaster.ui.components.rememberListClickGuard
 import mobile.racemaster.util.formatCpSoFarText
@@ -92,7 +92,6 @@ fun CpModeScreen(
             onBackspace = viewModel::onBackspace,
             onClear = viewModel::onClear,
             onRetire = viewModel::toggleLastRetag,
-            onStop = viewModel::stopCpMode,
             onReset = viewModel::resetCpMode,
             onUndo = viewModel::undoLast,
             onEditEntry = onEditEntry,
@@ -115,7 +114,6 @@ private fun CpModeContent(
     onBackspace: () -> Unit,
     onClear: () -> Unit,
     onRetire: () -> Unit,
-    onStop: () -> Unit,
     onReset: () -> Unit,
     onUndo: () -> Unit,
     onEditEntry: (entryId: Long) -> Unit,
@@ -186,10 +184,7 @@ private fun CpModeContent(
                         onDigit = { digit -> listClickGuard.trigger(); onDigit(digit) },
                         onBackspace = onBackspace,
                         onClear = onClear,
-                        // Stopped disables entry entirely — see BibsModeScreen's own doc for why
-                        // the keypad itself, not a separate Submit button, is what must gate this
-                        // now that a 3rd digit auto-saves.
-                        enabled = uiState.raceId != null && !uiState.stopped,
+                        enabled = uiState.raceId != null,
                         buttonHeight = 52.dp,
                         spacing = 4.dp,
                     )
@@ -203,14 +198,12 @@ private fun CpModeContent(
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(
                             onClick = withClickSound { listClickGuard.trigger(); onRetire() },
-                            enabled = uiState.canRetag && !uiState.stopped,
+                            enabled = uiState.canRetag,
                             contentPadding = BUTTON_ROW_CONTENT_PADDING,
                             modifier = Modifier.weight(1f).height(BUTTON_HEIGHT_DP.dp),
                         ) { Text(uiState.retagButtonLabel) }
-                        StopOrResetButton(
-                            isStopped = uiState.stopped,
-                            resetDescription = "Adds a reset marker and starts a fresh count from scratch — nothing is deleted, every checkpoint entry stays in Race History.",
-                            onStop = onStop,
+                        ResetButton(
+                            resetDescription = "Closes out everything recorded since this segment started — nothing is deleted, every checkpoint entry stays in Race History. Reset again to walk back through earlier segments the same way.",
                             onReset = onReset,
                             enabled = uiState.raceId != null,
                             contentPadding = BUTTON_ROW_CONTENT_PADDING,

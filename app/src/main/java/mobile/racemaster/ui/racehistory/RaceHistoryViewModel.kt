@@ -52,13 +52,13 @@ sealed interface HistoryItemUi {
         val serverSyncSkippedAsStale: Boolean,
         // Whether this race is the device's own current SettingsRepository.activeRaceId — a
         // race can be [isActive] (still has an un-Reset started mode) without being this any
-        // more, e.g. after Setup Race created a fresh one while an older race sat merely
-        // Stopped-not-Reset (see RaceRepository.switchActiveRace's own doc). That's exactly the
-        // "accidentally stopped, still runners on course" case the "Resume" action (see
-        // resumeRace below) exists to recover — offered only for a race that's [isActive] but
-        // NOT this one, since resuming the already-current race is just what pressing Start
-        // does. Defaults false so existing test call sites that construct this directly don't
-        // need updating.
+        // more, e.g. after Setup Race created a fresh one while an older, still-un-Reset race sat
+        // un-touched (see RaceRepository.switchActiveRace's own doc). That's exactly the "moved
+        // on without resetting the old one, still runners on course there" case the "Resume"
+        // action (see resumeRace below) exists to recover — offered only for a race that's
+        // [isActive] but NOT this one, since resuming the already-current race is just what
+        // pressing Start does. Defaults false so existing test call sites that construct this
+        // directly don't need updating.
         val isCurrentActiveRace: Boolean = false,
     ) : HistoryItemUi
     // A race pulled via Mule from a genuinely different physical device — this device's own

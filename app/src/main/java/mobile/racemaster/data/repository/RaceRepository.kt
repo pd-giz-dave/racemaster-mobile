@@ -24,6 +24,123 @@ class RaceRepository(
     private val lineSyncDao: LineSyncDao,
     private val settingsRepository: SettingsRepository,
 ) {
+    // Fetches every row this race has ever written for [mode] and reduces it to the building
+    // blocks every segment-aware operation below needs — see HistoryFold's own doc for what each
+    // piece means. Computed fresh every call (no caching): this only ever runs inside a Start/
+    // Relocate/Reset transaction, never on a hot path like recordEntry/recordSplit.
+    private suspend fun visitsSnapshot(raceId: Long, mode: HistoryMode): VisitsSnapshot {
+        val raw = historyLineDao.getAllForRaceAndMode(raceId, mode)
+        val resetTargetLineNumbers = resetTargets(raw, { it.refLineNumber }, { it.action == HistoryAction.RESET })
+        val displayFiltered = raw.filterNot {
+            it.action == HistoryAction.MODE_START || it.action == HistoryAction.NEW_RACE ||
+                it.action == HistoryAction.RESET || it.action == HistoryAction.PING
+        }
+        val folded = foldLatestVisible(displayFiltered, { it.lineNumber }, { it.refLineNumber }, { it.action == HistoryAction.UNDO })
+            .sortedBy { it.lineNumber }
+        val allVisits = visits(folded, { it.lineNumber }, { it.note }, { it.action == HistoryAction.LOCATION })
+        return VisitsSnapshot(raw, allVisits, resetTargetLineNumbers)
+    }
+
+    private class VisitsSnapshot(
+        val raw: List<HistoryLineEntity>,
+        val allVisits: List<LocationVisit<HistoryLineEntity>>,
+        val resetTargetLineNumbers: Set<Long>,
+    ) {
+        val openVisits: List<LocationVisit<HistoryLineEntity>> get() = currentSegmentVisits(allVisits, resetTargetLineNumbers)
+    }
+
+    // Called from each mode's own Reset action (TimeModeRepository.resetStopwatch/
+    // EntryLogModeEngine.reset) — see HistoryAction's own "What does reset mean?" doc. Closes
+    // every visit making up the *current* segment at once (there can be more than one once a
+    // relocate-back has merged non-contiguous visits sharing the same location text back into
+    // one live view — see recordModeStart's own resume doc below): each gets its own RESET row,
+    // reusing the same single-target refLineNumber contract every other RESET row already uses,
+    // rather than inventing a multi-target reference. False (a no-op — nothing written) if this
+    // mode currently has no open segment at all (the Reset button should already be disabled in
+    // that case; this is the defensive backstop). True return means this closed the race's own
+    // very first-ever segment for ANY mode — the walk-back has reached the beginning, so the
+    // device reverts to "no race set up" (see abandonRaceSetup) and the caller should announce
+    // this to the server right away (see each Reset call site's own muleRepository.announceRaceSetup()).
+    suspend fun closeCurrentSegment(raceId: Long, mode: HistoryMode, closedAtMillis: Long = System.currentTimeMillis()): Boolean =
+        db.withTransaction {
+            val snapshot = visitsSnapshot(raceId, mode)
+            val open = snapshot.openVisits
+            if (open.isEmpty()) return@withTransaction false
+            for (visit in open) {
+                val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+                historyLineDao.insert(
+                    HistoryLineEntity(
+                        raceId = raceId,
+                        mode = mode,
+                        action = HistoryAction.RESET,
+                        splitNumber = null,
+                        lineNumber = race.nextLineNumber,
+                        timestampMillis = closedAtMillis,
+                        refLineNumber = visit.locationLineNumber,
+                    ),
+                )
+                raceDao.incrementLineNumber(raceId)
+            }
+            when (mode) {
+                HistoryMode.TIME -> raceDao.resetTimeMode(raceId)
+                HistoryMode.BIBS -> raceDao.resetBibsMode(raceId)
+                HistoryMode.CP -> raceDao.resetCpMode(raceId)
+            }
+            // The earliest of the visits just closed is the race's very first segment (for ANY
+            // mode) exactly when the row right before its own LOCATION marker is NEW_RACE — see
+            // HistoryAction.NEW_RACE's own doc; only the mode the race was originally set up in
+            // can ever satisfy this, every other mode's own segments trace back to a Relocate,
+            // never NEW_RACE.
+            val earliestLocationLine = open.minOf { it.locationLineNumber }
+            val precedingRow = snapshot.raw.firstOrNull { it.lineNumber == earliestLocationLine - 1 }
+            if (precedingRow?.action == HistoryAction.NEW_RACE) {
+                abandonRaceSetup(raceId)
+                return@withTransaction true
+            }
+            false
+        }
+
+    // Self-healing counterpart to closeCurrentSegment above — called by each mode's own Start
+    // action (TimeModeRepository.startStopwatch/EntryLogModeEngine's Bibs/CP start functions)
+    // before writing its own Start/Clock row. Necessary because the unified, LOCATION-anchored
+    // segment model (see HistoryFold's own doc) has no SQL-level fallback boundary any more: a
+    // row written with no currently-open LOCATION visit to belong to would silently attribute
+    // itself to whatever visit was last seen historically — which, right after a Reset, is
+    // exactly the now-closed one, making the new row invisible forever. Normally a no-op (Setup
+    // Race/Relocate already wrote a fresh, still-open LOCATION+MODE_START pair before Start is
+    // ever reachable); only actually fires when the operator presses Start again immediately
+    // after fully Resetting the current segment without first Relocating elsewhere — in which
+    // case this simply re-asserts the race's current location, which recordModeStart's own
+    // resume-or-fresh logic below correctly treats as "nothing resumable" (the just-closed visit
+    // is excluded) and so writes a genuinely fresh LOCATION+MODE_START pair, starting a brand new
+    // segment at the same station with the counter back at 1.
+    suspend fun ensureOpenSegment(raceId: Long, mode: AppMode) {
+        val race = raceDao.getById(raceId) ?: return
+        val historyMode = mode.toHistoryMode()
+        if (visitsSnapshot(raceId, historyMode).openVisits.isNotEmpty()) return
+        recordModeStart(raceId, mode, race.location)
+    }
+
+    // Called (only) from closeCurrentSegment once a Reset walks all the way back to the race's
+    // own very first segment — HistoryAction's own "What does reset mean?" doc: "the phone
+    // reverts to no race setup". Does three of the four things that doc names as one unit —
+    // clearing this device's own "currently selected race" pointer and its Setup Race sticky
+    // draft, so Setup Race next opens genuinely blank rather than re-offering the just-abandoned
+    // race's own name/location/mode — and leaves the fourth (stop advertising) to
+    // PeripheralSyncService's own advertising loop, which already re-reads activeRaceId on its
+    // own short cadence and needs no push from here. The race row and every line it ever wrote
+    // stay fully intact in Race History — nothing is ever deleted in this app; this is purely a
+    // "this device is no longer actively pointed at this race" transition. Stopping the push to
+    // the server is likewise not this function's job: MuleRepository.pushToServer's own
+    // raceStaleAfterDays gate naturally lets a race with no further activity fade out of future
+    // pushes on its own — each Reset call site is instead responsible for firing one best-effort
+    // immediate push right after (mirroring Setup Race's own "push right away" pattern) so this
+    // reversion reaches the server promptly; see TimeModeViewModel/BibsModeViewModel/
+    // CpModeViewModel's own resetXStopwatch/resetXMode wiring.
+    private suspend fun abandonRaceSetup(raceId: Long) {
+        settingsRepository.clearActiveRaceId()
+        settingsRepository.clearSetupRaceDraft()
+    }
     // The only place a race gets created now (Setup Race's own save — see SetupRaceViewModel.save;
     // scanning the server only ever fills in `name` there, it never adopts a race directly). The
     // label is the name verbatim (see buildRaceLabel — no date or course is ever appended: a name
@@ -66,12 +183,35 @@ class RaceRepository(
     // race's just-created defaults (mode = null, location = "Finish"), so undoing a race's very
     // first LOCATION+MODE_START pair correctly leaves it back in "no mode chosen yet" state.
     // priorSplitCounter is [mode]'s own counter as it stood immediately before this call resets
-    // it to 1 — scoped to the NEW mode (not whichever was active before), since this LOCATION row
-    // itself is mode-scoped to [mode] and only ever visible/undoable from that mode's own screen.
+    // it to 1 (or resumes it — see below) — scoped to the NEW mode (not whichever was active
+    // before), since this LOCATION row itself is mode-scoped to [mode] and only ever
+    // visible/undoable from that mode's own screen.
+    //
+    // Relocating to a location this mode has already visited, and that visit hasn't since been
+    // individually Reset, resumes it instead of starting fresh (TODO.md: "relocating back to some
+    // previous location... must pick up where it left off... the mode screen should look like it
+    // was when they left") — see HistoryFold's own doc for the location-grouped "visits" this is
+    // built on. The counter resumes at one past the highest split/bib number actually used across
+    // every one of that location's own still-open visits (falling back to 1 automatically when
+    // there were none — the Clock/Start marker's own fixed split-0 counts toward that max but
+    // never pushes it past 0 on its own); a genuinely new location, or one whose only prior
+    // visit(s) were Reset away, always starts at 1, exactly as before this existed. Either way a
+    // fresh LOCATION row is still written — "which visits are current" is entirely reconstructed
+    // at read time from matching `note` text (see HistoryFold.currentSegmentVisits), never by
+    // reusing an old LOCATION row — so an *interleaved* different location relocated through in
+    // between (e.g. Finish -> CP1 -> Finish) is unaffected: its own visit(s) sit untouched, with
+    // their own counter progressing independently of whatever Finish resumes to here.
     suspend fun recordModeStart(raceId: Long, mode: AppMode, location: String, timestampMillis: Long = System.currentTimeMillis()) {
         db.withTransaction {
             val historyMode = mode.toHistoryMode()
             var race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            val resumeCounter = if (race.mode == null) {
+                null
+            } else {
+                val snapshot = visitsSnapshot(raceId, historyMode)
+                val resumable = snapshot.allVisits.filter { it.note == location && it.locationLineNumber !in snapshot.resetTargetLineNumbers }
+                if (resumable.isEmpty()) null else (resumable.flatMap { it.rows }.mapNotNull { it.splitNumber }.maxOrNull() ?: 0) + 1
+            }
             // A brand-new race's own genuine first-ever call (Setup Race, never a later Relocate
             // — see HistoryAction.NEW_RACE's own doc) gets one extra marker line ahead of the
             // LOCATION/MODE_START pair below: the signal every sync recipient (server, a Mule's
@@ -130,10 +270,11 @@ class RaceRepository(
                 ),
             )
             raceDao.incrementLineNumber(raceId)
+            val nextSplit = resumeCounter ?: 1
             when (historyMode) {
-                HistoryMode.TIME -> raceDao.setTimeModeNextSplit(raceId, 1)
-                HistoryMode.BIBS -> raceDao.setBibsModeNextSplit(raceId, 1)
-                HistoryMode.CP -> raceDao.setCpModeNextSplit(raceId, 1)
+                HistoryMode.TIME -> raceDao.setTimeModeNextSplit(raceId, nextSplit)
+                HistoryMode.BIBS -> raceDao.setBibsModeNextSplit(raceId, nextSplit)
+                HistoryMode.CP -> raceDao.setCpModeNextSplit(raceId, nextSplit)
             }
             raceDao.updateModeAndLocation(raceId, mode.name, location)
         }
@@ -265,72 +406,25 @@ class RaceRepository(
     // to a different race, leaving the old one's timeModeStartedAtMillis with no in-context way
     // to reach it.
     //
-    // Must do exactly what an in-context Reset does for each mode that's actually active — a
-    // RESET marker row in that mode's own history (consuming a permanent line number), then the
-    // same DAO reset query clearing its display counter/started/stopped columns — not just the
-    // bare column clear this used to do. Force-resetting a race is otherwise indistinguishable,
-    // from Race History's later read of it, from that race simply never having been reset at
-    // all: no boundary marker ever separated "the unfinished segment" this was meant to clear
-    // from whatever came after, which is exactly the "was this genuinely redone, or is this
-    // stale leftover data" ambiguity a real Reset's own marker exists to resolve (see
-    // EntryLogModeEngine.reset's own doc). Scoped to only the modes actually started (unlike
-    // before, which reset all three unconditionally as a harmless no-op) specifically so this
-    // doesn't insert a spurious Reset line into a mode's history that was never even used for
-    // this race. Deliberately does not delete the race itself, matching deleteRace's own
-    // two-step design: this only clears whatever's blocking isRaceActive, leaving the operator
-    // to explicitly delete afterward via the normal confirmation dialog.
+    // Must do exactly what an in-context Reset does for each mode that's actually active — see
+    // closeCurrentSegment's own doc, reused directly here rather than hand-duplicated. Scoped to
+    // only the modes actually started (unlike before, which reset all three unconditionally as a
+    // harmless no-op) specifically so this doesn't insert a spurious Reset line into a mode's
+    // history that was never even used for this race. Deliberately does not delete the race
+    // itself, matching deleteRace's own two-step design: this only clears whatever's blocking
+    // isRaceActive, leaving the operator to explicitly delete afterward via the normal
+    // confirmation dialog. If any mode's closeCurrentSegment call reaches the race's own very
+    // first segment, abandonRaceSetup has already fired as a side effect of that call.
     suspend fun forceResetActiveModes(raceId: Long) {
         val race = raceDao.getById(raceId) ?: return
-        if (race.timeModeStartedAtMillis != null) insertResetMarkerAndReset(raceId, HistoryMode.TIME)
-        if (race.bibsModeStartedAtMillis != null) insertResetMarkerAndReset(raceId, HistoryMode.BIBS)
-        if (race.cpModeStartedAtMillis != null) insertResetMarkerAndReset(raceId, HistoryMode.CP)
-    }
-
-    private suspend fun insertResetMarkerAndReset(raceId: Long, mode: HistoryMode, resetAtMillis: Long = System.currentTimeMillis()) {
-        val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
-        historyLineDao.insert(
-            HistoryLineEntity(
-                raceId = raceId,
-                mode = mode,
-                action = HistoryAction.RESET,
-                bibNumber = null,
-                splitNumber = null,
-                lineNumber = race.nextLineNumber,
-                note = null,
-                timestampMillis = resetAtMillis,
-            ),
-        )
-        raceDao.incrementLineNumber(raceId)
-        when (mode) {
-            HistoryMode.TIME -> raceDao.resetTimeMode(raceId)
-            HistoryMode.BIBS -> raceDao.resetBibsMode(raceId)
-            HistoryMode.CP -> raceDao.resetCpMode(raceId)
-        }
+        if (race.timeModeStartedAtMillis != null) closeCurrentSegment(raceId, HistoryMode.TIME)
+        if (race.bibsModeStartedAtMillis != null) closeCurrentSegment(raceId, HistoryMode.BIBS)
+        if (race.cpModeStartedAtMillis != null) closeCurrentSegment(raceId, HistoryMode.CP)
     }
 
     // Resolves a race label back to this device's own local race — see
     // MuleRepository.pushToServer's own self-push path.
     suspend fun getRaceByLabel(label: String): RaceEntity? = raceDao.getByLabel(label)
-
-    // Time/Bibs/CP are mutually exclusive for a given race's current segment — only one of the
-    // three may be actively recording at once, since two would otherwise write independently into
-    // what's meant to be one station's log. Requires the *other* mode to be Stopped first — merely
-    // Stopped is enough, a full Reset is NOT required (see [isModeInProgress]: it clears the moment
-    // the other mode is Stopped, unlike [isModeStarted], which stays true until Reset) — the same
-    // relaxed rule a pure location-only Relocate already gets for free, since that never checks this
-    // at all. Every other switch (re-selecting the same mode, or switching while the other mode was
-    // never started) is always allowed. Checks every other mode generically (via [isModeInProgress])
-    // rather than a fixed pair of if-checks, so a 4th recording mode would only ever need adding to
-    // AppMode.entries for this to already cover it. Returns null when the switch is fine, or a
-    // message to show the operator when it isn't. Called from RaceDetailsViewModel.save, the one
-    // place a mode switch for an already-active race actually happens (via Relocate).
-    suspend fun blockedModeSwitchReason(raceId: Long, targetMode: AppMode): String? {
-        val race = raceDao.getById(raceId) ?: return null
-        val conflicting = AppMode.entries.firstOrNull { it != targetMode && isModeInProgress(it, race) }
-            ?: return null
-        return "${conflicting.displayName()} still has an active race — Stop it before " +
-            "switching to ${targetMode.displayName()}."
-    }
 
     // Cross-mode facade: the only two places that need to see a race's Time AND Bibs rows
     // together, rather than through TimeModeRepository/BibsModeRepository's per-mode views.
@@ -356,6 +450,33 @@ class RaceRepository(
     // gets, just sourced from this device's own real data instead of a relay's own
     // bookkeeping), and by Race History to show a local race as "too old for server sync".
     fun observeLastActivityAtMillis(raceId: Long): Flow<Long?> = historyLineDao.observeLastActivityAtMillis(raceId)
+
+    // Mode-scoped one-shot version of the above — see MuleSyncEngine's own Ping-heartbeat loop,
+    // the only caller: it needs to know how long ONE mode specifically has gone quiet, not the
+    // race as a whole (a busy Bibs station shouldn't suppress Time's own heartbeat, or vice
+    // versa).
+    suspend fun lastActivityAtMillis(raceId: Long, mode: HistoryMode): Long? = historyLineDao.getLastActivityAtMillis(raceId, mode)
+
+    // Writes one Ping heartbeat row — see HistoryAction.PING's own doc. Consumes a permanent
+    // line number like every other row but touches no counter/started-at column and is excluded
+    // from every mode-screen list (see HistoryFold.currentSegmentRows' own displayExcluded
+    // filter).
+    suspend fun recordPing(raceId: Long, mode: HistoryMode, timestampMillis: Long = System.currentTimeMillis()) {
+        db.withTransaction {
+            val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            historyLineDao.insert(
+                HistoryLineEntity(
+                    raceId = raceId,
+                    mode = mode,
+                    action = HistoryAction.PING,
+                    splitNumber = null,
+                    lineNumber = race.nextLineNumber,
+                    timestampMillis = timestampMillis,
+                ),
+            )
+            raceDao.incrementLineNumber(raceId)
+        }
+    }
 
     // Device-wide counterparts to TimeModeRepository/BibsModeRepository's own per-race
     // observeUnsyncedCount/observeLastSyncedAtMillis — every row this device has ever recorded,

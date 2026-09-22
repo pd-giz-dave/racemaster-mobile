@@ -168,6 +168,51 @@ class RaceRepositoryTest {
         assertEquals(HistoryAction.NEW_RACE, rows[0].action)
     }
 
+    // recordModeStart's own resume-on-relocate behavior (TODO.md: "relocating back to some
+    // previous location... must pick up where it left off") — see HistoryFold's own doc for the
+    // location-visit mechanics this relies on.
+
+    @Test
+    fun relocatingToAGenuinelyNewLocationResetsTheCounterToOne() = runTest {
+        repository.recordModeStart(raceId, AppMode.TIME, "Finish")
+        db.raceDao().setTimeModeNextSplit(raceId, 5) // simulate a few splits already recorded
+
+        repository.recordModeStart(raceId, AppMode.TIME, "CP1")
+
+        assertEquals(1, db.raceDao().getById(raceId)?.timeModeNextSplit)
+    }
+
+    @Test
+    fun relocatingBackToAnAlreadyVisitedNotYetResetLocationResumesTheCounter() = runTest {
+        repository.recordModeStart(raceId, AppMode.TIME, "Finish")
+        db.historyLineDao().insert(
+            HistoryLineEntity(
+                raceId = raceId, mode = HistoryMode.TIME, action = HistoryAction.SPLIT,
+                splitNumber = 1, lineNumber = db.raceDao().getById(raceId)!!.nextLineNumber, timestampMillis = 0L,
+            ),
+        )
+        db.raceDao().incrementLineNumber(raceId)
+        db.raceDao().setTimeModeNextSplit(raceId, 2)
+        repository.recordModeStart(raceId, AppMode.TIME, "CP1") // relocate away, no Reset
+
+        repository.recordModeStart(raceId, AppMode.TIME, "Finish") // relocate back
+
+        // Resumes at 2 (one past Finish's own highest recorded split, 1) rather than resetting.
+        assertEquals(2, db.raceDao().getById(raceId)?.timeModeNextSplit)
+    }
+
+    @Test
+    fun relocatingBackToALocationWhoseOnlyPriorVisitWasResetStartsFreshInstead() = runTest {
+        repository.recordModeStart(raceId, AppMode.TIME, "Finish")
+        db.raceDao().setTimeModeNextSplit(raceId, 4)
+        repository.closeCurrentSegment(raceId, HistoryMode.TIME)
+
+        repository.recordModeStart(raceId, AppMode.TIME, "Finish")
+
+        // The old Finish visit was Reset away, so this is treated as genuinely fresh.
+        assertEquals(1, db.raceDao().getById(raceId)?.timeModeNextSplit)
+    }
+
     // switchActiveRace — the "auto delete the empty placeholder" cleanup every setActiveRaceId
     // call site routes through instead of calling settingsRepository.setActiveRaceId directly.
     // Judged by whether the race being switched away from has ever recorded a single history
@@ -355,23 +400,10 @@ class RaceRepositoryTest {
     }
 
     @Test
-    fun deleteRaceRefusesARaceThatsStoppedButNotYetReset() = runTest {
-        // Stopping alone must not clear active status — only Reset does (see isRaceActive's
-        // own doc). This race's history is still live and un-finalized until it's Reset.
-        db.raceDao().setTimeModeStartedAt(raceId, 1_000L)
-        db.raceDao().setTimeModeStoppedAt(raceId, 2_000L)
-
-        repository.deleteRace(raceId)
-
-        assertEquals(raceId, repository.getRace(raceId)?.id)
-    }
-
-    @Test
-    fun deleteRaceIsAllowedOnceAStartedRaceHasBeenStoppedAndReset() = runTest {
+    fun deleteRaceIsAllowedOnceAStartedRaceHasBeenReset() = runTest {
         // Reset clears timeModeStartedAtMillis back to null, same as a race that was never
         // started — must not stay permanently protected just because it once ran.
         db.raceDao().setTimeModeStartedAt(raceId, 1_000L)
-        db.raceDao().setTimeModeStoppedAt(raceId, 2_000L)
         db.raceDao().resetTimeMode(raceId)
 
         repository.deleteRace(raceId)
@@ -407,11 +439,31 @@ class RaceRepositoryTest {
 
     // forceResetActiveModes — un-sticks a race whose active mode is no longer reachable via
     // that mode's own in-context Reset button (e.g. activeRaceId has since moved to a different
-    // race), so it can then go through the normal deleteRace flow above.
+    // race), so it can then go through the normal deleteRace flow above. closeCurrentSegment (the
+    // shared mechanism behind both this and an in-context Reset) needs at least one row to close
+    // — a real race reaching this state always has one (Start can't be pressed without a mode
+    // being set up first), so these fixtures insert one too rather than relying on the
+    // started-at column alone.
+
+    private suspend fun markStartedWithHistory(mode: HistoryMode, startedAtMillis: Long) {
+        when (mode) {
+            HistoryMode.TIME -> db.raceDao().setTimeModeStartedAt(raceId, startedAtMillis)
+            HistoryMode.BIBS -> db.raceDao().setBibsModeStartedAt(raceId, startedAtMillis)
+            HistoryMode.CP -> db.raceDao().setCpModeStartedAt(raceId, startedAtMillis)
+        }
+        val race = db.raceDao().getById(raceId)!!
+        db.historyLineDao().insert(
+            HistoryLineEntity(
+                raceId = raceId, mode = mode, action = HistoryAction.CLOCK,
+                splitNumber = 0, lineNumber = race.nextLineNumber, timestampMillis = startedAtMillis,
+            ),
+        )
+        db.raceDao().incrementLineNumber(raceId)
+    }
 
     @Test
     fun forceResetActiveModesClearsWhicheverModeIsStillStarted() = runTest {
-        db.raceDao().setTimeModeStartedAt(raceId, 1_000L)
+        markStartedWithHistory(HistoryMode.TIME, 1_000L)
 
         repository.forceResetActiveModes(raceId)
 
@@ -422,9 +474,9 @@ class RaceRepositoryTest {
     fun forceResetActiveModesClearsEveryStartedModeAtOnce() = runTest {
         // Safe to call even when more than one mode happens to be started for the same race —
         // each is reset independently.
-        db.raceDao().setTimeModeStartedAt(raceId, 1_000L)
-        db.raceDao().setBibsModeStartedAt(raceId, 2_000L)
-        db.raceDao().setCpModeStartedAt(raceId, 3_000L)
+        markStartedWithHistory(HistoryMode.TIME, 1_000L)
+        markStartedWithHistory(HistoryMode.BIBS, 2_000L)
+        markStartedWithHistory(HistoryMode.CP, 3_000L)
 
         repository.forceResetActiveModes(raceId)
 
@@ -440,7 +492,7 @@ class RaceRepositoryTest {
         // RESET marker row, not just a silent column clear — so Race History later reads this
         // race's unfinished segment as genuinely closed off, the same as any other Reset (see
         // forceResetActiveModes' own doc).
-        db.raceDao().setBibsModeStartedAt(raceId, 1_000L)
+        markStartedWithHistory(HistoryMode.BIBS, 1_000L)
 
         repository.forceResetActiveModes(raceId)
 
@@ -453,16 +505,17 @@ class RaceRepositoryTest {
     fun forceResetActiveModesNeverInsertsAMarkerForAModeThatWasNeverStarted() = runTest {
         // Only Bibs was ever started for this race — Time/CP must stay completely untouched,
         // not gain a spurious Reset line for a mode this race never actually used.
-        db.raceDao().setBibsModeStartedAt(raceId, 1_000L)
+        markStartedWithHistory(HistoryMode.BIBS, 1_000L)
 
         repository.forceResetActiveModes(raceId)
 
-        assertEquals(1, db.historyLineDao().observeAllForRace(raceId).first().size)
+        // The bare Clock row plus the new Reset marker — nothing for Time/CP.
+        assertEquals(2, db.historyLineDao().observeAllForRace(raceId).first().size)
     }
 
     @Test
     fun forceResetActiveModesMakesTheRaceDeletable() = runTest {
-        db.raceDao().setBibsModeStartedAt(raceId, 1_000L)
+        markStartedWithHistory(HistoryMode.BIBS, 1_000L)
 
         repository.forceResetActiveModes(raceId)
         repository.deleteRace(raceId)
@@ -479,100 +532,22 @@ class RaceRepositoryTest {
         assertEquals(raceId, repository.getRace(raceId)?.id)
     }
 
-    // blockedModeSwitchReason — Bibs and CP are mutually exclusive for the same race; see the
-    // function's own doc for why (both are alternate ways of logging the same station). Stop
-    // alone (not a full Reset) is enough to permit a switch — only a mode that's still actually
-    // recording (started, not yet stopped) blocks one.
+    // recordModeStart's own mode switching is never blocked, regardless of whether another mode
+    // is still started — there used to be a separate blockedModeSwitchReason guard here (removed:
+    // it required a full Reset of the other mode first once Stop went away, which actively fought
+    // recordModeStart's own resume-on-relocate-back behavior — a mode left mid-recording is
+    // always safely resumable later via Relocate, so blocking the switch in the first place was
+    // pure friction with nothing left to protect against).
 
     @Test
-    fun blockedModeSwitchReasonAllowsSwitchingToBibsWhenCpWasNeverStarted() = runTest {
-        assertNull(repository.blockedModeSwitchReason(raceId, AppMode.BIBS))
-    }
-
-    @Test
-    fun blockedModeSwitchReasonAllowsSwitchingToCpWhenBibsWasNeverStarted() = runTest {
-        assertNull(repository.blockedModeSwitchReason(raceId, AppMode.CP))
-    }
-
-    @Test
-    fun blockedModeSwitchReasonRefusesSwitchingToBibsWhileCpIsStarted() = runTest {
+    fun recordModeStartSwitchesModeEvenWhileAnotherModeIsStillStarted() = runTest {
         db.raceDao().setCpModeStartedAt(raceId, 1_000L)
 
-        assertEquals(
-            "CP Mode still has an active race — Stop it before switching to Bibs Mode.",
-            repository.blockedModeSwitchReason(raceId, AppMode.BIBS),
-        )
-    }
+        repository.recordModeStart(raceId, AppMode.BIBS, "Finish")
 
-    @Test
-    fun blockedModeSwitchReasonAllowsSwitchingToBibsOnceCpIsStoppedEvenIfNotReset() = runTest {
-        // Merely Stopping CP (no Reset) is now enough to permit the switch — unlike isRaceActive
-        // (a different, deliberately stricter guard for delete/rename protection), which still
-        // treats a Stopped-not-Reset race as active.
-        db.raceDao().setCpModeStartedAt(raceId, 1_000L)
-        db.raceDao().setCpModeStoppedAt(raceId, 2_000L)
-
-        assertNull(repository.blockedModeSwitchReason(raceId, AppMode.BIBS))
-    }
-
-    @Test
-    fun blockedModeSwitchReasonAllowsSwitchingToBibsOnceCpHasBeenStoppedAndReset() = runTest {
-        db.raceDao().setCpModeStartedAt(raceId, 1_000L)
-        db.raceDao().setCpModeStoppedAt(raceId, 2_000L)
-        db.raceDao().resetCpMode(raceId)
-
-        assertNull(repository.blockedModeSwitchReason(raceId, AppMode.BIBS))
-    }
-
-    @Test
-    fun blockedModeSwitchReasonRefusesSwitchingToCpWhileBibsIsStarted() = runTest {
-        db.raceDao().setBibsModeStartedAt(raceId, 1_000L)
-
-        assertEquals(
-            "Bibs Mode still has an active race — Stop it before switching to CP Mode.",
-            repository.blockedModeSwitchReason(raceId, AppMode.CP),
-        )
-    }
-
-    @Test
-    fun blockedModeSwitchReasonAllowsSwitchingToCpOnceBibsIsStoppedEvenIfNotReset() = runTest {
-        // Merely Stopping Bibs (no Reset) is now enough to permit the switch — see the Bibs↔CP
-        // mirror test's own doc above.
-        db.raceDao().setBibsModeStartedAt(raceId, 1_000L)
-        db.raceDao().setBibsModeStoppedAt(raceId, 2_000L)
-
-        assertNull(repository.blockedModeSwitchReason(raceId, AppMode.CP))
-    }
-
-    @Test
-    fun blockedModeSwitchReasonAllowsSwitchingToCpOnceBibsHasBeenStoppedAndReset() = runTest {
-        db.raceDao().setBibsModeStartedAt(raceId, 1_000L)
-        db.raceDao().setBibsModeStoppedAt(raceId, 2_000L)
-        db.raceDao().resetBibsMode(raceId)
-
-        assertNull(repository.blockedModeSwitchReason(raceId, AppMode.CP))
-    }
-
-    @Test
-    fun blockedModeSwitchReasonRefusesSwitchingToTimeWhileBibsIsActive() = runTest {
-        // Generalized to all three modes (see blockedModeSwitchReason's own doc: "only one of
-        // the three may be started at once") — this pre-existing test used to assert the
-        // opposite (that Time was exempt), which stopped matching that generalization; fixed
-        // to assert the function's actual, current, documented behavior instead.
-        db.raceDao().setBibsModeStartedAt(raceId, 1_000L)
-
-        assertEquals(
-            "Bibs Mode still has an active race — Stop it before switching to Time Mode.",
-            repository.blockedModeSwitchReason(raceId, AppMode.TIME),
-        )
-    }
-
-    @Test
-    fun blockedModeSwitchReasonAllowsSwitchingToTimeOnceNothingElseIsActive() = runTest {
-        db.raceDao().setBibsModeStartedAt(raceId, 1_000L)
-        db.raceDao().setBibsModeStoppedAt(raceId, 2_000L)
-        db.raceDao().resetBibsMode(raceId)
-
-        assertNull(repository.blockedModeSwitchReason(raceId, AppMode.TIME))
+        assertEquals("BIBS", repository.getRace(raceId)?.mode)
+        // CP's own started-at is untouched — relocating away from it doesn't Reset it, so it
+        // stays resumable later via Relocate (see recordModeStart's own resume doc).
+        assertEquals(1_000L, repository.getRace(raceId)?.cpModeStartedAtMillis)
     }
 }

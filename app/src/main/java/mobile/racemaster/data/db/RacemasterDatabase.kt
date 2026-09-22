@@ -28,7 +28,10 @@ import mobile.racemaster.data.db.entity.TargetedProgressEntity
         ProgressEntity::class,
         TargetedProgressEntity::class,
     ],
-    version = 33,
+    // Bumped for the *StoppedAtMillis column removal (see RaceEntity's own doc) — no explicit
+    // Migration needed, AppContainer's fallbackToDestructiveMigration(dropAllTables = true)
+    // already wipes and recreates the whole local DB on any version mismatch.
+    version = 34,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

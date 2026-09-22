@@ -11,6 +11,7 @@ import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.BtPollingStatus
+import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.ProgressEntry
 import mobile.racemaster.data.mule.ProgressRepository
 import mobile.racemaster.data.mule.ServerStatus
@@ -23,7 +24,7 @@ import mobile.racemaster.data.repository.duplicateBibNumbers
 import mobile.racemaster.data.repository.expectedBibsAtLocation
 import mobile.racemaster.data.repository.findDuplicateSplitRefs
 import mobile.racemaster.data.repository.hasRealEntries
-import mobile.racemaster.data.repository.isRaceInProgress
+import mobile.racemaster.data.repository.isRaceActive
 import mobile.racemaster.data.repository.lineSyncState
 import mobile.racemaster.data.repository.linesWithAnySync
 import mobile.racemaster.data.repository.outstandingAtLocation
@@ -83,7 +84,6 @@ data class BibsModeUiState(
     val dupCount: Int = 0,
     val entries: List<EntryLogUi> = emptyList(),
     val canUndo: Boolean = false,
-    val stopped: Boolean = false,
     val raceInProgress: Boolean = false,
     val unsyncedCount: Int = 0,
     val lastSyncedAtMillis: Long? = null,
@@ -116,6 +116,7 @@ class BibsModeViewModel(
     private val settingsRepository: SettingsRepository,
     private val serverStatusRepository: ServerStatusRepository,
     private val progressRepository: ProgressRepository,
+    private val muleRepository: MuleRepository,
     bluetoothStateRepository: BluetoothStateRepository,
     private val beeper: Beeper,
 ) : ViewModel() {
@@ -218,7 +219,14 @@ class BibsModeViewModel(
             eventOptions = if (canRetag && entries.firstOrNull()?.bibNumber != null) EVENT_PICKER_OPTIONS else BIBS_STANDALONE_OPTIONS,
             nextSplitNumber = race?.bibsModeNextSplit ?: 1,
             dupCount = countDuplicateExtras(entries),
-            entries = entries.map {
+            // LOCATION rows are deliberately left out of the rendered list — the race's own
+            // current location is already echoed on its own line in EntryModeHeaderInfo right
+            // above, so listing it again here too was just confusing noise. Still fully present
+            // in (and undoable via) the underlying `entries` list this is filtered from —
+            // eventOptions/dupCount/canUndo above are all computed from that unfiltered list,
+            // not this one, so undoing a relocate the operator can't see listed still works
+            // exactly as before.
+            entries = entries.filterNot { it.action == HistoryAction.LOCATION }.map {
                 EntryLogUi(
                     id = it.id,
                     bibNumber = it.bibNumber,
@@ -231,15 +239,7 @@ class BibsModeViewModel(
                 )
             },
             canUndo = entries.hasRealEntries(),
-            stopped = race?.bibsModeStoppedAtMillis != null,
-            raceInProgress = isRaceInProgress(
-                race?.timeModeStartedAtMillis,
-                race?.timeModeStoppedAtMillis,
-                race?.bibsModeStartedAtMillis,
-                race?.bibsModeStoppedAtMillis,
-                race?.cpModeStartedAtMillis,
-                race?.cpModeStoppedAtMillis,
-            ),
+            raceInProgress = isRaceActive(race?.timeModeStartedAtMillis, race?.bibsModeStartedAtMillis, race?.cpModeStartedAtMillis),
             unsyncedCount = unsyncedCount,
             lastSyncedAtMillis = lastSyncedAtMillis,
             expectedCount = expectedBibs.size,
@@ -253,12 +253,12 @@ class BibsModeViewModel(
 
     // A device now records against exactly one race for its whole lifetime (see TODO.md's
     // phase 1 — the course concept is gone), so Start no longer needs to resolve WHICH row to
-    // record into — it's always this device's own active race. Already started means this race
-    // was previously Stopped, not Reset (Reset already clears bibsModeStartedAtMillis, so this
-    // branch is never taken right after one) — resume exactly where it left off rather than
-    // starting a fresh segment; see BibsModeRepository.resumeBibsMode's own doc. This is also
-    // the path Race History's own "Resume" action relies on: switching activeRaceId back to a
-    // previously-stopped race, then pressing Start here, picks up exactly where it left off.
+    // record into — it's always this device's own active race. The already-started branch below
+    // is defensive/effectively unreachable through the main button now that there's no separate
+    // stopped state (once started, this screen always shows the keypad, never Start, until Reset
+    // — see HistoryAction's own doc) — kept as-is since Race History's own "Resume" action
+    // (RaceRepository.switchActiveRace) could in principle still land here on an already-started,
+    // not-yet-reset race before this screen's own reactive state has caught up.
     fun startBibsMode() {
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch {
@@ -374,14 +374,15 @@ class BibsModeViewModel(
         }
     }
 
-    fun stopBibsMode() {
-        val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch { bibsModeRepository.stopBibsMode(raceId) }
-    }
-
+    // See RaceRepository.closeCurrentSegment's own doc for the walk-back-by-segment behavior a
+    // Reset press triggers, and TimeModeViewModel.resetStopwatch's own doc for why an abandoned
+    // result announces this to the server right away.
     fun resetBibsMode() {
         val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch { bibsModeRepository.resetBibsMode(raceId) }
+        viewModelScope.launch {
+            val abandoned = bibsModeRepository.resetBibsMode(raceId)
+            if (abandoned) muleRepository.announceRaceSetup()
+        }
     }
 
     override fun onCleared() {
@@ -400,6 +401,7 @@ class BibsModeViewModel(
                     container.settingsRepository,
                     container.serverStatusRepository,
                     container.progressRepository,
+                    container.muleRepository,
                     container.bluetoothStateRepository,
                     Beeper(applicationContext()),
                 )

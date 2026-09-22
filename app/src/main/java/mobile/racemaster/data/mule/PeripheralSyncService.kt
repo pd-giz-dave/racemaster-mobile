@@ -370,7 +370,23 @@ class PeripheralSyncService : Service() {
                 // it off in-app leaves the system radio on, so this loop has to tear both down
                 // itself rather than just skipping the (re)start below.
                 val bluetoothOff = container.settingsRepository.bluetoothOff.first()
-                val shouldBeActive = !bluetoothOff && container.bluetoothStateRepository.isEnabled()
+                // Also gated on having an actual race set up — a Reset walking all the way back
+                // to a race's own first segment reverts this device to "no race set up" (see
+                // RaceRepository.abandonRaceSetup's own doc), which must include actually going
+                // quiet on the radio, not just advertising an empty/blank identity. But not
+                // *immediately* quiet: if that very walk-back left anything still unsynced (most
+                // notably its own final Reset row — the signal every other recipient needs to
+                // actually learn this race is gone), the radio must stay discoverable until a
+                // passing Mule can still pick it up, even though there's no longer an active
+                // race to advertise a real identity for (TODO.md: "it should keep sync'ing until
+                // any pending lines (including the final reset) are sync'd, so the rest of the
+                // world knows its gone"). unsyncedHistoryCountAcrossAllRaces already covers every
+                // race this device has ever recorded, not just whichever one used to be active,
+                // so this self-heals the instant the server (or a relay) confirms it — no
+                // separate "still finishing up" state to track here.
+                val hasActiveRace = container.settingsRepository.activeRaceId.first() != null
+                val hasUnsyncedData = container.raceRepository.unsyncedHistoryCountAcrossAllRaces.first() > 0
+                val shouldBeActive = !bluetoothOff && (hasActiveRace || hasUnsyncedData) && container.bluetoothStateRepository.isEnabled()
                 if (shouldBeActive) {
                     if (!wasActive) {
                         // Just came on (or this is the first tick) — any earlier

@@ -107,26 +107,26 @@ fun HelpScreen(onBack: () -> Unit) {
                     "the race name and location; if this race has its own Seniors/Juniors " +
                     "suffix, type it straight into the name (e.g. \"Pontesbury-Seniors\") the " +
                     "same way the web app already names its own per-course files. Setup Race is " +
-                    "disabled while a race is already active — stop and reset it first, or use " +
-                    "Progress (Races)'s own \"Resume\" action if it was only stopped by " +
+                    "disabled while a race is already active — Reset it first, or use " +
+                    "Progress (Races)'s own \"Resume\" action if it was left running by " +
                     "mistake (see \"General\" below).",
             )
             HelpSection(
                 title = "Time Mode",
                 body = "START begins the stopwatch and records a fixed \"Start\" marker as split S0. " +
                     "SPLIT records the current time every time it's tapped — two fast taps always " +
-                    "produce two separate splits. STOP freezes the clock and records a \"Stop\" marker " +
-                    "(shown as S– — a boundary marker, not a numbered split); undoing that Stop marker " +
-                    "resumes the clock with no time lost. Once stopped, the same button becomes RESET " +
-                    "(after a confirm) — adds a reset marker and starts a fresh S0 count; nothing is " +
-                    "deleted, every split stays in Race History regardless, genuine deletion only ever " +
-                    "happens explicitly from the Races list. If Stop was pressed by mistake while " +
-                    "runners are still out, don't Reset — press START again instead (picks straight " +
-                    "back up where it left off, no new Start marker, no renumbering, Undo last still " +
-                    "reaches back before the Stop), or, if something else has happened since, use " +
-                    "Progress (Races)'s own \"Resume\" action to switch back to this race first (see " +
-                    "\"General\" below). Undo last removes only the most recent split. Tap any split " +
-                    "row to give it a short label.",
+                    "produce two separate splits. RESET (after a confirm) closes out this segment — " +
+                    "adds a reset marker and starts a fresh S0 count; nothing is deleted, every split " +
+                    "stays in Race History regardless, genuine deletion only ever happens explicitly " +
+                    "from the Races list. Press RESET again to walk back and close the segment before " +
+                    "it too, and so on all the way back to the race's very first one, at which point " +
+                    "this device reverts to having no race set up at all. Undo last removes only the " +
+                    "most recent split — it also reaches back across a Relocate to an earlier segment, " +
+                    "right back to that segment's own Start marker, without needing a Reset first. " +
+                    "Relocating back to a location this mode has already recorded at (and not since " +
+                    "Reset) picks up exactly where it left off — same split numbering, same entries " +
+                    "still showing — rather than starting over; see \"General\" below. " +
+                    "Tap any split row to give it a short label.",
             )
             HelpSection(
                 title = "Bibs Mode — starting a race",
@@ -189,17 +189,17 @@ fun HelpScreen(onBack: () -> Unit) {
                     "means 1:30). This records how late the clock was started after a mass start.",
             )
             HelpSection(
-                title = "Bibs Mode — stop and reset",
-                body = "STOP freezes logging (the keypad and Event are disabled) — this records a " +
-                    "\"Stop\" marker (shown as S–, not a numbered split) that can be undone to resume " +
-                    "logging. Once stopped, the same button becomes RESET (after a confirm) — adds a " +
-                    "reset marker and starts a fresh count from it; nothing is deleted, every entry " +
-                    "stays in Race History regardless, genuine deletion only ever happens explicitly " +
-                    "from the Races list. If Stop was pressed by mistake while runners are still out, " +
-                    "don't Reset — press START again instead (carries straight on exactly where it " +
-                    "left off: no new Clock marker, no renumbering, Undo last still reaches back before " +
-                    "the Stop), or use Progress (Races)'s own \"Resume\" action first if something else " +
-                    "has happened since (see \"General\" below).",
+                title = "Bibs Mode — reset",
+                body = "RESET (after a confirm) closes out this segment — adds a reset marker and " +
+                    "starts a fresh count from it; nothing is deleted, every entry stays in Race " +
+                    "History regardless, genuine deletion only ever happens explicitly from the Races " +
+                    "list. Press RESET again to walk back and close the segment before it too, all the " +
+                    "way back to the race's very first one, at which point this device reverts to " +
+                    "having no race set up at all. Undo last reaches back across a Relocate to an " +
+                    "earlier segment, right back to that segment's own Clock marker, without needing a " +
+                    "Reset first. Relocating back to a location this mode has already recorded at (and " +
+                    "not since Reset) picks up exactly where it left off — same numbering, same " +
+                    "entries still showing — rather than starting over; see \"General\" below.",
             )
             HelpSection(
                 title = "CP Mode",
@@ -216,7 +216,7 @@ fun HelpScreen(onBack: () -> Unit) {
                     "Pass/Retire toggle button that always shows the opposite of whatever the top " +
                     "entry currently is, so it retags that entry in place (keeping the same bib) and " +
                     "can flip it back and forth as many times as needed; the field keeps showing that " +
-                    "bib rather than clearing. Tap any row to correct it, and STOP/RESET/Undo last " +
+                    "bib rather than clearing. Tap any row to correct it, and RESET/Undo last " +
                     "all work exactly as in Bibs Mode — Undo last brings whatever's now on top back " +
                     "into the field the same way. CP Mode needs its race's Location to be \"CP\" " +
                     "followed by a number from 1 upwards, with an optional \"-name\" suffix (e.g. " +
@@ -324,21 +324,24 @@ fun HelpScreen(onBack: () -> Unit) {
                     "opens an editor for the current race's name/location. Name locks once the race " +
                     "has actually started, the same as before, but location doesn't — saving a new " +
                     "location there mid-race records that the device has moved (a real, undoable " +
-                    "entry in the log, same as any other), rather than requiring a Stop/Reset first; " +
+                    "entry in the log, same as any other), rather than requiring a Reset first; " +
                     "already-recorded entries at the old location stay exactly as they are, and bib/" +
-                    "split numbering starts fresh at the new one. Time/Bibs/CP " +
-                    "are mutually exclusive for a race — only one can be active at once, and picking " +
-                    "a different one while another is still active (Started but not yet Stopped and " +
-                    "Reset) is blocked with a \"Can't switch mode\" dialog rather than performed. The " +
-                    "Mode Picker marks whichever one is holding it \"- active\" right on its own " +
+                    "split numbering starts fresh at the new one — unless it's a location this mode " +
+                    "has already visited and not since Reset, in which case it picks up exactly where " +
+                    "it left off, old entries and all. A race only ever records in one mode at a " +
+                    "time, but Relocate can freely switch which one even while another is still " +
+                    "started — the mode being left is never blocked or reset by the switch, it just " +
+                    "stops being shown; relocating back to it later resumes it exactly the same way " +
+                    "a location does. The Mode Picker marks whichever one is holding it \"- active\" " +
+                    "right on its own " +
                     "button, alongside the race-in-progress card lower down. Muling on/off is separate " +
                     "(see Mule Mode above) and unaffected by any of this. Progress on the mode picker " +
                     "opens the Races page, listing every previously recorded race, alongside a " +
                     "\"Resume\" action on any race that's still active (an un-Reset started mode) but " +
-                    "isn't this device's current one — the recovery path for a Stop pressed by " +
-                    "mistake after something else has happened since (a new Setup Race, say): tap " +
-                    "Resume, then press START again in whichever mode it was recording, to carry on " +
-                    "exactly where it left off. Tap a race (not its Resume button) to see its full " +
+                    "isn't this device's current one — the recovery path for switching away (a new " +
+                    "Setup Race, say) without Resetting first: tap Resume, and it picks straight back " +
+                    "up showing exactly where it was left. Tap a race (not its Resume button) to see " +
+                    "its full " +
                     "history read-only — each row shows the wall-clock time (HH:MM) it was recorded, " +
                     "alongside its line/split number, event, bib, and elapsed time. The same page also " +
                     "lists any progress files this device has received (marked with their own icon so " +

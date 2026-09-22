@@ -10,6 +10,7 @@ import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.BtPollingStatus
+import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.ProgressEntry
 import mobile.racemaster.data.mule.ProgressRepository
 import mobile.racemaster.data.mule.ServerStatus
@@ -22,7 +23,7 @@ import mobile.racemaster.data.repository.duplicateBibNumbers
 import mobile.racemaster.data.repository.expectedBibsAtLocation
 import mobile.racemaster.data.repository.findDuplicateSplitRefs
 import mobile.racemaster.data.repository.hasRealEntries
-import mobile.racemaster.data.repository.isRaceInProgress
+import mobile.racemaster.data.repository.isRaceActive
 import mobile.racemaster.data.repository.lineSyncState
 import mobile.racemaster.data.repository.linesWithAnySync
 import mobile.racemaster.data.repository.outstandingAtLocation
@@ -80,7 +81,6 @@ data class CpModeUiState(
     // CpModeViewModel.toggleLastRetag's own doc.
     val retagButtonLabel: String = "Retire",
     val canUndo: Boolean = false,
-    val stopped: Boolean = false,
     val raceInProgress: Boolean = false,
     val unsyncedCount: Int = 0,
     val lastSyncedAtMillis: Long? = null,
@@ -104,6 +104,7 @@ class CpModeViewModel(
     private val settingsRepository: SettingsRepository,
     private val serverStatusRepository: ServerStatusRepository,
     private val progressRepository: ProgressRepository,
+    private val muleRepository: MuleRepository,
     bluetoothStateRepository: BluetoothStateRepository,
     private val beeper: Beeper,
 ) : ViewModel() {
@@ -185,7 +186,11 @@ class CpModeViewModel(
             currentDigits = digits,
             nextSplitNumber = race?.cpModeNextSplit ?: 1,
             dupCount = countDuplicateExtras(entries),
-            entries = entries.map {
+            // LOCATION rows are deliberately left out of the rendered list — see
+            // BibsModeViewModel's own identical doc for why (already echoed in
+            // EntryModeHeaderInfo, and still fully present in/undoable via the unfiltered
+            // `entries` list every other field here is computed from).
+            entries = entries.filterNot { it.action == HistoryAction.LOCATION }.map {
                 EntryLogUi(
                     id = it.id,
                     bibNumber = it.bibNumber,
@@ -200,15 +205,7 @@ class CpModeViewModel(
             canRetag = canRetag,
             retagButtonLabel = if (entries.firstOrNull()?.action == HistoryAction.RETIRE) "Pass" else "Retire",
             canUndo = entries.hasRealEntries(),
-            stopped = race?.cpModeStoppedAtMillis != null,
-            raceInProgress = isRaceInProgress(
-                race?.timeModeStartedAtMillis,
-                race?.timeModeStoppedAtMillis,
-                race?.bibsModeStartedAtMillis,
-                race?.bibsModeStoppedAtMillis,
-                race?.cpModeStartedAtMillis,
-                race?.cpModeStoppedAtMillis,
-            ),
+            raceInProgress = isRaceActive(race?.timeModeStartedAtMillis, race?.bibsModeStartedAtMillis, race?.cpModeStartedAtMillis),
             unsyncedCount = unsyncedCount,
             lastSyncedAtMillis = lastSyncedAtMillis,
             expectedCount = expectedBibs.size,
@@ -222,12 +219,12 @@ class CpModeViewModel(
 
     // A device now records against exactly one race for its whole lifetime (see TODO.md's
     // phase 1 — the course concept is gone), so Start no longer needs to resolve WHICH row to
-    // record into — it's always this device's own active race. Already started means this race
-    // was previously Stopped, not Reset (Reset already clears cpModeStartedAtMillis, so this
-    // branch is never taken right after one) — resume exactly where it left off rather than
-    // starting a fresh segment; see CpModeRepository.resumeCpMode's own doc. This is also the
-    // path Race History's own "Resume" action relies on: switching activeRaceId back to a
-    // previously-stopped race, then pressing Start here, picks up exactly where it left off.
+    // record into — it's always this device's own active race. The already-started branch below
+    // is defensive/effectively unreachable through the main button now that there's no separate
+    // stopped state (once started, this screen always shows the keypad, never Start, until Reset
+    // — see HistoryAction's own doc) — kept as-is since Race History's own "Resume" action
+    // (RaceRepository.switchActiveRace) could in principle still land here on an already-started,
+    // not-yet-reset race before this screen's own reactive state has caught up.
     fun startCpMode() {
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch {
@@ -314,14 +311,15 @@ class CpModeViewModel(
         }
     }
 
-    fun stopCpMode() {
-        val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch { cpModeRepository.stopCpMode(raceId) }
-    }
-
+    // See RaceRepository.closeCurrentSegment's own doc for the walk-back-by-segment behavior a
+    // Reset press triggers, and TimeModeViewModel.resetStopwatch's own doc for why an abandoned
+    // result announces this to the server right away.
     fun resetCpMode() {
         val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch { cpModeRepository.resetCpMode(raceId) }
+        viewModelScope.launch {
+            val abandoned = cpModeRepository.resetCpMode(raceId)
+            if (abandoned) muleRepository.announceRaceSetup()
+        }
     }
 
     override fun onCleared() {
@@ -340,6 +338,7 @@ class CpModeViewModel(
                     container.settingsRepository,
                     container.serverStatusRepository,
                     container.progressRepository,
+                    container.muleRepository,
                     container.bluetoothStateRepository,
                     Beeper(applicationContext()),
                 )

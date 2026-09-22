@@ -8,17 +8,16 @@ import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.RaceEntity
+import mobile.racemaster.data.settings.AppMode
 import kotlinx.coroutines.flow.Flow
 
 private class BibsProgressColumns(private val raceDao: RaceDao) : ModeProgressColumns {
     override fun nextSplitOf(race: RaceEntity) = race.bibsModeNextSplit
-    override fun stoppedAtOf(race: RaceEntity) = race.bibsModeStoppedAtMillis
     override suspend fun incrementCounter(raceId: Long) = raceDao.incrementBibsCounter(raceId)
     override suspend fun decrementCounter(raceId: Long) = raceDao.decrementBibsCounter(raceId)
-    override suspend fun setStoppedAt(raceId: Long, stoppedAtMillis: Long) = raceDao.setBibsModeStoppedAt(raceId, stoppedAtMillis)
-    override suspend fun clearStoppedAt(raceId: Long) = raceDao.clearBibsModeStoppedAt(raceId)
     override suspend fun resetCounters(raceId: Long) = raceDao.resetBibsMode(raceId)
     override suspend fun setCounterTo(raceId: Long, value: Int) = raceDao.setBibsModeNextSplit(raceId, value)
+    override suspend fun clearStartedAt(raceId: Long) = raceDao.clearBibsModeStartedAt(raceId)
 }
 
 /** Bibs Mode's own thin wrapper around [EntryLogModeEngine] — every method here is a direct
@@ -30,8 +29,9 @@ class BibsModeRepository(
     private val db: RacemasterDatabase,
     private val raceDao: RaceDao,
     private val historyLineDao: HistoryLineDao,
+    raceRepository: RaceRepository,
 ) {
-    private val engine = EntryLogModeEngine(HistoryMode.BIBS, db, raceDao, historyLineDao, BibsProgressColumns(raceDao))
+    private val engine = EntryLogModeEngine(HistoryMode.BIBS, AppMode.BIBS, db, raceDao, historyLineDao, raceRepository, BibsProgressColumns(raceDao))
 
     fun observeCurrentSegmentEntries(raceId: Long): Flow<List<HistoryLineEntity>> = engine.observeCurrentSegmentEntries(raceId)
 
@@ -54,6 +54,7 @@ class BibsModeRepository(
     // RaceRepository.recordModeStart (Setup Race / Relocate) — this only writes the real Clock
     // marker itself.
     suspend fun startBibsMode(raceId: Long, startedAtMillis: Long = System.currentTimeMillis()) {
+        engine.ensureOpenSegment(raceId)
         db.withTransaction {
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
             raceDao.setBibsModeStartedAt(raceId, startedAtMillis)
@@ -82,9 +83,7 @@ class BibsModeRepository(
 
     suspend fun undoMostRecent(raceId: Long) = engine.undoMostRecent(raceId)
 
-    suspend fun stopBibsMode(raceId: Long, stoppedAtMillis: Long = System.currentTimeMillis()) = engine.stop(raceId, stoppedAtMillis)
-
-    suspend fun resetBibsMode(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()) = engine.reset(raceId, resetAtMillis)
+    suspend fun resetBibsMode(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()): Boolean = engine.reset(raceId, resetAtMillis)
 
     suspend fun resumeBibsMode(raceId: Long) = engine.resume(raceId)
 }
