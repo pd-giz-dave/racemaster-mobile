@@ -340,6 +340,20 @@ class MuleRepository(
         records: List<SyncRecord>,
     ): Int {
         if (records.isEmpty()) return 0
+        // A "NewRace" marker anywhere in this freshly-pulled batch (see HistoryAction.NEW_RACE's
+        // own doc) means the source's race identity was just reset — whatever we already have
+        // cached for this exact (sourceDeviceId, sourceRaceLabel) pair is from a different,
+        // since-superseded race that merely reused the same label, and must be wiped before the
+        // fresh batch (marker included) is stored, not merged with it. Reuses
+        // deleteForSource — the same function already backing the manual "delete Mule source" UI
+        // action (see MuleRepository.deleteSource) — nothing is actually lost here: the batch
+        // that triggered the wipe is inserted immediately after in this same call. No separate
+        // cursor reset is needed afterward, unlike the web app's own persisted localStorage
+        // cursor — lastPulledLineNumber here is derived fresh from PulledRecordEntity's own
+        // current contents each time, so wiping the table alone is self-correcting.
+        if (records.any { it.action == "NewRace" }) {
+            pulledRecordDao.deleteForSource(sourceRaceLabel, sourceDeviceId)
+        }
         val now = System.currentTimeMillis()
         pulledRecordDao.insertAll(
             records.map { record ->
@@ -634,10 +648,22 @@ private fun maxOfNullable(a: Long?, b: Long?): Long? = when {
 // more Bibs/Time split, since the server no longer stores one either (lineLabel's B/T prefix
 // already carries that distinction end to end). Pulled out as a pure function so this logic can
 // be tested directly, without faking pushToServer's network round-trip.
+//
+// A device whose records include a "NewRace" marker (see HistoryAction.NEW_RACE's own doc) is
+// the one deliberate exception to the delta filter above: its own fresh race's lineNumbers (1,
+// 2, 3…) are, by construction, all lower than whatever stale max the server's own `status` still
+// reports from the race this label previously belonged to — filtering by that stale max would
+// silently drop the entire new race, marker included, and it would never reach the server at
+// all. Sending that device's full record set unfiltered in that case is what actually
+// guarantees the marker's delivery; the server's own merge logic (see server/routes/mobile.js)
+// is what wipes its stale file on seeing it.
 internal fun recordsDueForDevices(
     byDevice: Map<String, List<SyncRecord>>,
     status: Map<String, Long>,
 ): Map<String, List<SyncRecord>> =
     byDevice
-        .mapValues { (deviceName, records) -> records.filter { it.lineNumber > (status[deviceName] ?: 0) } }
+        .mapValues { (deviceName, records) ->
+            if (records.any { it.action == "NewRace" }) records
+            else records.filter { it.lineNumber > (status[deviceName] ?: 0) }
+        }
         .filterValues { it.isNotEmpty() }

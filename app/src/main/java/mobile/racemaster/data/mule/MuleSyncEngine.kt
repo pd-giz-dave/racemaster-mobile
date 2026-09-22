@@ -927,10 +927,19 @@ class MuleSyncEngine(
                     return@withPermit
                 }
                 val since = muleRepository.lastPulledLineNumber(freshInfo.deviceId, freshInfo.raceLabel)
-                mergeDeviceInfo(key, device, freshInfo, since)
+                // A decrease here is impossible under normal monotonic operation — the only way
+                // this source's own reported lastLineNumber can be LOWER than what we've already
+                // pulled from it is if its race identity was reset out from under us (a local
+                // race deleted and recreated under the same label — see HistoryAction.NEW_RACE's
+                // own doc). Treat it as an unambiguous "pull from scratch" signal: continuing to
+                // request "since <our now-stale, too-high cursor>" would return nothing and
+                // silently miss the new race — including its own NewRace marker — forever.
+                val raceLikelyReset = freshInfo.lastLineNumber < since
+                val effectiveSince = if (raceLikelyReset) 0L else since
+                mergeDeviceInfo(key, device, freshInfo, effectiveSince)
                 deliverTargetedProgressIfPending(device.requiredAdvertisement, freshInfo.deviceId, peerLabel)
-                val hasNewData = freshInfo.lastLineNumber - since > 0
-                Log.d(TAG, "pull decision: key=$key deviceId=${freshInfo.deviceId} lastLineNumber=${freshInfo.lastLineNumber} since=$since hasNewData=$hasNewData")
+                val hasNewData = freshInfo.lastLineNumber - effectiveSince > 0
+                Log.d(TAG, "pull decision: key=$key deviceId=${freshInfo.deviceId} lastLineNumber=${freshInfo.lastLineNumber} since=$effectiveSince raceLikelyReset=$raceLikelyReset hasNewData=$hasNewData")
                 if (hasNewData) {
                     val result = runCatching {
                         muleRepository.pullFrom(
@@ -938,7 +947,7 @@ class MuleSyncEngine(
                             freshInfo.raceLabel,
                             freshInfo.deviceId,
                             freshInfo.deviceName,
-                            since,
+                            effectiveSince,
                         )
                     }.also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
                     result.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
@@ -987,7 +996,11 @@ class MuleSyncEngine(
                 for (entry in relevantRelayEntries(myDeviceId, relayEntries)) {
                     val relayKey = "relay:${entry.originDeviceId}:${entry.originRaceLabel}"
                     val relaySince = muleRepository.lastPulledLineNumber(entry.originDeviceId, entry.originRaceLabel)
-                    val outstanding = (entry.lastLineNumber - relaySince).coerceAtLeast(0).toInt()
+                    // See the same check above (own-race leg) — a decrease means the origin
+                    // device's race was reset out from under this whole relay chain.
+                    val relayLikelyReset = entry.lastLineNumber < relaySince
+                    val effectiveRelaySince = if (relayLikelyReset) 0L else relaySince
+                    val outstanding = (entry.lastLineNumber - effectiveRelaySince).coerceAtLeast(0).toInt()
                     relayRows[relayKey] = DiscoveredDevice(
                         deviceKey = relayKey,
                         advertisement = null,
@@ -999,14 +1012,14 @@ class MuleSyncEngine(
                         relayedViaDeviceKey = key,
                     )
                     val relayHasPendingConfirmation = muleRepository.hasSinkConfirmationToRelay(entry.originDeviceId, entry.originRaceLabel)
-                    if (entry.lastLineNumber - relaySince <= 0 && !relayHasPendingConfirmation) continue
+                    if (entry.lastLineNumber - effectiveRelaySince <= 0 && !relayHasPendingConfirmation) continue
                     val relayResult = runCatching {
                         muleRepository.pullFrom(
                             device.requiredAdvertisement,
                             sourceRaceLabel = entry.originRaceLabel,
                             sourceDeviceId = entry.originDeviceId,
                             sourceDeviceName = entry.originDeviceName,
-                            sinceLineNumber = relaySince,
+                            sinceLineNumber = effectiveRelaySince,
                             requestOriginDeviceId = entry.originDeviceId,
                             requestOriginRaceLabel = entry.originRaceLabel,
                         )

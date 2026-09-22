@@ -134,23 +134,38 @@ class RaceRepositoryTest {
     }
 
     @Test
-    fun recordModeStartWritesLocationThenModeStartBothScopedToTheChosenMode() = runTest {
+    fun recordModeStartWritesNewRaceThenLocationThenModeStartForABrandNewRace() = runTest {
+        // The test race from setUp() has mode == null (never started), so this is its genuine
+        // first-ever recordModeStart call — the NEW_RACE marker (see HistoryAction.NEW_RACE's own
+        // doc) is written first, shifting LOCATION/MODE_START to lineNumbers 2/3.
         repository.recordModeStart(raceId, AppMode.TIME, "Finish")
 
         val rows = db.historyLineDao().observeAllForRace(raceId).first().sortedBy { it.lineNumber }
-        assertEquals(2, rows.size)
-        assertEquals(HistoryAction.LOCATION, rows[0].action)
-        assertEquals("Finish", rows[0].note)
+        assertEquals(3, rows.size)
+        assertEquals(HistoryAction.NEW_RACE, rows[0].action)
         assertEquals(HistoryMode.TIME, rows[0].mode)
-        assertEquals(HistoryAction.MODE_START, rows[1].action)
-        assertEquals("Time", rows[1].note)
+        assertEquals(HistoryAction.LOCATION, rows[1].action)
+        assertEquals("Finish", rows[1].note)
         assertEquals(HistoryMode.TIME, rows[1].mode)
-        assertNull(rows[1].bibNumber)
-        assertNull(rows[1].splitNumber)
+        assertEquals(HistoryAction.MODE_START, rows[2].action)
+        assertEquals("Time", rows[2].note)
+        assertEquals(HistoryMode.TIME, rows[2].mode)
+        assertNull(rows[2].bibNumber)
+        assertNull(rows[2].splitNumber)
 
         val race = db.raceDao().getById(raceId)
         assertEquals("TIME", race?.mode)
         assertEquals("Finish", race?.location)
+    }
+
+    @Test
+    fun recordModeStartDoesNotWriteASecondNewRaceMarkerOnRelocate() = runTest {
+        repository.recordModeStart(raceId, AppMode.TIME, "Finish")
+        repository.recordModeStart(raceId, AppMode.BIBS, "CP1")
+
+        val rows = db.historyLineDao().observeAllForRace(raceId).first().sortedBy { it.lineNumber }
+        assertEquals(1, rows.count { it.action == HistoryAction.NEW_RACE })
+        assertEquals(HistoryAction.NEW_RACE, rows[0].action)
     }
 
     // switchActiveRace — the "auto delete the empty placeholder" cleanup every setActiveRaceId

@@ -127,10 +127,11 @@ class CpModeRepositoryTest {
         assertNull(race?.cpModeStoppedAtMillis)
         assertNull(race?.cpModeStartedAtMillis)
 
-        // Nothing is deleted — the MODE_START/Clock pair from startCpMode, the Pass, and the
-        // new Reset marker are all still present.
+        // Nothing is deleted — the Clock row from startCpMode, the Pass, and the new Reset
+        // marker are all still present. No MODE_START row here — that's written up front by
+        // RaceRepository.recordModeStart (Setup Race / Relocate), not by startCpMode itself.
         val allEntries = db.historyLineDao().observeAllForRace(raceId).first()
-        assertEquals(4, allEntries.size)
+        assertEquals(3, allEntries.size)
     }
 
     @Test

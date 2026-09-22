@@ -89,6 +89,30 @@ class MuleRepositoryTest {
         assertTrue(due.isEmpty())
     }
 
+    private fun newRaceRecord(lineNumber: Long) = SyncRecord(
+        action = "NewRace",
+        bibNumber = null,
+        splitTime = null,
+        splitNumber = null,
+        lineNumber = lineNumber,
+        note = null,
+        timestampMillis = 0L,
+    )
+
+    @Test
+    fun aDeviceWithANewRaceMarkerIgnoresTheStaleServerStatusAndSendsEverything() {
+        // The server's own status reports this device far ahead (line 8) — stale, from a
+        // different, since-superseded race that happened to reuse the same label. Without the
+        // NewRace exception, every one of these low-numbered fresh records would be filtered
+        // out as "already sent" and the new race would never reach the server at all.
+        val byDevice = mapOf("quiet-thicket" to listOf(newRaceRecord(1), timeRecord(2), timeRecord(3)))
+        val status = mapOf("quiet-thicket" to 8L)
+
+        val due = recordsDueForDevices(byDevice, status)
+
+        assertEquals(setOf(1L, 2L, 3L), due.getValue("quiet-thicket").map { it.lineNumber }.toSet())
+    }
+
     // decodeSyncRecord — a row whose payloadJson no longer matches SyncRecord's current shape
     // must be dropped, not thrown, so one bad row can't take down a whole push/relay-serve
     // attempt (see its own doc). Shared by pushToServer's per-device decode and

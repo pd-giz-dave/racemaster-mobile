@@ -70,6 +70,10 @@ private fun HistoryAction.toServerAction(): String = when (this) {
     // See HistoryAction.LOCATION's own doc — this marker's own new-location value travels via
     // `note`, not this action string.
     HistoryAction.LOCATION -> "Location"
+    // See HistoryAction.NEW_RACE's own doc — this is the wire signal every recipient
+    // (server, a Mule's own pull cache, the web app) must recognize and act on: discard
+    // whatever's already held for this exact race+device identity before applying what follows.
+    HistoryAction.NEW_RACE -> "NewRace"
 }
 
 /**
@@ -100,6 +104,7 @@ fun SyncRecord.toHistoryAction(): HistoryAction = when (action) {
     "Undo" -> HistoryAction.UNDO
     "ModeStart" -> HistoryAction.MODE_START
     "Location" -> HistoryAction.LOCATION
+    "NewRace" -> HistoryAction.NEW_RACE
     // An unrecognized wire value - should not get here
     else -> HistoryAction.IGNORE
 }

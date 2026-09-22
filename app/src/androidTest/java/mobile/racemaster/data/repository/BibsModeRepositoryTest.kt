@@ -120,11 +120,10 @@ class BibsModeRepositoryTest {
     fun startBibsModeInsertsClockAndDoesNotConsumeCounter() = runTest {
         repository.startBibsMode(raceId)
 
-        // Also inserts a MODE_START boundary marker immediately before the Clock row (see
-        // startBibsModeAlsoInsertsAModeStartBoundaryMarker below) — the Clock row itself is
-        // unaffected by that, still the fixed split-#0 marker it always was.
+        // No MODE_START row here — that's written up front by RaceRepository.recordModeStart
+        // (Setup Race / Relocate), not by startBibsMode itself. Just the Clock row.
         val entries = db.historyLineDao().observeAllForRace(raceId).first()
-        assertEquals(2, entries.size)
+        assertEquals(1, entries.size)
         val clockEntry = entries.single { it.action == HistoryAction.CLOCK }
         assertEquals(0, clockEntry.splitNumber)
 
@@ -187,10 +186,9 @@ class BibsModeRepositoryTest {
 
         repository.undoMostRecent(raceId)
 
-        // Still just the MODE_START boundary marker plus the Clock row — Undo can't reach past
-        // Clock (it's never a valid target), and MODE_START isn't reachable at all.
+        // Still just the Clock row — Undo can't reach past Clock, it's never a valid target.
         val entries = db.historyLineDao().observeAllForRace(raceId).first()
-        assertEquals(2, entries.size)
+        assertEquals(1, entries.size)
         assertTrue(entries.any { it.action == HistoryAction.CLOCK })
         assertEquals(1, db.raceDao().getById(raceId)?.bibsModeNextSplit)
     }
@@ -348,11 +346,14 @@ class BibsModeRepositoryTest {
             repository.observeCurrentSegmentEntries(raceId).first().map { it.action },
         )
 
-        // First Undo: undoes the relocate — the earlier Stop becomes visible again instead of
-        // staying hidden.
+        // First Undo: undoes the relocate — with no LOCATION marker left standing,
+        // sinceLastLocationMarker's own no-boundary-found case returns the folded segment
+        // unchanged (see its own doc), correctly revealing the whole pre-relocate segment as it
+        // stood before the relocate (Stop and the earlier Finish) — neither was ever behind an
+        // earlier LOCATION boundary to begin with, since this was the race's first segment.
         repository.undoMostRecent(raceId)
         assertEquals(
-            listOf(HistoryAction.STOP),
+            listOf(HistoryAction.STOP, HistoryAction.FINISH),
             repository.observeCurrentSegmentEntries(raceId).first().map { it.action },
         )
         assertEquals("Finish", db.raceDao().getById(raceId)?.location)

@@ -55,6 +55,20 @@ enum class HistoryAction {
     // handled) isn't enough — the counter was reset to 1, not incremented, by this marker's own
     // forward write.
     LOCATION,
+
+    // Written once, always as a brand-new race's very own first history line (before even its
+    // first LOCATION/MODE_START pair — see RaceRepository.recordModeStart, gated on
+    // `race.mode == null`, the same "is this the race's genuine first-ever call" signal already
+    // used for previousMode) — never on a later Relocate. A pure invalidation signal for every
+    // recipient of this device's history stream (the server, a Mule's own pull cache, the web
+    // app if it received it directly offline): "discard whatever you already hold for this exact
+    // race+device identity before applying what follows" — since a brand-new local race reusing
+    // an already-used label/device combo means any previously-synced content elsewhere is from a
+    // different, since-superseded race, not this one, and must never be merged with it. Like
+    // MODE_START, never operator-interactive — excluded from every live current-segment
+    // view/undo target the same way (see TimeModeRepository/EntryLogModeEngine's own
+    // undoMostRecent filtering) and only ever shown in Race History's full chronology.
+    NEW_RACE,
 }
 
 /** Actions that carry a real bib number and participate in range/duplicate checks. */

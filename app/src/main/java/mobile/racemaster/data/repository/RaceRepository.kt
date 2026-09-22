@@ -71,7 +71,30 @@ class RaceRepository(
     suspend fun recordModeStart(raceId: Long, mode: AppMode, location: String, timestampMillis: Long = System.currentTimeMillis()) {
         db.withTransaction {
             val historyMode = mode.toHistoryMode()
-            val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            var race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            // A brand-new race's own genuine first-ever call (Setup Race, never a later Relocate
+            // — see HistoryAction.NEW_RACE's own doc) gets one extra marker line ahead of the
+            // LOCATION/MODE_START pair below: the signal every sync recipient (server, a Mule's
+            // own pull cache, the web app) needs to tell "this is a fresh race, discard whatever
+            // you already hold for this device under this label" apart from "just another delta
+            // for a race you already know about" — the two are otherwise indistinguishable once a
+            // deleted-and-recreated race happens to reuse an identical label.
+            if (race.mode == null) {
+                historyLineDao.insert(
+                    HistoryLineEntity(
+                        raceId = raceId,
+                        mode = historyMode,
+                        action = HistoryAction.NEW_RACE,
+                        bibNumber = null,
+                        splitNumber = null,
+                        lineNumber = race.nextLineNumber,
+                        note = null,
+                        timestampMillis = timestampMillis,
+                    ),
+                )
+                raceDao.incrementLineNumber(raceId)
+                race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            }
             val priorSplitCounter = when (historyMode) {
                 HistoryMode.TIME -> race.timeModeNextSplit
                 HistoryMode.BIBS -> race.bibsModeNextSplit

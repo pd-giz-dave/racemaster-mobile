@@ -20,12 +20,14 @@ const val CLOCK_SPLIT_NUMBER = 0
 
 // Root row kinds that must never be edited or undone through the generic path — Undo/Edit
 // guards below key off this set, keyed off the ROOT row (never the target/echo) so the guard
-// holds even if a bug elsewhere let an echo's displayed action drift from its root. MODE_START
-// is never reachable here anyway (see observeCurrentSegmentEntries/undoMostRecent's own
-// filtering — it's excluded from the live view entirely), but listed for the same
+// holds even if a bug elsewhere let an echo's displayed action drift from its root. MODE_START/
+// NEW_RACE are never reachable here anyway (see observeCurrentSegmentEntries/undoMostRecent's
+// own filtering — both are excluded from the live view entirely), but listed for the same
 // belt-and-braces reason the other markers are.
-private val NON_EDITABLE_ROOT_ACTIONS =
-    setOf(HistoryAction.STOP, HistoryAction.RESET, HistoryAction.UNDO, HistoryAction.MODE_START, HistoryAction.LOCATION)
+private val NON_EDITABLE_ROOT_ACTIONS = setOf(
+    HistoryAction.STOP, HistoryAction.RESET, HistoryAction.UNDO,
+    HistoryAction.MODE_START, HistoryAction.LOCATION, HistoryAction.NEW_RACE,
+)
 
 // RETIRE never crosses the timing point at all (Bibs or CP), so it gets no splitNumber and
 // doesn't consume the shared counter — see HistoryLineEntity.splitNumber's own doc. PASS, by
@@ -91,9 +93,12 @@ internal class EntryLogModeEngine(
     // Only the current segment (since the most recent Reset, if any) — for the live screen.
     // Folded (see HistoryFold): Undo/Edit no longer delete/mutate rows, they append an
     // undo-marker or edit-echo instead, so the raw DAO rows must be collapsed down to "one row
-    // per still-visible logical entry" before the screen ever sees them. MODE_START rows are
-    // filtered out before folding — they're a boundary marker for Race History/the web app (see
-    // HistoryAction.MODE_START's own doc), never meant for the live screen at all.
+    // per still-visible logical entry" before the screen ever sees them. MODE_START/NEW_RACE
+    // rows are filtered out before folding — they're boundary markers for Race History/the
+    // server/other devices (see each action's own doc), never meant for the live screen at all
+    // (NEW_RACE would also be excluded by the since-last-LOCATION slice below, since it always
+    // precedes a race's very first LOCATION row, but it's filtered here too for the same
+    // belt-and-braces reason MODE_START already is).
     //
     // Further sliced to "since the last relocation, inclusive" (see
     // HistoryFold.sinceLastLocationMarker's own doc) AFTER folding — this is what keeps a bib
@@ -112,7 +117,7 @@ internal class EntryLogModeEngine(
     fun observeCurrentSegmentEntries(raceId: Long): Flow<List<HistoryLineEntity>> =
         historyLineDao.observeCurrentSegment(raceId, mode, HistoryAction.RESET).map {
             val folded = foldLatestVisible(
-                it.filter { e -> e.action != HistoryAction.MODE_START },
+                it.filter { e -> e.action != HistoryAction.MODE_START && e.action != HistoryAction.NEW_RACE },
                 { e -> e.lineNumber },
                 { e -> e.refLineNumber },
                 { e -> e.action == HistoryAction.UNDO },
@@ -209,10 +214,10 @@ internal class EntryLogModeEngine(
     // never the target's, for the same robustness reason.
     suspend fun undoMostRecent(raceId: Long) {
         db.withTransaction {
-            // MODE_START excluded, same as observeCurrentSegmentEntries — it must never become
-            // an undo target (the operator can't even see it to know it's there).
+            // MODE_START/NEW_RACE excluded, same as observeCurrentSegmentEntries — neither must
+            // ever become an undo target (the operator can't even see either to know it's there).
             val raw = historyLineDao.getCurrentSegmentSnapshot(raceId, mode, HistoryAction.RESET)
-                .filter { it.action != HistoryAction.MODE_START }
+                .filter { it.action != HistoryAction.MODE_START && it.action != HistoryAction.NEW_RACE }
             val folded = foldLatestVisible(raw, { e -> e.lineNumber }, { e -> e.refLineNumber }, { e -> e.action == HistoryAction.UNDO })
             val target = folded.firstOrNull() ?: return@withTransaction
             val rootLineNumber = target.refLineNumber ?: target.lineNumber

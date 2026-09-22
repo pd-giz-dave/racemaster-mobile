@@ -13,12 +13,12 @@ import kotlinx.coroutines.flow.map
 // Root row kinds that must never be edited or undone through the generic path — Undo/Edit
 // guards below key off this set, keyed off the ROOT row (never the target/echo) so the
 // guard holds even if a bug elsewhere let an echo's displayed action drift from its root.
-// MODE_START is never reachable here anyway (see observeCurrentSegmentSplits/undoMostRecent's
-// own filtering — it's excluded from the live view entirely), but listed for the same
-// belt-and-braces reason the other markers are.
+// MODE_START/NEW_RACE are never reachable here anyway (see observeCurrentSegmentSplits/
+// undoMostRecent's own filtering — both are excluded from the live view entirely), but listed
+// for the same belt-and-braces reason the other markers are.
 private val NON_EDITABLE_ROOT_ACTIONS = setOf(
     HistoryAction.START, HistoryAction.STOP, HistoryAction.RESET, HistoryAction.UNDO,
-    HistoryAction.MODE_START, HistoryAction.LOCATION,
+    HistoryAction.MODE_START, HistoryAction.LOCATION, HistoryAction.NEW_RACE,
 )
 
 class TimeModeRepository(
@@ -29,9 +29,12 @@ class TimeModeRepository(
     // Only the current segment (since the most recent Reset, if any) — for the live screen.
     // Folded (see HistoryFold): Undo/Edit no longer delete/mutate rows, they append an
     // undo-marker or edit-echo instead, so the raw DAO rows must be collapsed down to "one
-    // row per still-visible logical entry" before the screen ever sees them. MODE_START rows
-    // are filtered out before folding — they're a boundary marker for Race History/the web app
-    // (see HistoryAction.MODE_START's own doc), never meant for the live screen at all.
+    // row per still-visible logical entry" before the screen ever sees them. MODE_START/
+    // NEW_RACE rows are filtered out before folding — they're boundary markers for Race
+    // History/the server/other devices (see each action's own doc), never meant for the live
+    // screen at all (NEW_RACE would also be excluded by the since-last-LOCATION slice below,
+    // since it always precedes a race's very first LOCATION row, but it's filtered here too
+    // for the same belt-and-braces reason MODE_START already is).
     // Further sliced to "since the last relocation, inclusive" — see
     // EntryLogModeEngine.observeCurrentSegmentEntries's own identical doc for why this is a
     // second, additional boundary rather than being baked into observeCurrentSegment's own RESET
@@ -46,7 +49,7 @@ class TimeModeRepository(
     fun observeCurrentSegmentSplits(raceId: Long): Flow<List<HistoryLineEntity>> =
         historyLineDao.observeCurrentSegment(raceId, HistoryMode.TIME, HistoryAction.RESET).map {
             val folded = foldLatestVisible(
-                it.filter { s -> s.action != HistoryAction.MODE_START },
+                it.filter { s -> s.action != HistoryAction.MODE_START && s.action != HistoryAction.NEW_RACE },
                 { s -> s.lineNumber },
                 { s -> s.refLineNumber },
                 { s -> s.action == HistoryAction.UNDO },
@@ -216,10 +219,10 @@ class TimeModeRepository(
     // edited echo whose displayed content no longer matches its original semantic.
     suspend fun undoMostRecent(raceId: Long) {
         db.withTransaction {
-            // MODE_START excluded, same as observeCurrentSegmentSplits — it must never become an
-            // undo target (the operator can't even see it to know it's there).
+            // MODE_START/NEW_RACE excluded, same as observeCurrentSegmentSplits — neither must
+            // ever become an undo target (the operator can't even see either to know it's there).
             val raw = historyLineDao.getCurrentSegmentSnapshot(raceId, HistoryMode.TIME, HistoryAction.RESET)
-                .filter { it.action != HistoryAction.MODE_START }
+                .filter { it.action != HistoryAction.MODE_START && it.action != HistoryAction.NEW_RACE }
             val folded = foldLatestVisible(raw, { s -> s.lineNumber }, { s -> s.refLineNumber }, { s -> s.action == HistoryAction.UNDO })
             val target = folded.firstOrNull() ?: return@withTransaction
             val rootLineNumber = target.refLineNumber ?: target.lineNumber

@@ -29,6 +29,9 @@ fun HistoryAction.displayName(): String = when (this) {
     // carried in `note` and rendered alongside this label the same way any other row's note
     // already is.
     HistoryAction.LOCATION -> "Location"
+    // Race History is the only place this is ever shown (see HistoryAction.NEW_RACE's own doc)
+    // — a pure invalidation marker for other devices/the server, never operator-interactive.
+    HistoryAction.NEW_RACE -> "New Race"
 }
 
 // Deliberately excludes every marker action (CLOCK/STOP/RESET/UNDO, plus the Time-only SPLIT,

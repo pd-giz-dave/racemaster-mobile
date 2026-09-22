@@ -281,6 +281,18 @@ class SyncRecordMappingTest {
     }
 
     @Test
+    fun newRaceMarkerRoundTripsThroughTheWireOnItsOwnDistinctValue() {
+        // HistoryAction.NEW_RACE — every sync recipient's "discard whatever you already hold for
+        // this race+device identity" signal (see RaceRepository.recordModeStart, written once as
+        // a race's very first line). Deliberately its own distinct wire value, not aliased to
+        // anything else, so the server/a Mule/the web app can reliably detect it.
+        val record = line(HistoryMode.BIBS, HistoryAction.NEW_RACE, splitNumber = 0, timestampMillis = 0L).toSyncRecord(null)
+        assertEquals("NewRace", record.action)
+        assertNull(record.bibNumber)
+        assertEquals(HistoryAction.NEW_RACE, record.toHistoryAction())
+    }
+
+    @Test
     fun modeStartCarriesNoBibNumberOrSplitTimeRegardlessOfMode() {
         // Its own explicit mode declaration lives in `note` instead (see AppMode.wireName()) —
         // bibNumber/splitNumber are always null, and splitTime is always null too now (even for

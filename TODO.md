@@ -86,3 +86,6 @@ race setup fields) and it stops advertising itself and stops updating the web.
       to dump it as well (ie. ensure it gets flushed from everywhere, mule should also tell the
       web-app its gone and remove it from the server, else it keeps coming back
 - [ ] on setup race screen, add a "No race" button alongside "Save" that when selected resets
+- [ ] when attempt to relocate an active race instead of rejecting it offer the option of stopping
+      and then doing the relocate (auto add the stop record as if the user pressed STOP in the
+      mode screen)

@@ -140,9 +140,10 @@ class TimeModeRepositoryTest {
 
         assertEquals(null, db.raceDao().getById(raceId)?.timeModeStartedAtMillis)
         assertTrue(repository.observeCurrentSegmentSplits(raceId).first().isEmpty())
-        // The Start row itself is never deleted — only an undo-marker was appended. Also still
-        // carries its own MODE_START boundary marker from startStopwatch.
-        assertEquals(3, db.historyLineDao().observeAllForRace(raceId).first().size)
+        // The Start row itself is never deleted — only an undo-marker was appended. No
+        // MODE_START row here — that's written up front by RaceRepository.recordModeStart
+        // (Setup Race / Relocate), not by startStopwatch itself.
+        assertEquals(2, db.historyLineDao().observeAllForRace(raceId).first().size)
     }
 
     @Test
@@ -154,10 +155,12 @@ class TimeModeRepositoryTest {
 
         repository.resetStopwatch(raceId, resetAtMillis = 6_000L)
 
-        // Nothing is deleted — every pre-reset row (MODE_START, Start, both splits, Stop) plus
-        // the new Reset marker are all still present in the full-history query.
+        // Nothing is deleted — every pre-reset row (Start, both splits, Stop) plus the new
+        // Reset marker are all still present in the full-history query. No MODE_START row here
+        // — that's written up front by RaceRepository.recordModeStart (Setup Race / Relocate),
+        // not by startStopwatch itself.
         val allSplits = db.historyLineDao().observeAllForRace(raceId).first()
-        assertEquals(6, allSplits.size)
+        assertEquals(5, allSplits.size)
         val resetRow = allSplits.single { it.action == HistoryAction.RESET }
         assertEquals(6_000L, resetRow.timestampMillis)
         // Reset is a boundary marker, not a real logged split — no splitNumber of its own.
@@ -174,15 +177,15 @@ class TimeModeRepositoryTest {
         assertTrue(db.historyLineDao().observeCurrentSegment(raceId, HistoryMode.TIME, HistoryAction.RESET).first().isEmpty())
 
         // The race can be started fresh afterward, numbering from scratch in the new segment,
-        // while the full history still contains everything from both segments. The raw DAO
-        // query used here (unlike the repository's own observeCurrentSegmentSplits) still
-        // includes the new segment's own MODE_START row.
+        // while the full history still contains everything from both segments. The RESET row
+        // itself is excluded here (observeCurrentSegment's own SQL boundary is strictly
+        // greater-than), so only the new segment's Start (splitNumber 0) and split (1) show.
         repository.startStopwatch(raceId, startedAtMillis = 9_000L)
         repository.recordSplit(raceId)
         val currentSegmentNumbers =
             db.historyLineDao().observeCurrentSegment(raceId, HistoryMode.TIME, HistoryAction.RESET).first().map { it.splitNumber }.sortedBy { it }
-        assertEquals(listOf(null, 0, 1), currentSegmentNumbers)
-        assertEquals(9, db.historyLineDao().observeAllForRace(raceId).first().size)
+        assertEquals(listOf(0, 1), currentSegmentNumbers)
+        assertEquals(7, db.historyLineDao().observeAllForRace(raceId).first().size)
     }
 
     @Test
@@ -197,7 +200,7 @@ class TimeModeRepositoryTest {
         // genuinely verifies lineNumber tracks insertion order strictly ascending with no
         // repeats.
         val lineNumbersInInsertionOrder = db.historyLineDao().observeAllForRace(raceId).first().sortedBy { it.id }.map { it.lineNumber }
-        assertEquals(7, lineNumbersInInsertionOrder.size)
+        assertEquals(5, lineNumbersInInsertionOrder.size)
         assertEquals(lineNumbersInInsertionOrder.distinct(), lineNumbersInInsertionOrder)
         for (i in 1 until lineNumbersInInsertionOrder.size) {
             assertTrue(lineNumbersInInsertionOrder[i] > lineNumbersInInsertionOrder[i - 1])
@@ -215,7 +218,7 @@ class TimeModeRepositoryTest {
         // not reach back into the old segment.
         repository.undoMostRecent(raceId)
 
-        assertEquals(5, db.historyLineDao().observeAllForRace(raceId).first().size)
+        assertEquals(4, db.historyLineDao().observeAllForRace(raceId).first().size)
         assertTrue(db.historyLineDao().observeCurrentSegment(raceId, HistoryMode.TIME, HistoryAction.RESET).first().isEmpty())
     }
 
@@ -292,8 +295,8 @@ class TimeModeRepositoryTest {
         repository.updateNote(startRow.id, "Not actually the start")
 
         // No echo was inserted — the repository-level root-guard refuses to edit a row whose
-        // root is a reserved marker. Still just the MODE_START/Start pair from startStopwatch.
-        assertEquals(2, db.historyLineDao().observeAllForRace(raceId).first().size)
+        // root is a reserved marker. Still just the single Start row from startStopwatch.
+        assertEquals(1, db.historyLineDao().observeAllForRace(raceId).first().size)
     }
 
     // Regression test for the HistoryFold ordering bug: sinceLastLocationMarker used to be
@@ -337,11 +340,14 @@ class TimeModeRepositoryTest {
             repository.observeCurrentSegmentSplits(raceId).first().map { it.action },
         )
 
-        // First Undo: undoes the relocate, restoring the prior location/counter — and the
-        // earlier Stop becomes visible again instead of staying hidden.
+        // First Undo: undoes the relocate — with no LOCATION marker left standing,
+        // sinceLastLocationMarker's own no-boundary-found case returns the folded segment
+        // unchanged (see its own doc), correctly revealing the whole pre-relocate segment as it
+        // stood before the relocate (Stop, the split, and Start) — none of it was ever behind an
+        // earlier LOCATION boundary to begin with, since this was the race's first segment.
         repository.undoMostRecent(raceId)
         assertEquals(
-            listOf(HistoryAction.STOP),
+            listOf(HistoryAction.STOP, HistoryAction.SPLIT, HistoryAction.START),
             repository.observeCurrentSegmentSplits(raceId).first().map { it.action },
         )
         assertEquals("Finish", db.raceDao().getById(raceId)?.location)
