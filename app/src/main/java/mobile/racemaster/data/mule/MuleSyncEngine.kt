@@ -602,16 +602,44 @@ class MuleSyncEngine(
     // Silently does nothing on any tick where there's no active race, no configured server, or
     // no login yet, exactly the same "not an error, just nothing to do right now" posture
     // autoPullIfArmed's own gates already use elsewhere in this engine.
+    //
+    // Also where server-side adoption lands (TODO.md "Concept gap"): the web app records "this
+    // device, pushing under this arbitrary race name, is really race X" as a marker in the folder
+    // the device pushes to. This device checks for its own before fetching progress (so the fetch
+    // then uses the adopted label), and — for Bluetooth-only peers it relays, whose records it
+    // pushes under its own login and so whose markers sit in its own folder — hands each adoption
+    // on through the existing targeted-delivery path (deliverTargetedProgressIfPending).
     private fun startProgressPollLoop() {
         engineScope.launch {
             while (isActive) {
                 delay(PROGRESS_POLL_INTERVAL)
-                val raceId = settingsRepository.activeRaceId.first() ?: continue
-                val race = raceRepository.getRace(raceId) ?: continue
                 val baseUrl = settingsRepository.serverBaseUrl.first() ?: continue
                 val token = settingsRepository.authToken.first() ?: continue
+                relayPeerAdoptions()
+                val raceId = settingsRepository.activeRaceId.first() ?: continue
+                var race = raceRepository.getRace(raceId) ?: continue
+                val adoptedLabel = muleRepository.adoptionFor(race.label, settingsRepository.getOrCreateDeviceName())
+                if (adoptedLabel != null && adoptedLabel != race.label) {
+                    runCatching { raceRepository.adoptRaceIdentity(raceId, adoptedLabel) }
+                        .onSuccess { Log.i(TAG, "adopted race identity via server: raceId=$raceId ${race.label} -> $adoptedLabel") }
+                        .onFailure { Log.w(TAG, "server adoption failed: raceId=$raceId -> $adoptedLabel", it) }
+                    race = raceRepository.getRace(raceId) ?: continue
+                }
                 progressRepository.refreshFromServer(baseUrl, token, raceId, race.label)
             }
+        }
+    }
+
+    private suspend fun relayPeerAdoptions() {
+        val peers = (discoveredFlow.value.values + relayFlow.value.values)
+            .filter { !it.isSelf && it.deviceId != null && it.deviceName.isNotBlank() && it.raceLabel.isNotBlank() }
+            .distinctBy { it.deviceId }
+        for (peer in peers) {
+            val target = muleRepository.adoptionFor(peer.raceLabel, peer.deviceName) ?: continue
+            if (target == peer.raceLabel) continue
+            val payload = muleRepository.progressPayloadFor(target).copy(targetRaceLabel = target)
+            progressRepository.cacheTargetedProgress(requireNotNull(peer.deviceId), payload)
+            Log.i(TAG, "server adoption queued for peer ${peer.deviceName}: ${peer.raceLabel} -> $target")
         }
     }
 

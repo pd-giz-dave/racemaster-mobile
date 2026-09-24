@@ -3,6 +3,7 @@ package mobile.racemaster.data.db.dao
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
+import androidx.room.Transaction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
 import kotlinx.coroutines.flow.Flow
@@ -60,6 +61,21 @@ interface HistoryLineDao {
     @Query("SELECT COUNT(*) FROM history_lines WHERE raceId = :raceId AND mode = :mode AND syncedAtMillis IS NULL")
     fun observeUnsyncedCountForRace(raceId: Long, mode: HistoryMode): Flow<Int>
 
+    // Total row count this race has ever written, across every mode/segment — Race History's own
+    // "N entries from <device>" line. Unscoped by mode/action (every marker and real split
+    // counts) — the same permanent, ever-growing count RaceEntity.nextLineNumber - 1 tracks, just
+    // sourced from the real rows rather than that counter, so it stays correct independent of it.
+    @Query("SELECT COUNT(*) FROM history_lines WHERE raceId = :raceId")
+    fun observeEntryCount(raceId: Long): Flow<Int>
+
+    // Unscoped-by-mode counterpart to observeLastSyncedAtMillis(raceId, mode) above — Race
+    // History's own list row needs this race's overall last-synced moment regardless of which
+    // mode(s) it recorded in, without combining three separate per-mode flows the way
+    // RaceHistoryDetailViewModel's lastSyncedFlow does (same result here in one query, since
+    // MAX() across all this race's rows is identical to the max of the three per-mode MAX()es).
+    @Query("SELECT MAX(syncedAtMillis) FROM history_lines WHERE raceId = :raceId")
+    fun observeLastSyncedAtMillisForRace(raceId: Long): Flow<Long?>
+
     // Most recent time this race's rows for THIS mode were confirmed synced somewhere — either
     // a genuinely different physical Mule acking a BLE pull (PeripheralSyncService.markSynced),
     // or (for this device's own self-push) MuleRepository.pushToServer's own server-status
@@ -99,8 +115,23 @@ interface HistoryLineDao {
     // device's own self-push confirmation) carries back for its own-race case (see AckedOrigin's
     // own doc) — raceId is required alongside lineNumber since a device's own lineNumber
     // sequence restarts at 1 for every race it's ever recorded, not just its current one.
+    // `internal`, not called directly — see markSynced below, which chunks against
+    // SQLITE_MAX_IN_LIST_PARAMS before ever reaching this.
     @Query("UPDATE history_lines SET syncedAtMillis = :syncedAtMillis WHERE raceId = :raceId AND lineNumber IN (:lineNumbers)")
-    suspend fun markSynced(raceId: Long, lineNumbers: List<Long>, syncedAtMillis: Long)
+    suspend fun markSyncedChunk(raceId: Long, lineNumbers: List<Long>, syncedAtMillis: Long)
+
+    // See SQLITE_MAX_IN_LIST_PARAMS's own doc — confirmed in the field ("fx_tec" phone, Mule
+    // mode): a large batch of newly-confirmed lines (e.g. a mule catching up after being out of
+    // range for a while) blew straight through markSyncedChunk's own IN-list as one statement
+    // ("too many SQL variables"). @Transaction keeps the whole batch atomic — either every chunk
+    // lands or (on a mid-batch failure) none does, so a partially-applied mark never leaves some
+    // of this round's lines silently still reading unsynced.
+    @Transaction
+    suspend fun markSynced(raceId: Long, lineNumbers: List<Long>, syncedAtMillis: Long) {
+        for (chunk in lineNumbers.chunked(SQLITE_MAX_IN_LIST_PARAMS)) {
+            markSyncedChunk(raceId, chunk, syncedAtMillis)
+        }
+    }
 
     // Everything for [raceId] up to and including [sinceLineNumber] this device's own
     // bookkeeping never got an explicit ack for — see PeripheralSyncService.backfillSinkAck's

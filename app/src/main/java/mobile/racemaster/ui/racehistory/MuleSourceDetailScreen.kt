@@ -67,7 +67,7 @@ fun MuleSourceDetailScreen(
                         splitNumber = it.splitNumber,
                         actionLabel = it.action.displayName(),
                         bibNumber = it.bibNumber,
-                        elapsedMillis = if (it.isTimeRecord) it.elapsedMillis else null,
+                        elapsedMillis = it.elapsedMillis,
                         timestampMillis = it.timestampMillis,
                         note = it.note,
                         syncState = it.syncState,

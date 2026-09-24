@@ -27,10 +27,10 @@ interface RaceDao {
     @Query("SELECT * FROM races ORDER BY createdAtMillis DESC")
     fun observeAll(): Flow<List<RaceEntity>>
 
-    // Used to resolve a self-originated PulledRecordEntity's sourceRaceLabel back to this
-    // device's own local race, for Phase D's server-sync line attribution. LIMIT 1 defensive
-    // only — a race label is effectively unique among this device's own races in practice.
-    @Query("SELECT * FROM races WHERE label = :label LIMIT 1")
+    // The newest local race under [label] — Setup Race continues this one rather than creating a
+    // duplicate (see RaceRepository.startOrContinueRace). Newest-first because a device can still
+    // hold older same-label duplicates created before that rule existed.
+    @Query("SELECT * FROM races WHERE label = :label ORDER BY createdAtMillis DESC, id DESC LIMIT 1")
     suspend fun getByLabel(label: String): RaceEntity?
 
     @Query("UPDATE races SET timeModeNextSplit = timeModeNextSplit + 1 WHERE id = :raceId")

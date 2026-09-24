@@ -200,7 +200,11 @@ fun SetupRaceScreen(
                 is AvailableRacesState.Found -> AvailableRacesDialog(
                     races = state.races,
                     onPick = { race ->
-                        name = race.raceName.ifBlank { race.raceLabel }
+                        // The exact server folder label (e.g. "lmv-seniors-26-09-23"), not the
+                        // progress file's display name — the race label is the name verbatim
+                        // (buildRaceLabel), so anything else would record under a different
+                        // folder from the one this race's progress.json lives in.
+                        name = race.raceLabel
                         viewModel.dismissAvailableRaces()
                     },
                     onDismiss = viewModel::dismissAvailableRaces,

@@ -77,10 +77,6 @@ one.
 - [ ] races history is showing multiple (self) lists for the same race
 - [ ] races history is showing multiple progress lists for the same race
      (maybe due to coming via different sources?)
-- [ ] progress files should be labelled "race-name" on line 1 (same as history files) then on
-      line 2 "progress as at <time>, # entries", remove the icon
-- [ ] races history line 2 should read "# entries from ..." not just "from..."
-- [ ] show last sync'd on line 3 for a history file (echoing what is shown in the file)
 - [ ] if a self history file is deleted, delete it on the web too and tell any connected mules
       to dump it as well (ie. ensure it gets flushed from everywhere, mule should also tell the
       web-app its gone and remove it from the server, else it keeps coming back
@@ -116,11 +112,53 @@ one.
 - [x] suppress location lines in the mode screen lists, it adds no information (its already echoed
       in the summary block) and just confuses the phone operator
 - [x] time mode's location/reset/new race records are still getting a split time, they should be
-      null like bibs/cp's own records for these (fixed on the wire and in Race History's own
-      local display; the web-app's Time/Bibs classification, which used to lean on splitTime
+      null like bibs/cp's own records for these (fixed on the wire and in Race History's own      local display; the web-app's Time/Bibs classification, which used to lean on splitTime
       nullness to tell these shared-action rows apart, now resolves each via its own structural
       neighbour instead)
-- [ ] progress records are not getting propagated from the server/web-app BT to the phones
-- [ ] history line formats on the phones are not consistent with modern system, specifically
+- [x] progress records are not getting propagated from the server/web-app BT to the phones
+- [x] history line formats on the phones are not consistent with modern system, specifically
       null times are being shown as 00:00:00 and null bibs are being shown as n/a
+- [x] NewRace marker is being processed on every push to the server, resulting in the file
+      being dumped and fully re-loaded on every push
+- [x] progress files should be labelled "race-name" on line 1 (same as history files) then on
+  line 2 "progress as at <time>, # entries", remove the icon
+- [x] races history line 2 should read "# entries from ..." not just "from..."
+- [x] show last sync'd on line 3 for a history file (echoing what is shown in the file)
 
+- [x] i did this sequence on the cubot: setup a race of unknwon-26-09-23 in time mode at the finish, 
+      i started time mode, added a few split entries then reset it,
+      those entries got sync'd to the server,
+      i then setup the same race again in time mode at the finish as before,
+      i started it and made some split entries,
+      the latter race is not being sync'd,
+      the phones history shows two identically named races,
+      one marked active (but not being sync'd), the other not
+
+## Concept gap
+
+Progress is not getting to the phones from the web-app when its only connected via http to a
+a server. The reason, I think, is because the phone are looking in the wrong place. They are
+looking in the folder for the arbitrary initial name they gave the race, and its not there. 
+
+- [x] once a device is 'adopted' in the web-app, that adoption needs to be fed back to phones
+      so they pick up the progress, initially the phones have an arbitrary race name but once
+      adopted the current race on the phones needs to update to the actual race name, that
+      can happen via BT or via the server, the BT case is currently handled (but check) but
+      the server case is not, the phones will be looking for a progress.json under their
+      initial arbitrary name, the web-app knows what that arbitrary name is, so I suggest this:
+  - the web-app for each adopted device writes a file to the folder the device is looking at
+    with the name 'adopted-to-<race-name>.json', where <race-name> is the true name of the
+    race
+  - the web-continues to write progress.json as now in the true race folder
+  - the mobile-app detects these 'adopted-to...' files and changes the race name of itself
+    accordingly (ie. actually adopts the race)
+  - (as built: one `adoptions.json` per folder, keyed by device name — many phones share the
+    default `unknown-<date>` folder; the phone reads it via
+    GET /api/mobile/<label>/adoption/<deviceName>)
+        
+- [x] a mule should be involved too, for this scenario: the mule is connected to the server
+      over HTTP but not the web-app, other phones are not connected to the server but they
+      are connected to the mule over bt.
+  - in this scenario the mule (knowing the device name and race name of every phone it can see)
+    can read the adopted-to... files on behalf of the device and relay it back to the phones
+    (using the existing BT mechanism for doing that)

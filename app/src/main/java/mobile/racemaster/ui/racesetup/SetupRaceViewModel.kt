@@ -118,7 +118,8 @@ class SetupRaceViewModel(
         settingsRepository.saveSetupRaceDraft(name, location, mode)
     }
 
-    /** Creates a new race under [name]/[location]/[mode], makes it this device's active race,
+    /** Creates a new race under [name]/[location]/[mode] — or continues this device's existing,
+     *  non-stale race of the same name (see [RaceRepository.startOrContinueRace]) — makes it this device's active race,
      *  records its own initial LOCATION+MODE_START pair (see
      *  [RaceRepository.recordModeStart]'s own doc — this is what lets the web app see this
      *  device's station and mode as soon as it's set up, over either transport, not just once the
@@ -133,9 +134,9 @@ class SetupRaceViewModel(
         val trimmedLocation = location.trim()
         settingsRepository.addRaceNameToHistory(trimmedName)
         settingsRepository.addLocationToHistory(trimmedLocation)
-        val newRaceId = raceRepository.startNewRace(trimmedName, location = trimmedLocation)
-        raceRepository.switchActiveRace(newRaceId)
-        raceRepository.recordModeStart(newRaceId, mode, trimmedLocation)
+        val raceId = raceRepository.startOrContinueRace(trimmedName, trimmedLocation, settingsRepository.raceStaleAfterDays.first())
+        raceRepository.switchActiveRace(raceId)
+        raceRepository.recordModeStart(raceId, mode, trimmedLocation)
         muleRepository.announceRaceSetup()
     }
 

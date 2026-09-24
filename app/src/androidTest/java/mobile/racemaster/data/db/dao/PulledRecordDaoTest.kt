@@ -283,4 +283,38 @@ class PulledRecordDaoTest {
         val activity = dao.observeLastTouchedByRaceLabel().first().associate { it.sourceRaceLabel to it.lastTouchedAtMillis }
         assertEquals(mapOf("Shared Label" to 300L, "Other Label" to 200L), activity)
     }
+
+    @Test
+    fun getAtLineNumberUnderOtherLabelsFindsOnlyThatDevicesOtherLabelsAtThatLine() = runTest {
+        dao.insertAll(
+            listOf(
+                record(1L, sourceDeviceId = "device-2", sourceRaceLabel = "unknown-26-09-23"),
+                record(2L, sourceDeviceId = "device-2", sourceRaceLabel = "unknown-26-09-23"),
+                record(1L, sourceDeviceId = "device-2", sourceRaceLabel = "lmv-seniors"),
+                record(1L, sourceDeviceId = "device-3", sourceRaceLabel = "unknown-26-09-23"),
+            ),
+        )
+
+        val rows = dao.getAtLineNumberUnderOtherLabels("device-2", "lmv-seniors", 1L)
+
+        assertEquals(listOf("unknown-26-09-23" to 1L), rows.map { it.sourceRaceLabel to it.lineNumber })
+    }
+
+    // Confirmed in the field ("fx_tec" phone, Mule mode): marking a large backlog synced/relayed
+    // in one call used to compile straight to a `lineNumber IN (:lineNumbers)` query, which blew
+    // through SQLite's own per-statement bound-parameter cap once the list ran into the hundreds
+    // ("too many SQL variables" — see SQLITE_MAX_IN_LIST_PARAMS's own doc). Both methods now
+    // chunk internally, so this must succeed (not throw) and apply to every row of a batch well
+    // past that cap, not just the first chunk's worth.
+    @Test
+    fun markSyncedAndMarkConfirmationRelayedHandleABatchLargerThanSqlitesInListParamCap() = runTest {
+        val lineNumbers = (1L..2_500L).toList()
+        dao.insertAll(lineNumbers.map { record(it, sourceDeviceId = "device-2", sourceRaceLabel = "Shared Label") })
+
+        dao.markSynced("device-2", "Shared Label", lineNumbers, syncedAtMillis = 1_000L)
+        assertEquals(0, dao.observeUnsyncedCount().first())
+
+        dao.markConfirmationRelayed("device-2", "Shared Label", lineNumbers, relayedAtMillis = 2_000L)
+        assertEquals(emptyList<Long>(), dao.getUnrelayedSinkConfirmedLineNumbersForSource("device-2", "Shared Label"))
+    }
 }

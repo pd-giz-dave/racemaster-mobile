@@ -10,6 +10,7 @@ import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.LineSyncEntity
 import mobile.racemaster.data.db.entity.RaceEntity
+import mobile.racemaster.data.mule.isRaceStale
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.data.settings.toHistoryMode
@@ -97,6 +98,18 @@ class RaceRepository(
                 abandonRaceSetup(raceId)
                 return@withTransaction true
             }
+            // A race continued by Setup Race (see startOrContinueRace) has no NEW_RACE ahead of
+            // its later setup's own first LOCATION — that row follows the earlier setup's RESET
+            // instead — so "back to the beginning" there means every visit in every mode is now
+            // closed.
+            val anyVisitStillOpen = HistoryMode.entries.any { m ->
+                val s = visitsSnapshot(raceId, m)
+                s.allVisits.any { it.locationLineNumber !in s.resetTargetLineNumbers }
+            }
+            if (!anyVisitStillOpen) {
+                abandonRaceSetup(raceId)
+                return@withTransaction true
+            }
             false
         }
 
@@ -146,6 +159,21 @@ class RaceRepository(
     // label is the name verbatim (see buildRaceLabel — no date or course is ever appended: a name
     // inherited from the server, or already following its own naming convention, must never be
     // silently modified).
+    // Setup Race's own entry point: one local race per label, so the same name set up again on
+    // the same device (e.g. after resetting it right back to the beginning) continues that race's
+    // history — one device file on the server, one Race History entry — rather than creating a
+    // second same-label race that shadows it (confirmed in the field: the second one never synced,
+    // and both showed as identically-named entries). A race gone stale (no activity within
+    // [maxAgeDays], e.g. last year's run of the same event) is not continued — a fresh race is
+    // created instead, whose own NEW_RACE marker supersedes the old data on the server.
+    suspend fun startOrContinueRace(name: String, location: String, maxAgeDays: Int): Long {
+        val existing = raceDao.getByLabel(buildRaceLabel(name))
+        if (existing != null && !isRaceStale(historyLineDao.observeLastActivityAtMillis(existing.id).first(), maxAgeDays)) {
+            return existing.id
+        }
+        return startNewRace(name, location = location)
+    }
+
     suspend fun startNewRace(
         name: String,
         location: String = "Finish",
@@ -450,6 +478,14 @@ class RaceRepository(
     // gets, just sourced from this device's own real data instead of a relay's own
     // bookkeeping), and by Race History to show a local race as "too old for server sync".
     fun observeLastActivityAtMillis(raceId: Long): Flow<Long?> = historyLineDao.observeLastActivityAtMillis(raceId)
+
+    // Race History's own "N entries from <device>" line — see HistoryLineDao.observeEntryCount's
+    // own doc.
+    fun observeEntryCount(raceId: Long): Flow<Int> = historyLineDao.observeEntryCount(raceId)
+
+    // Race History's own list-row "Last synced" line — see
+    // HistoryLineDao.observeLastSyncedAtMillisForRace's own doc.
+    fun observeLastSyncedAtMillis(raceId: Long): Flow<Long?> = historyLineDao.observeLastSyncedAtMillisForRace(raceId)
 
     // Mode-scoped one-shot version of the above — see MuleSyncEngine's own Ping-heartbeat loop,
     // the only caller: it needs to know how long ONE mode specifically has gone quiet, not the

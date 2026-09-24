@@ -210,4 +210,21 @@ class HistoryLineDaoTest {
     fun lastActivityAtMillisIsNullForARaceWithNoHistoryYet() = runTest {
         assertNull(dao.observeLastActivityAtMillis(raceId).first())
     }
+
+    // Confirmed in the field ("fx_tec" phone, Mule mode): a mule catching up on a large backlog
+    // in one round marked hundreds of lines synced in a single markSynced() call, and the
+    // straight `lineNumber IN (:lineNumbers)` query this used to compile to blew through
+    // SQLite's own per-statement bound-parameter cap ("too many SQL variables" — see
+    // SQLITE_MAX_IN_LIST_PARAMS's own doc). markSynced now chunks internally, so this must
+    // succeed (not throw) and mark every one of a batch well past that cap, not just the first
+    // chunk's worth.
+    @Test
+    fun markSyncedHandlesABatchLargerThanSqlitesInListParamCap() = runTest {
+        val lineNumbers = (1L..2_500L).toList()
+        for (n in lineNumbers) dao.insert(line(HistoryMode.BIBS, HistoryAction.FINISH, lineNumber = n))
+
+        dao.markSynced(raceId, lineNumbers, syncedAtMillis = 1_000L)
+
+        assertEquals(0, dao.observeUnsyncedCountForRace(raceId, HistoryMode.BIBS).first())
+    }
 }

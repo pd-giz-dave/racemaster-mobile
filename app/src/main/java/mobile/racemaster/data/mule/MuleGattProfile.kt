@@ -565,4 +565,10 @@ data class ProgressPayload(
     // device whose own deviceId matches it (the adoption case above); an intermediate mule
     // forwarding this on to someone else never reads it, just relays the whole payload verbatim.
     val targetRaceLabel: String? = null,
+    // The target's own current (pre-adoption) race label and device name, as the server knows it
+    // — set by the racemaster web app on a relay-forwarded adoption so a logged-in mule can write
+    // the server's adoption marker on the web app's behalf (see
+    // PeripheralSyncService.handleProgressPayload); null on every other payload.
+    val fromRaceLabel: String? = null,
+    val targetDeviceName: String? = null,
 )

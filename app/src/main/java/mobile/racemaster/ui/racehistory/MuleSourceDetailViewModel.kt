@@ -21,7 +21,10 @@ data class MulePulledRecordUi(
     val bibNumber: Int?,
     val splitNumber: Int?,
     val lineNumber: Long,
-    val elapsedMillis: Long,
+    // Null for a boundary/heartbeat marker or a Bibs-family row — see
+    // RaceHistoryDetailViewModel.ArchivedHistoryLineUi.elapsedMillis' own doc for why this must
+    // stay null rather than 0 to avoid a misleading "00:00:00" in HistoryLineRow.
+    val elapsedMillis: Long?,
     val timestampMillis: Long,
     val note: String?,
     // Deliberately never LineSyncState.RELAYED — a mule's own held copy of another device's
@@ -96,7 +99,7 @@ class MuleSourceDetailViewModel(
                         bibNumber = it.record.bibNumber,
                         splitNumber = it.record.splitNumber,
                         lineNumber = it.record.lineNumber,
-                        elapsedMillis = (it.record.splitTime ?: 0) * 1000L,
+                        elapsedMillis = it.record.splitTime?.let { s -> s * 1000L },
                         timestampMillis = it.record.timestampMillis,
                         note = it.record.note,
                         syncState = if (it.syncedAtMillis != null) LineSyncState.SYNCED else LineSyncState.NOT_SYNCED,

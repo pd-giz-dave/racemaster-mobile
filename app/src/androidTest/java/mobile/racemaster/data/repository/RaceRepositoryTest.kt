@@ -213,6 +213,53 @@ class RaceRepositoryTest {
         assertEquals(1, db.raceDao().getById(raceId)?.timeModeNextSplit)
     }
 
+    // startOrContinueRace — TODO.md: set up a race, start it, reset it right back to the
+    // beginning, then set up the same race again: the second setup used to create a second
+    // same-label race that never synced and showed as a duplicate entry in Race History.
+
+    @Test
+    fun settingUpTheSameRaceAgainAfterAFullResetContinuesItInsteadOfDuplicatingIt() = runTest {
+        val first = repository.startOrContinueRace("unknown-26-09-23", "Finish", maxAgeDays = 7)
+        repository.switchActiveRace(first)
+        repository.recordModeStart(first, AppMode.TIME, "Finish")
+        assertEquals(true, repository.closeCurrentSegment(first, HistoryMode.TIME))
+        assertNull(settingsRepository.activeRaceId.first())
+
+        val second = repository.startOrContinueRace("unknown-26-09-23", "Finish", maxAgeDays = 7)
+        repository.switchActiveRace(second)
+        repository.recordModeStart(second, AppMode.TIME, "Finish")
+
+        assertEquals(first, second)
+        assertEquals(1, repository.observeAllRaces().first().count { it.label == "unknown-26-09-23" })
+        val rows = db.historyLineDao().observeAllForRace(first).first()
+        assertEquals(1, rows.count { it.action == HistoryAction.NEW_RACE })
+        assertEquals(1, db.raceDao().getById(first)?.timeModeNextSplit)
+    }
+
+    @Test
+    fun resettingAContinuedRaceBackToTheBeginningStillRevertsToNoRaceSetup() = runTest {
+        val id = repository.startOrContinueRace("again", "Finish", maxAgeDays = 7)
+        repository.switchActiveRace(id)
+        repository.recordModeStart(id, AppMode.TIME, "Finish")
+        repository.closeCurrentSegment(id, HistoryMode.TIME)
+        repository.startOrContinueRace("again", "Finish", maxAgeDays = 7)
+        repository.switchActiveRace(id)
+        repository.recordModeStart(id, AppMode.TIME, "Finish")
+
+        assertEquals(true, repository.closeCurrentSegment(id, HistoryMode.TIME))
+        assertNull(settingsRepository.activeRaceId.first())
+    }
+
+    @Test
+    fun aStaleSameNamedRaceIsNotContinued() = runTest {
+        val old = repository.startOrContinueRace("annual", "Finish", maxAgeDays = 7)
+        repository.recordModeStart(old, AppMode.TIME, "Finish", timestampMillis = 0L)
+
+        val fresh = repository.startOrContinueRace("annual", "Finish", maxAgeDays = 7)
+
+        assertEquals(false, old == fresh)
+    }
+
     // switchActiveRace — the "auto delete the empty placeholder" cleanup every setActiveRaceId
     // call site routes through instead of calling settingsRepository.setActiveRaceId directly.
     // Judged by whether the race being switched away from has ever recorded a single history

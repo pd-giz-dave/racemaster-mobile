@@ -103,12 +103,12 @@ fun HistoryLineRow(
                 modifier = Modifier.width(60.dp),
             )
             Text(
-                // elapsedMillis == null is exactly "this is a Bibs-family row" (both callers
-                // only ever pass a real elapsed time for a Time row) — "n/a" for a Bibs row with
-                // no bib # (Clock/Stop/Reset/etc.) visually distinguishes a genuinely inapplicable
-                // bib from "–", which instead marks the structural cross-mode absence (this is a
-                // Time row, which never has a bib # at all).
-                bibNumber?.toString() ?: if (elapsedMillis == null) "n/a" else "–",
+                // "–" for any row with no bib # — a Time row (which never has one at all) and a
+                // Bibs/CP boundary marker (Clock/Stop/Reset/etc., which has no bib of its own)
+                // are shown identically, matching every other null field in this row (and the
+                // racemaster web app's own Mobile Files table) rather than singling bib out with
+                // its own "n/a" sentinel.
+                bibNumber?.toString() ?: "–",
                 style = MaterialTheme.typography.bodyMedium,
                 color = rowColor,
                 maxLines = 1,

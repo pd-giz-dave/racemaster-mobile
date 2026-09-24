@@ -157,4 +157,35 @@ class MuleRepositoryTest {
     // The unparseable-payload branch also logs via android.util.Log, which isn't available in
     // a plain JVM unit test (no Robolectric/Log mocking set up in this project) — that drop-not-
     // throw behavior is a one-line runCatching/getOrNull, visible directly in the implementation.
+
+    // relabeledSourceLabels — the mule-side cleanup after a peer is adopted into a new race label
+    // (see MuleRepository.storePulledRecords): only the old-label copy of the SAME NewRace marker
+    // (same lineNumber and timestamp) is treated as relabeled, never a genuinely different race.
+
+    private fun newRace(timestampMillis: Long) = SyncRecord(
+        action = "NewRace", bibNumber = null, splitTime = null, splitNumber = null,
+        lineNumber = 1, note = null, timestampMillis = timestampMillis,
+    )
+
+    private fun heldRow(label: String, record: SyncRecord) = PulledRecordEntity(
+        sourceDeviceId = "device-a", sourceRaceLabel = label, lineNumber = record.lineNumber,
+        payloadJson = json.encodeToString(record), pulledAtMillis = 0L,
+    )
+
+    @Test
+    fun theSameNewRaceMarkerUnderAnOldLabelIsReportedAsRelabeled() {
+        val candidates = listOf(heldRow("unknown-26-09-23", newRace(1_000L)))
+
+        assertEquals(listOf("unknown-26-09-23"), relabeledSourceLabels(candidates, newRace(1_000L), json))
+    }
+
+    @Test
+    fun aDifferentRaceStartingAtTheSameLineIsNotRelabeled() {
+        val candidates = listOf(
+            heldRow("last-year", newRace(5L)),
+            heldRow("not-a-marker", timeRecord(1)),
+        )
+
+        assertTrue(relabeledSourceLabels(candidates, newRace(1_000L), json).isEmpty())
+    }
 }

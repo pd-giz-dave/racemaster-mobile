@@ -91,6 +91,12 @@ data class PingResponseBody(val ok: Boolean = false)
 @Serializable
 private data class ErrorResponseBody(val error: String = "")
 
+@Serializable
+data class AdoptionResponse(val raceLabel: String? = null)
+
+@Serializable
+private data class AdoptionRequest(val deviceName: String, val raceLabel: String)
+
 // Thrown by every request below in place of Ktor's own non-2xx handling, which turned out not
 // to be a safe thing to lean on at all: `login`, `getSyncStatus`, and `pushRecords` used to rely
 // on this client's default `expectSuccess` to throw on a non-2xx response and never explicitly
@@ -280,6 +286,35 @@ class MuleSyncClient {
             since?.let { parameter("since", it) }
         }
         return if (response.status.isSuccess()) response.body() else null
+    }
+
+    // Whether [deviceName], pushing under [raceLabel] (typically a phone's arbitrary initial race
+    // name), has been adopted by the web app into a real race — racemaster's
+    // GET /api/mobile/:raceLabel/adoption/:deviceName, looked up in the caller's own login folder
+    // (so a mule asking on a Bluetooth-only peer's behalf finds the marker in the same folder it
+    // pushes that peer's records to). The true race label, or null if not adopted / not reachable.
+    suspend fun getAdoption(baseUrl: String, token: String, raceLabel: String, deviceName: String): String? {
+        val response = client.get(
+            "${baseUrl.trimEnd('/')}/api/mobile/${encodePathSegment(raceLabel)}/adoption/${encodePathSegment(deviceName)}",
+        ) {
+            expectSuccess = false
+            bearerAuth(token)
+        }
+        if (!response.status.isSuccess()) return null
+        return response.body<AdoptionResponse>().raceLabel?.takeIf { it.isNotBlank() }
+    }
+
+    // A mule writing an adoption marker into its own login folder on behalf of a web app that
+    // reached it over Bluetooth but can't reach the server itself — see
+    // PeripheralSyncService.handleProgressPayload.
+    suspend fun postAdoption(baseUrl: String, token: String, fromRaceLabel: String, deviceName: String, targetRaceLabel: String) {
+        val response = client.post("${baseUrl.trimEnd('/')}/api/mobile/${encodePathSegment(fromRaceLabel)}/adoptions") {
+            expectSuccess = false
+            bearerAuth(token)
+            contentType(ContentType.Application.Json)
+            setBody(AdoptionRequest(deviceName, targetRaceLabel))
+        }
+        checkSuccess(response)
     }
 
     // The mobile app's own setup-time server-race-scan (SetupRaceScreen/SetupRaceViewModel) —

@@ -204,6 +204,20 @@ class MuleGattProfileTest {
         assertEquals(payload, decoded)
     }
 
+    // The adoption fields a relay-forwarded payload from the web app carries so a logged-in mule
+    // can write the server's adoption marker on its behalf (see
+    // PeripheralSyncService.handleProgressPayload) — absent on every other payload.
+    @Test
+    fun progressPayloadCarriesAdoptionFields() {
+        val decoded = json.decodeFromString<ProgressPayload>(
+            """{"entries":[],"targetDeviceId":"d1","targetRaceLabel":"lmv-seniors","fromRaceLabel":"unknown-26-09-23","targetDeviceName":"brave-reef"}""",
+        )
+
+        assertEquals("unknown-26-09-23", decoded.fromRaceLabel)
+        assertEquals("brave-reef", decoded.targetDeviceName)
+        assertEquals("lmv-seniors", decoded.targetRaceLabel)
+    }
+
     @Test
     fun progressPayloadDecodesMissingFieldsAsDefaults() {
         val decoded = json.decodeFromString<ProgressPayload>("{}")

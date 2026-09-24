@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.util.formatWallClock
 import mobile.racemaster.util.withClickSound
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -99,16 +99,21 @@ fun RaceHistoryScreen(
                         is HistoryItemUi.LocalRace -> ListItem(
                             headlineContent = { Text(item.label) },
                             supportingContent = {
+                                val entryWord = if (item.entryCount == 1) "entry" else "entries"
                                 val parts = listOfNotNull(
-                                    "From ${item.createdByDeviceName} (self)".takeIf { item.createdByDeviceName.isNotBlank() },
+                                    "${item.entryCount} $entryWord from ${item.createdByDeviceName} (self)"
+                                        .takeIf { item.createdByDeviceName.isNotBlank() },
                                     // Names the actual mode(s) still keeping this active rather
                                     // than a bare "Active" — the operator may be looking at this
                                     // screen precisely because a different mode's own screen
                                     // already looks fully idle (see activeModeLabels' own doc).
-                                    "Active in ${item.activeModeLabels.joinToString(" + ")}, can't be deleted".takeIf { item.isActive },
+                                    "Active in ${item.activeModeLabels.joinToString(" + ")}".takeIf { item.isActive },
                                 )
                                 Column {
                                     if (parts.isNotEmpty()) Text(parts.joinToString(" — "))
+                                    // Mirrors Race History's own detail screen, one level up on
+                                    // the list row itself.
+                                    Text("Last synced: ${item.lastSyncedAtMillis?.let { formatWallClock(it) } ?: "never"}")
                                     // Doesn't mean this race's own data is unsynced — it means
                                     // Mule has simply stopped re-checking it against the server
                                     // (see MuleRepository.raceLabelLastTouchedAtMillis's own
@@ -192,24 +197,16 @@ fun RaceHistoryScreen(
                             ),
                         )
                         // Progress files — race-wide bib-allocation/status data received from the
-                        // server or web app (see ProgressRepository's own doc) — get their own
-                        // leading icon + tertiary color, on both this row's icon and its
-                        // headline, so they read as a genuinely different kind of entry at a
-                        // glance rather than blending into the races/Mule sources above (neither
-                        // of which has a leading icon of its own at all).
+                        // server or web app (see ProgressRepository's own doc) — get the same
+                        // plain race-name-headline shape as a LocalRace/MuleSource row above (no
+                        // leading icon of their own any more), just tertiary-colored so they
+                        // still read as a genuinely different kind of entry at a glance.
                         is HistoryItemUi.ProgressFile -> ListItem(
                             headlineContent = {
                                 Text(item.raceName.ifBlank { item.raceLabel }, color = MaterialTheme.colorScheme.tertiary)
                             },
                             supportingContent = {
-                                Text("${item.entryCount} entries — generated ${formatGeneratedAt(item.generatedAt)}")
-                            },
-                            leadingContent = {
-                                Icon(
-                                    Icons.Filled.Assessment,
-                                    contentDescription = "Progress file",
-                                    tint = MaterialTheme.colorScheme.tertiary,
-                                )
+                                Text("Progress as at ${formatGeneratedAt(item.generatedAt)}, ${item.entryCount} entries")
                             },
                             trailingContent = {
                                 // Always deletable — see RaceHistoryViewModel.deleteProgress's

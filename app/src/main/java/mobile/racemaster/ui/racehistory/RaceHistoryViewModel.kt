@@ -50,6 +50,13 @@ sealed interface HistoryItemUi {
         // still blocking deletion without this.
         val activeModeLabels: List<String>,
         val serverSyncSkippedAsStale: Boolean,
+        // Total rows this race has ever written (RaceRepository.observeEntryCount) — shown as
+        // "N entries from <device>" rather than a bare "From <device>".
+        val entryCount: Int = 0,
+        // This race's own most recent confirmed-synced moment, across every mode
+        // (RaceRepository.observeLastSyncedAtMillis) — mirrors what Race History's own detail
+        // screen already shows, one level up on the list row itself.
+        val lastSyncedAtMillis: Long? = null,
         // Whether this race is the device's own current SettingsRepository.activeRaceId — a
         // race can be [isActive] (still has an un-Reset started mode) without being this any
         // more, e.g. after Setup Race created a fresh one while an older, still-un-Reset race sat
@@ -186,7 +193,11 @@ class RaceHistoryViewModel(
                 // needed for it.
                 combine(
                     races.map { race ->
-                        raceRepository.observeLastActivityAtMillis(race.id).map { lastActivityAtMillis ->
+                        combine(
+                            raceRepository.observeLastActivityAtMillis(race.id),
+                            raceRepository.observeEntryCount(race.id),
+                            raceRepository.observeLastSyncedAtMillis(race.id),
+                        ) { lastActivityAtMillis, entryCount, lastSyncedAtMillis ->
                             HistoryItemUi.LocalRace(
                                 id = race.id,
                                 label = race.label,
@@ -194,6 +205,8 @@ class RaceHistoryViewModel(
                                 isActive = isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.cpModeStartedAtMillis),
                                 activeModeLabels = activeModeLabels(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.cpModeStartedAtMillis),
                                 serverSyncSkippedAsStale = isSkippedAsStale(lastActivityAtMillis, maxAgeDays),
+                                entryCount = entryCount,
+                                lastSyncedAtMillis = lastSyncedAtMillis,
                                 isCurrentActiveRace = race.id == activeRaceId,
                             )
                         }

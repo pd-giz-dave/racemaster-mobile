@@ -351,8 +351,16 @@ class MuleRepository(
         // cursor reset is needed afterward, unlike the web app's own persisted localStorage
         // cursor — lastPulledLineNumber here is derived fresh from PulledRecordEntity's own
         // current contents each time, so wiping the table alone is self-correcting.
-        if (records.any { it.action == "NewRace" }) {
+        val newRace = records.firstOrNull { it.action == "NewRace" }
+        if (newRace != null) {
             pulledRecordDao.deleteForSource(sourceRaceLabel, sourceDeviceId)
+            // The same NewRace marker (same lineNumber and timestamp) already held under a
+            // DIFFERENT label for this device means the device was adopted into a new label
+            // (RaceRepository.adoptRaceIdentity) and is re-sending that same history under it —
+            // the old-label copy would otherwise keep being pushed to the old server folder,
+            // resurrecting the device file the web app removes once the adoption has landed.
+            val candidates = pulledRecordDao.getAtLineNumberUnderOtherLabels(sourceDeviceId, sourceRaceLabel, newRace.lineNumber)
+            for (oldLabel in relabeledSourceLabels(candidates, newRace, json)) pulledRecordDao.deleteForSource(oldLabel, sourceDeviceId)
         }
         val now = System.currentTimeMillis()
         pulledRecordDao.insertAll(
@@ -428,6 +436,35 @@ class MuleRepository(
         runCatching { pushToServer() }
     }
 
+    /** The web app's adoption of [deviceName] (pushing under [raceLabel]) into a real race, per
+     *  the server's adoption marker in this login's own folder — see [MuleSyncClient.getAdoption].
+     *  Null when not adopted, not logged in, or unreachable (best effort, polled again later). */
+    suspend fun adoptionFor(raceLabel: String, deviceName: String): String? {
+        val baseUrl = settingsRepository.serverBaseUrl.first() ?: return null
+        val token = settingsRepository.authToken.first() ?: return null
+        return runCatching { syncClient.getAdoption(baseUrl, token, raceLabel, deviceName) }.getOrNull()
+    }
+
+    /** Writes the server's adoption marker on behalf of a web app that reached this device over
+     *  Bluetooth but not the server — see [MuleSyncClient.postAdoption]. Best effort. */
+    suspend fun writeAdoptionOnBehalf(fromRaceLabel: String, deviceName: String, targetRaceLabel: String) {
+        val baseUrl = settingsRepository.serverBaseUrl.first() ?: return
+        val token = settingsRepository.authToken.first() ?: return
+        runCatching { syncClient.postAdoption(baseUrl, token, fromRaceLabel, deviceName, targetRaceLabel) }
+            .onFailure { Log.w(TAG, "adoption write on behalf failed: $fromRaceLabel/$deviceName -> $targetRaceLabel", it) }
+    }
+
+    /** Server-side progress for [raceLabel] as a targeted-delivery payload body — used by a mule
+     *  relaying an adoption to a Bluetooth-only peer (see MuleSyncEngine's own adoption poll). An
+     *  empty payload (adoption only) when there's none yet or the server isn't reachable. */
+    suspend fun progressPayloadFor(raceLabel: String): ProgressPayload {
+        val baseUrl = settingsRepository.serverBaseUrl.first() ?: return ProgressPayload()
+        val token = settingsRepository.authToken.first() ?: return ProgressPayload()
+        val response = runCatching { syncClient.getProgress(baseUrl, token, raceLabel, null) }.getOrNull()
+            ?: return ProgressPayload()
+        return ProgressPayload(response.raceName, response.raceDate, response.generatedAt.orEmpty(), response.entries)
+    }
+
     /** Setup Race's own online branch — races this owner has recent server-side progress for,
      *  within [maxAgeDays] (see [SettingsRepository.raceStaleAfterDays]), for the operator to
      *  pick from instead of typing a name manually. Returns null — never an empty list, which
@@ -497,7 +534,9 @@ class MuleRepository(
         val myDeviceName = settingsRepository.getOrCreateDeviceName()
 
         val pulledByLabel = pulledRows.groupBy { it.sourceRaceLabel }
-        val localRacesByLabel = localRaces.associateBy { it.label }
+        // Newest race per label (observeAllRaces is newest-first) — a plain associateBy kept the
+        // LAST, i.e. oldest, so a same-label race set up again never got pushed at all.
+        val localRacesByLabel = localRaces.distinctBy { it.label }.associateBy { it.label }
         val raceLabels = pulledByLabel.keys + localRacesByLabel.keys
 
         var added = 0
@@ -656,6 +695,19 @@ class MuleRepository(
 // decode and relayedRecordsSince, so this tolerance never has to be reimplemented (or drift) a
 // second time. Pulled out as a top-level function (like recordsDueForDevices below) so it's
 // directly testable without standing up MuleRepository's full dependency graph.
+// The labels among [candidates] (rows for one device under other labels) holding this exact
+// [newRace] marker — same lineNumber and timestamp, i.e. the same race relabeled by adoption
+// rather than a genuinely different race that happens to start at the same line.
+internal fun relabeledSourceLabels(candidates: List<PulledRecordEntity>, newRace: SyncRecord, json: Json): List<String> =
+    candidates
+        .filter { row ->
+            row.lineNumber == newRace.lineNumber &&
+                runCatching { json.decodeFromString<SyncRecord>(row.payloadJson) }.getOrNull()
+                    ?.let { it.action == "NewRace" && it.timestampMillis == newRace.timestampMillis } == true
+        }
+        .map { it.sourceRaceLabel }
+        .distinct()
+
 internal fun decodeSyncRecord(row: PulledRecordEntity, json: Json): SyncRecord? =
     runCatching { json.decodeFromString<SyncRecord>(row.payloadJson) }
         .onFailure { Log.w(TAG, "Dropping unparseable pulled record ${row.sourceDeviceId}#${row.lineNumber} — stale wire format?", it) }

@@ -20,7 +20,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.data.db.entity.HistoryAction
-import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.data.db.entity.displayName as modeDisplayName
 import mobile.racemaster.ui.components.HistoryLineDisplay
@@ -80,7 +79,7 @@ fun RaceHistoryDetailScreen(
                         splitNumber = it.splitNumber,
                         actionLabel = it.action.displayName(),
                         bibNumber = it.bibNumber,
-                        elapsedMillis = if (it.mode == HistoryMode.TIME) it.elapsedMillis else null,
+                        elapsedMillis = it.elapsedMillis,
                         timestampMillis = it.timestampMillis,
                         note = it.note,
                         syncState = it.syncState,

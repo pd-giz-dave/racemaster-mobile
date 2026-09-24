@@ -37,9 +37,12 @@ data class ArchivedHistoryLineUi(
     val bibNumber: Int?,
     val splitNumber: Int?,
     val lineNumber: Long,
-    // Only meaningful for a TIME-mode row (elapsed since its segment's most recent Start
-    // marker) — 0 for a BIBS-mode row, which has no stopwatch of its own.
-    val elapsedMillis: Long,
+    // Only meaningful for a genuine TIME-mode split (elapsed since its segment's most recent
+    // Start marker) — null for a BIBS-mode row (no stopwatch of its own) and for a TIME-mode
+    // boundary/heartbeat marker (MODE_START/PING/LOCATION/RESET/NEW_RACE — see
+    // NON_ELAPSED_TIME_ACTIONS above), neither of which has a real elapsed time to show. Was
+    // previously 0L for both cases, which rendered as a misleading "00:00:00" instead of "–".
+    val elapsedMillis: Long?,
     val note: String?,
     // Only meaningful for a BIBS/CP-mode row — empty for a TIME-mode row.
     val dupSplitRefs: List<Int?>,
@@ -122,9 +125,9 @@ class RaceHistoryDetailViewModel(
                 // treatment of all five on the wire) — matching Bibs/CP's own rows for these,
                 // which already show nothing here (any non-Time mode always reads 0 below).
                 elapsedMillis = when {
-                    it.mode != HistoryMode.TIME -> 0L
-                    it.action in NON_ELAPSED_TIME_ACTIONS -> 0L
-                    else -> segmentStartedAt?.let { s -> it.timestampMillis - s } ?: 0L
+                    it.mode != HistoryMode.TIME -> null
+                    it.action in NON_ELAPSED_TIME_ACTIONS -> null
+                    else -> segmentStartedAt?.let { s -> it.timestampMillis - s }
                 },
                 note = it.note,
                 dupSplitRefs = dupRefs[it.id].orEmpty(),

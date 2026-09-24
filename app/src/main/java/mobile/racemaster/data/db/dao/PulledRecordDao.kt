@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import mobile.racemaster.data.db.entity.PulledRecordEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -105,11 +106,21 @@ interface PulledRecordDao {
     @Query("SELECT MAX(syncedAtMillis) FROM pulled_records")
     fun observeLastSyncedAtMillis(): Flow<Long?>
 
+    // `internal`, not called directly — see markSynced below, which chunks against
+    // SQLITE_MAX_IN_LIST_PARAMS before ever reaching this (see that constant's own doc — a
+    // large IN-list here blew through SQLite's per-statement bound-parameter cap in the field).
     @Query(
         "UPDATE pulled_records SET syncedAtMillis = :syncedAtMillis, syncedTargetName = :targetName " +
             "WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel AND lineNumber IN (:lineNumbers)",
     )
-    suspend fun markSynced(sourceDeviceId: String, sourceRaceLabel: String, lineNumbers: List<Long>, syncedAtMillis: Long, targetName: String? = null)
+    suspend fun markSyncedChunk(sourceDeviceId: String, sourceRaceLabel: String, lineNumbers: List<Long>, syncedAtMillis: Long, targetName: String? = null)
+
+    @Transaction
+    suspend fun markSynced(sourceDeviceId: String, sourceRaceLabel: String, lineNumbers: List<Long>, syncedAtMillis: Long, targetName: String? = null) {
+        for (chunk in lineNumbers.chunked(SQLITE_MAX_IN_LIST_PARAMS)) {
+            markSyncedChunk(sourceDeviceId, sourceRaceLabel, chunk, syncedAtMillis, targetName)
+        }
+    }
 
     // Everything held for [sourceDeviceId]/[sourceRaceLabel] up to and including
     // [sinceLineNumber] that's never been confirmed reaching a sink — the relay-leg counterpart
@@ -168,11 +179,20 @@ interface PulledRecordDao {
     // relayed after merely telling the *other* mule, the confirmation could get "used up" between
     // them and never reach the leaf that actually recorded the line, even though both mules'
     // own bookkeeping showed it as sink-confirmed.
+    // `internal`, not called directly — see markConfirmationRelayed below, which chunks against
+    // SQLITE_MAX_IN_LIST_PARAMS before ever reaching this (see that constant's own doc).
     @Query(
         "UPDATE pulled_records SET confirmationRelayedAtMillis = :relayedAtMillis " +
             "WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel AND lineNumber IN (:lineNumbers)",
     )
-    suspend fun markConfirmationRelayed(sourceDeviceId: String, sourceRaceLabel: String, lineNumbers: List<Long>, relayedAtMillis: Long)
+    suspend fun markConfirmationRelayedChunk(sourceDeviceId: String, sourceRaceLabel: String, lineNumbers: List<Long>, relayedAtMillis: Long)
+
+    @Transaction
+    suspend fun markConfirmationRelayed(sourceDeviceId: String, sourceRaceLabel: String, lineNumbers: List<Long>, relayedAtMillis: Long) {
+        for (chunk in lineNumbers.chunked(SQLITE_MAX_IN_LIST_PARAMS)) {
+            markConfirmationRelayedChunk(sourceDeviceId, sourceRaceLabel, chunk, relayedAtMillis)
+        }
+    }
 
     // Purely a relayed copy of a genuinely different device's data — the real ground truth
     // still lives on the originating device. Deleting it here is always safe to offer, at any
@@ -185,6 +205,14 @@ interface PulledRecordDao {
     // not something this query second-guesses.
     @Query("DELETE FROM pulled_records WHERE sourceRaceLabel = :sourceRaceLabel AND sourceDeviceId = :sourceDeviceId")
     suspend fun deleteForSource(sourceRaceLabel: String, sourceDeviceId: String)
+
+    // Rows held for [sourceDeviceId] at [lineNumber] under any label other than
+    // [sourceRaceLabel] — see MuleRepository.storePulledRecords' adopted-relabel cleanup.
+    @Query(
+        "SELECT * FROM pulled_records WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel != :sourceRaceLabel " +
+            "AND lineNumber = :lineNumber",
+    )
+    suspend fun getAtLineNumberUnderOtherLabels(sourceDeviceId: String, sourceRaceLabel: String, lineNumber: Long): List<PulledRecordEntity>
 
     // See RaceLabelActivity's own doc.
     @Query("SELECT sourceRaceLabel, MAX(pulledAtMillis) AS lastTouchedAtMillis FROM pulled_records GROUP BY sourceRaceLabel")

@@ -983,6 +983,15 @@ class PeripheralSyncService : Service() {
             if (targetDeviceId != null && targetDeviceId != deviceId) {
                 container.progressRepository.cacheTargetedProgress(targetDeviceId, payload)
                 Log.i(TAG, "progress cached for forwarding: targetDeviceId=$targetDeviceId generatedAt=${payload.generatedAt} entries=${payload.entries.size}")
+                // The web app may reach this mule over Bluetooth but not the server — if this
+                // mule is logged in, it records the adoption server-side too, so the target
+                // phone (or another mule) can also pick it up over HTTP.
+                val from = payload.fromRaceLabel
+                val name = payload.targetDeviceName
+                val target = payload.targetRaceLabel
+                if (from != null && name != null && target != null) {
+                    container.muleRepository.writeAdoptionOnBehalf(from, name, target)
+                }
                 return
             }
             val raceId = servingState.raceId ?: return
@@ -1004,6 +1013,10 @@ class PeripheralSyncService : Service() {
                     // about-to-be-superseded one still cached in servingState for a few more ms.
                     .onSuccess { effectiveRaceLabel = targetRaceLabel; Log.i(TAG, "adopted race identity: raceId=$raceId targetRaceLabel=$targetRaceLabel") }
             }
+            // An adoption-only payload (no progress cached for the target race yet) carries no
+            // entries and no generatedAt — storing it would leave an empty progress file behind.
+            // (An ordinary delta can legitimately have zero entries, but always has a generatedAt.)
+            if (payload.entries.isEmpty() && payload.generatedAt.isBlank()) return
             container.progressRepository.storeFromBle(raceId, effectiveRaceLabel, payload)
             Log.i(TAG, "progress stored: raceId=$raceId generatedAt=${payload.generatedAt} entries=${payload.entries.size}")
         }
