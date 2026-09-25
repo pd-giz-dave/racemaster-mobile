@@ -618,13 +618,11 @@ class MuleRepository(
             } else {
                 pulledByDevice + (myDeviceName to selfRecords)
             }
-            // Which devices' own `status` value is impossible for it to legitimately hold —
-            // i.e. HIGHER than the highest lineNumber we ourselves have ever seen for that
-            // device (our own current history for self; every row ever pulled for a relayed
-            // one). The server can never legitimately know about more lines than we've produced
-            // for that exact race — line numbers are strictly local-monotonic per raceId — so a
-            // status this high can only be stale leftover data from a different, since-
-            // superseded race that used to share this exact label. This is what
+            // For this device's OWN race: a `status` HIGHER than the highest lineNumber we've
+            // produced is impossible to hold legitimately — nobody can know more of our lines
+            // than we do — so it can only be stale leftover data from a different, since-
+            // superseded race that used to share this exact label. (Not applied to relayed
+            // devices — see the loop below.) This is what
             // recordsDueForDevices below uses to decide whether to bypass the normal delta
             // filter for a device (see its own doc for why sending everything unfiltered in
             // that case is what actually guarantees a fresh race's own NewRace marker reaches
@@ -655,9 +653,13 @@ class MuleRepository(
                 val selfGeneration = selfRows.filter { it.action == HistoryAction.NEW_RACE }.maxByOrNull { it.lineNumber }
                     ?.let { formatServerTimestamp(it.timestampMillis) }
                 if (generationDiffers(generations, myDeviceName, selfGeneration)) add(myDeviceName)
+                // Relayed devices: generation mismatch only. "The server holds more of this device's
+                // lines than we do" is NOT a sign of a recreated race for a relayed device — it's
+                // the normal state whenever the device also pushes itself (or another mule is
+                // further along), and treating it as one resent this mule's whole held copy of
+                // every such device on every tick (confirmed in the field: ~3,200 records every
+                // ~5s). A genuinely recreated race shows up as a generation mismatch instead.
                 for ((deviceName, rows) in pulledForRace.groupBy { it.deviceName }) {
-                    val pulledMax = rows.maxOfOrNull { it.lineNumber } ?: 0L
-                    if ((status[deviceName] ?: 0L) > pulledMax) add(deviceName)
                     val heldGeneration = rows.sortedByDescending { it.lineNumber }.firstNotNullOfOrNull { row ->
                         decodeSyncRecord(row, json)?.takeIf { it.action == "NewRace" }
                     }?.let { formatServerTimestamp(it.timestampMillis) }
