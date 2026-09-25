@@ -109,7 +109,14 @@ fun HelpScreen(onBack: () -> Unit) {
                     "same way the web app already names its own per-course files. Setup Race is " +
                     "disabled while a race is already active — Reset it first, or use " +
                     "Progress (Races)'s own \"Resume\" action if it was left running by " +
-                    "mistake (see \"General\" below).",
+                    "mistake (see \"General\" below). Scan Server fills in the race's exact " +
+                    "server name (e.g. \"webtest-seniors-26-09-15\"), which is what lets this " +
+                    "phone find its progress. Setting up the same name again on this phone " +
+                    "carries on that race's own history rather than starting a second one (unless " +
+                    "it's older than \"Skip races older than\", e.g. last year's). A phone set up " +
+                    "with the default \"unknown-...\" name can be adopted into the real race by " +
+                    "the web app — over the server or Bluetooth, or via a Mule — and its race name " +
+                    "then changes by itself, keeping everything already recorded.",
             )
             HelpSection(
                 title = "Time Mode",
@@ -343,12 +350,18 @@ fun HelpScreen(onBack: () -> Unit) {
                     "up showing exactly where it was left. Tap a race (not its Resume button) to see " +
                     "its full " +
                     "history read-only — each row shows the wall-clock time (HH:MM) it was recorded, " +
-                    "alongside its line/split number, event, bib, and elapsed time. The same page also " +
-                    "lists any progress files this device has received (marked with their own icon so " +
-                    "they're easy to tell apart from races) — race-wide bib/status data pulled from " +
-                    "the server or delivered by the racemaster web app over Bluetooth; tap one to see " +
-                    "every entry, or delete it to remove it from this device only (it can always be " +
-                    "fetched or delivered again later). Button presses play a short click sound at " +
+                    "alongside its line/split number, event, bib, and elapsed time (\"–\" where a " +
+                    "row has no bib or time). Each race's row shows how many entries it holds, from " +
+                    "which device, and when it was last synced. Deleting a race deletes it " +
+                    "everywhere — here, on the server, on any Mule and in the web app: it's listed as " +
+                    "\"Pending delete\" until the server or a Mule has taken the deletion, then " +
+                    "disappears by itself; \"Delete now\" removes it from this phone only, for one " +
+                    "that may never sync. The same page also lists any progress files this device has " +
+                    "received (race name in a different colour, with \"Progress as at <time>, N " +
+                    "entries\" beneath) — race-wide bib/status data pulled from the server or " +
+                    "delivered by the racemaster web app over Bluetooth; tap one to see every entry, " +
+                    "or delete it to remove it from this device only (it can always be fetched or " +
+                    "delivered again later). Button presses play a short click sound at " +
                     "full volume, regardless of the phone's own volume/Touch sounds setting, so it's " +
                     "audible at a noisy finish line.",
             )
