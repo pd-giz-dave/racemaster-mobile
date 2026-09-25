@@ -1,5 +1,7 @@
 package mobile.racemaster.data.mule
 
+import mobile.racemaster.data.db.entity.RaceEntity
+
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Notification
@@ -156,6 +158,14 @@ class PeripheralSyncService : Service() {
     @Volatile
     private var relayManifestVersion: Int = 0
 
+    // This device's own races awaiting a deletion tombstone's acknowledgement (see
+    // RaceRepository.requestDeleteRace). Only the ACTIVE race is served as this device's own race,
+    // and a deleted race never is one — so each is offered through the relay manifest instead,
+    // with this device as its origin, letting mules and the web app pull (and ack) it exactly the
+    // way they already pull any relayed source.
+    @Volatile
+    private var selfTombstones: List<RaceEntity> = emptyList()
+
     // Kept live the same way deviceName/currentMode are above, by observeRaceStaleAfterDays()
     // below — SettingsRepository.raceStaleAfterDays's general cutoff, applied here to what this
     // device is willing to relay onward to another Mule (see freshRelayManifest below), the BLE
@@ -206,6 +216,13 @@ class PeripheralSyncService : Service() {
     // negotiates (or hasn't yet when computeRecordsPayload() runs).
     private val deviceMtus = mutableMapOf<String, Int>()
 
+    // The DeviceInfo value each central is part-way through reading, taken at its offset-0 read.
+    // A value longer than one read response (negotiated MTU − 1) arrives as a sequence of
+    // offset reads ("read blob"); rebuilding it for every one of those let the pieces come from
+    // two different versions whenever anything changed in between (a Ping bumping
+    // lastLineNumber is enough), splicing into garbage the central can't decode.
+    private val deviceInfoSnapshots = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
+
     // One chunk of a central's "prepared write" (long write) — Android delivers a write whose
     // payload exceeds this connection's single ATT-PDU budget (negotiated MTU − 3 bytes) as a
     // sequence of these instead of one onCharacteristicWriteRequest call, terminated by
@@ -241,6 +258,7 @@ class PeripheralSyncService : Service() {
         observeAppMode()
         observeMuleSyncEnabled()
         observeRelayManifest()
+        observeSelfTombstones()
         observeRaceStaleAfterDays()
         observeAdvertisingWarning()
         startAdvertisingRetryLoop()
@@ -316,6 +334,23 @@ class PeripheralSyncService : Service() {
             }
         }
     }
+
+    // See selfTombstones' own doc. Bumps relayManifestVersion like observeRelayManifest, so a
+    // puller re-fetches the manifest rather than reusing its cached copy.
+    private fun observeSelfTombstones() {
+        serviceScope.launch {
+            container.raceRepository.observePendingDeleteRaces().collect { races ->
+                if (races != selfTombstones) {
+                    selfTombstones = races
+                    relayManifestVersion++
+                    recentResponses = emptyMap()
+                }
+            }
+        }
+    }
+
+    private fun selfTombstoneFor(originDeviceId: String?, originRaceLabel: String?): RaceEntity? =
+        if (originDeviceId != null && originDeviceId == deviceId) selfTombstones.firstOrNull { it.label == originRaceLabel } else null
 
     // See raceStaleAfterDays' own doc.
     private fun observeRaceStaleAfterDays() {
@@ -760,18 +795,32 @@ class PeripheralSyncService : Service() {
             // connecting to it) show its own operator a plain "last polled" timestamp. See
             // BluetoothStateRepository.lastPolledAtMillis's own doc.
             container.bluetoothStateRepository.recordPolled()
-            val info = DeviceInfo(
-                deviceId = deviceId,
-                raceLabel = servingState.raceLabel,
-                lastLineNumber = servingState.lastLineNumber,
-                deviceName = deviceName,
-                relayCount = freshRelayManifest().size,
-                relayManifestVersion = relayManifestVersion,
-                progressGeneratedAt = container.progressRepository.generatedAtFor(servingState.raceId),
-            )
-            val bytes = json.encodeToString(info).toByteArray(Charsets.UTF_8)
-            val value = bytes.drop(offset).toByteArray()
-            gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
+            val snapshot = deviceInfoSnapshots[device.address]
+            val bytes = if (offset == 0 || snapshot == null) {
+                val info = DeviceInfo(
+                    deviceId = deviceId,
+                    raceLabel = servingState.raceLabel,
+                    lastLineNumber = servingState.lastLineNumber,
+                    deviceName = deviceName,
+                    relayCount = freshRelayManifest().size + selfTombstones.size,
+                    relayManifestVersion = relayManifestVersion,
+                    progressGeneratedAt = container.progressRepository.generatedAtFor(servingState.raceId),
+                )
+                json.encodeToString(info).toByteArray(Charsets.UTF_8).also { fresh ->
+                    deviceInfoSnapshots[device.address] = fresh
+                    val singleRead = singleReadLimit(deviceMtus[device.address])
+                    if (fresh.size > singleRead) {
+                        Log.w(TAG, "DeviceInfo is ${fresh.size} bytes but ${device.address}'s MTU carries only $singleRead per read — it will be read in pieces")
+                    }
+                }
+            } else {
+                snapshot
+            }
+            if (offset > bytes.size) {
+                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_INVALID_OFFSET, offset, null)
+                return
+            }
+            gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, bytes.copyOfRange(offset, bytes.size))
         }
 
         @SuppressLint("MissingPermission")
@@ -1078,6 +1127,7 @@ class PeripheralSyncService : Service() {
             if (newState == android.bluetooth.BluetoothProfile.STATE_DISCONNECTED) {
                 outboundChunks.remove(device.address)
                 deviceMtus.remove(device.address)
+                deviceInfoSnapshots.remove(device.address)
                 // Backstop for a device that drops mid prepare/execute-write transaction —
                 // onExecuteWrite's own removal covers the ordinary completed-transaction path,
                 // this is what stops a queue entry leaking forever if that callback never fires.
@@ -1140,8 +1190,15 @@ class PeripheralSyncService : Service() {
     // line-number delta matters here, exactly like computeRecordsPayload's own behavior — a
     // record already on the server must still be offered to a neighbor mule that hasn't caught
     // up to it yet.
-    private suspend fun computeRelayedRecordsPayload(originDeviceId: String, originRaceLabel: String, sinceLineNumber: Long): String =
-        json.encodeToString(container.muleRepository.relayedRecordsSince(originDeviceId, originRaceLabel, sinceLineNumber))
+    private suspend fun computeRelayedRecordsPayload(originDeviceId: String, originRaceLabel: String, sinceLineNumber: Long): String {
+        val tombstoned = selfTombstoneFor(originDeviceId, originRaceLabel)
+        if (tombstoned != null) {
+            val records = container.raceRepository.getHistorySinceLineNumber(tombstoned.id, sinceLineNumber)
+                .map { row -> row.toSyncRecord(tombstoned.timeModeStartedAtMillis) }
+            return json.encodeToString(records)
+        }
+        return json.encodeToString(container.muleRepository.relayedRecordsSince(originDeviceId, originRaceLabel, sinceLineNumber))
+    }
 
     // Answers a PullRequest.requestRelayManifest request — this device's own current relay
     // manifest (see RelayManifestEntry's own doc for why it travels as its own chunked pull
@@ -1149,7 +1206,8 @@ class PeripheralSyncService : Service() {
     // from relayManifest, same live field DEVICE_INFO's own read uses, so a manifest fetched
     // right after seeing relayCount > 0 always reflects what that count was counting.
     private fun computeRelayManifestPayload(): String {
-        val entries = freshRelayManifest().map { RelayManifestEntry(it.sourceDeviceId, it.deviceName, it.sourceRaceLabel, it.lastLineNumber) }
+        val entries = freshRelayManifest().map { RelayManifestEntry(it.sourceDeviceId, it.deviceName, it.sourceRaceLabel, it.lastLineNumber) } +
+            selfTombstones.map { RelayManifestEntry(deviceId, deviceName, it.label, it.nextLineNumber - 1) }
         return json.encodeToString(entries)
     }
 
@@ -1266,6 +1324,13 @@ class PeripheralSyncService : Service() {
     // — see this function's own call site.
     private suspend fun backfillSinkAck(originDeviceId: String?, originRaceLabel: String?, sinceLineNumber: Long) {
         if (sinceLineNumber <= 0) return
+        selfTombstoneFor(originDeviceId, originRaceLabel)?.let { race ->
+            val lineNumbers = container.raceRepository.unsyncedLineNumbersUpTo(race.id, sinceLineNumber)
+            if (lineNumbers.isEmpty()) return
+            container.raceRepository.markHistorySyncedByLineNumber(race.id, lineNumbers)
+            container.raceRepository.recordLineSyncs(race.id, lineNumbers, WEB_APP_TARGET_ID, targetName = WEB_APP_TARGET_NAME, isSink = true)
+            return
+        }
         if (originDeviceId == null) {
             val raceId = servingState.raceId ?: return
             val lineNumbers = container.raceRepository.unsyncedLineNumbersUpTo(raceId, sinceLineNumber)
@@ -1312,6 +1377,12 @@ class PeripheralSyncService : Service() {
 
         val plainRelayed = ack.ackedOrigins.filterNot { (it.originDeviceId to it.originRaceLabel) in confirmedKeys }
         for (origin in plainRelayed) {
+            // One of this device's own deletion tombstones, pulled via the relay manifest — a
+            // mule has taken it, which is enough for RaceRepository.purgeConfirmedDeletes.
+            selfTombstoneFor(origin.originDeviceId, origin.originRaceLabel)?.let { race ->
+                container.raceRepository.recordLineSyncs(race.id, origin.lineNumbers, ack.deviceId, targetName = ack.deviceName, isSink = false)
+                continue
+            }
             // A plain (not-yet-confirmed) relay hop for someone else's data gets no write at all
             // here — see this function's own doc on why pulled_records has no orange state.
             if (origin.originDeviceId == null && raceId != null) {
@@ -1320,6 +1391,11 @@ class PeripheralSyncService : Service() {
         }
 
         for (origin in confirmed) {
+            selfTombstoneFor(origin.originDeviceId, origin.originRaceLabel)?.let { race ->
+                container.raceRepository.markHistorySyncedByLineNumber(race.id, origin.lineNumbers)
+                container.raceRepository.recordLineSyncs(race.id, origin.lineNumbers, ack.deviceId, targetName = ack.deviceName, isSink = true)
+                continue
+            }
             if (origin.originDeviceId == null) {
                 if (raceId != null) {
                     container.raceRepository.markHistorySyncedByLineNumber(raceId, origin.lineNumbers)

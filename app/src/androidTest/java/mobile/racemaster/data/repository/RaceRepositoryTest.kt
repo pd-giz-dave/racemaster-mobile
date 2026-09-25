@@ -260,6 +260,68 @@ class RaceRepositoryTest {
         assertEquals(false, old == fresh)
     }
 
+    // requestDeleteRace / purgeConfirmedDeletes — TODO.md: a deleted self history file must be
+    // flushed everywhere, via a lone NewRace tombstone that's kept until acknowledged.
+
+    private suspend fun raceWithHistory(label: String): Long {
+        val id = repository.startOrContinueRace(label, "Finish", maxAgeDays = 7)
+        repository.recordModeStart(id, AppMode.TIME, "Finish")
+        return id
+    }
+
+    @Test
+    fun requestDeleteRaceLeavesExactlyOneTombstoneAtLineOne() = runTest {
+        val id = raceWithHistory("to-delete")
+
+        repository.requestDeleteRace(id)
+
+        val rows = db.historyLineDao().observeAllForRace(id).first()
+        assertEquals(1, rows.size)
+        assertEquals(HistoryAction.NEW_RACE, rows.single().action)
+        assertEquals("Deleted", rows.single().note)
+        assertEquals(1L, rows.single().lineNumber)
+        assertEquals(2L, db.raceDao().getById(id)?.nextLineNumber)
+        assertEquals(listOf(id), repository.observePendingDeleteRaceIds().first())
+    }
+
+    @Test
+    fun aPendingDeleteIsOnlyPurgedOnceItsTombstoneIsAcknowledged() = runTest {
+        val id = raceWithHistory("to-delete")
+        repository.requestDeleteRace(id)
+
+        repository.purgeConfirmedDeletes()
+        assertEquals(true, db.raceDao().getById(id) != null)
+
+        repository.markHistorySyncedByLineNumber(id, listOf(1L))
+        repository.purgeConfirmedDeletes()
+        assertNull(db.raceDao().getById(id))
+    }
+
+    @Test
+    fun aMuleTakingTheTombstoneIsEnoughToPurge() = runTest {
+        val id = raceWithHistory("to-delete")
+        repository.requestDeleteRace(id)
+
+        repository.recordLineSyncs(id, listOf(1L), targetId = "mule-id", targetName = "mule", isSink = false)
+        repository.purgeConfirmedDeletes()
+
+        assertNull(db.raceDao().getById(id))
+    }
+
+    @Test
+    fun settingUpTheSameNameAgainNeverContinuesAPendingDelete() = runTest {
+        val id = raceWithHistory("reused")
+        repository.requestDeleteRace(id)
+
+        val fresh = repository.startOrContinueRace("reused", "Finish", maxAgeDays = 7)
+
+        assertEquals(false, fresh == id)
+        // The newer race supersedes the tombstone everywhere, so the pending one is finished too.
+        repository.recordModeStart(fresh, AppMode.TIME, "Finish")
+        repository.purgeConfirmedDeletes()
+        assertNull(db.raceDao().getById(id))
+    }
+
     // switchActiveRace — the "auto delete the empty placeholder" cleanup every setActiveRaceId
     // call site routes through instead of calling settingsRepository.setActiveRaceId directly.
     // Judged by whether the race being switched away from has ever recorded a single history

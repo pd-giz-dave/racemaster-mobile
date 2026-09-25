@@ -87,6 +87,11 @@ interface RaceDao {
     @Query("UPDATE races SET nextLineNumber = nextLineNumber + 1 WHERE id = :raceId")
     suspend fun incrementLineNumber(raceId: Long)
 
+    // Only for RaceRepository.requestDeleteRace, which restarts a race's numbering as a new
+    // (tombstone) generation — every other path only ever increments.
+    @Query("UPDATE races SET nextLineNumber = :value WHERE id = :raceId")
+    suspend fun setNextLineNumber(raceId: Long, value: Long)
+
     // Editable at any time via the race details screen, including after the race has
     // stopped — name typos shouldn't be permanently locked in once logging is done. Only the
     // name and location (and `label`'s name portion, rebuilt from it) can actually change here.

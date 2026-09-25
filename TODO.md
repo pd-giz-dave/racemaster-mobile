@@ -77,9 +77,13 @@ one.
 - [ ] races history is showing multiple (self) lists for the same race
 - [ ] races history is showing multiple progress lists for the same race
      (maybe due to coming via different sources?)
-- [ ] if a self history file is deleted, delete it on the web too and tell any connected mules
+- [x] if a self history file is deleted, delete it on the web too and tell any connected mules
       to dump it as well (ie. ensure it gets flushed from everywhere, mule should also tell the
-      web-app its gone and remove it from the server, else it keeps coming back
+      web-app its gone and remove it from the server, else it keeps coming back,
+      the way to do this is via the New Race system added recently - if a user deletes a self 
+      history file on the phone, first empty it and add a NewRace record so the file is now
+      just a New Race record, then propagate that like any history file, once its been ack'd
+      then delete it, before that mark it in the history list a pending delete
 - [x] drop the STOP notion altogether, its redundant, replace the dual mode STOP/RESET button
       in the mode screens with just a RESET (to mean as above, the confirm dialog to explain this)
 - [x] need to allow for relocating back to some previous location, which case it must pick up
@@ -100,7 +104,7 @@ one.
 - [x] heartbeat should start as soon as a race is setup irrespective of the selected mode starting
 - [x] cannot relocate from time mode to cp mode - the legacy 'reset' guard is still in place
 - [x] time mode ping is showing a split time
-- [ ] bibs mode not being syn'c to server until a ping comes along (the phone showing this is
+- [x] bibs mode not being syn'c to server until a ping comes along (the phone showing this is
       also a mule and also logged in to the server) - couldn't find a mechanism in the push
       code that ties bibs sync to ping specifically; the leading theory is this described the
       old pre-heartbeat gap (a quiet bibs station had nothing to push until something wrote a

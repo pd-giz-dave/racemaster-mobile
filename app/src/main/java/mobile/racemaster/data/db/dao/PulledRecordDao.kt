@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.Flow
 // phone both working the same physical race under the same name/course/date) show as two
 // separate sources, each under its own device's name. Records pulled from different devices
 // must never be merged into one source just because they share a race label.
+data class PulledSourceKey(val sourceDeviceId: String, val sourceRaceLabel: String)
+
 data class PulledSourceSummary(
     val sourceRaceLabel: String,
     val sourceDeviceId: String,
@@ -205,6 +207,26 @@ interface PulledRecordDao {
     // not something this query second-guesses.
     @Query("DELETE FROM pulled_records WHERE sourceRaceLabel = :sourceRaceLabel AND sourceDeviceId = :sourceDeviceId")
     suspend fun deleteForSource(sourceRaceLabel: String, sourceDeviceId: String)
+
+    // Sources held only as a deletion tombstone (the source device deleted that race — see
+    // racemaster-mobile's RaceRepository.requestDeleteRace): kept so an older copy is refused,
+    // but hidden from Race History. Matched on the stored JSON — a tombstone is the lone
+    // NewRace row at lineNumber 1 whose note is "Deleted".
+    @Query(
+        "SELECT DISTINCT sourceDeviceId, sourceRaceLabel FROM pulled_records WHERE lineNumber = 1 " +
+            "AND payloadJson LIKE '%\"action\":\"NewRace\"%' AND payloadJson LIKE '%\"note\":\"Deleted\"%'",
+    )
+    fun observeTombstonedSources(): Flow<List<PulledSourceKey>>
+
+    // By the device NAME the server knows it as — see MuleRepository.pushToServer's handling of a
+    // push the server refused as superseded (the server never learns a deviceId).
+    @Query("DELETE FROM pulled_records WHERE sourceRaceLabel = :sourceRaceLabel AND deviceName = :deviceName")
+    suspend fun deleteForDeviceName(sourceRaceLabel: String, deviceName: String)
+
+    // The lowest-numbered row held for this source — a generation's opening NEW_RACE marker when
+    // one is held (see MuleRepository.storePulledRecords' generation ordering).
+    @Query("SELECT * FROM pulled_records WHERE sourceDeviceId = :sourceDeviceId AND sourceRaceLabel = :sourceRaceLabel ORDER BY lineNumber LIMIT 1")
+    suspend fun getFirstForSource(sourceDeviceId: String, sourceRaceLabel: String): PulledRecordEntity?
 
     // Rows held for [sourceDeviceId] at [lineNumber] under any label other than
     // [sourceRaceLabel] — see MuleRepository.storePulledRecords' adopted-relabel cleanup.

@@ -49,6 +49,7 @@ fun RaceHistoryScreen(
 ) {
     val items by viewModel.historyItems.collectAsStateWithLifecycle()
     var pendingDelete by remember { mutableStateOf<HistoryItemUi.LocalRace?>(null) }
+    var pendingDeleteNow by remember { mutableStateOf<HistoryItemUi.LocalRace?>(null) }
     var pendingMuleSourceDelete by remember { mutableStateOf<HistoryItemUi.MuleSource?>(null) }
     var pendingProgressDelete by remember { mutableStateOf<HistoryItemUi.ProgressFile?>(null) }
     // A separate dialog from pendingDelete above — an active race needs its stuck mode(s)
@@ -110,6 +111,13 @@ fun RaceHistoryScreen(
                                     "Active in ${item.activeModeLabels.joinToString(" + ")}".takeIf { item.isActive },
                                 )
                                 Column {
+                                    if (item.isPendingDelete) {
+                                        Text(
+                                            "Pending delete — waiting for the server or a mule to take the deletion",
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                        return@Column
+                                    }
                                     if (parts.isNotEmpty()) Text(parts.joinToString(" — "))
                                     // Mirrors Race History's own detail screen, one level up on
                                     // the list row itself.
@@ -129,6 +137,14 @@ fun RaceHistoryScreen(
                             },
                             trailingContent = {
                                 Row {
+                                    // The escape hatch for a deletion that may never sync — see
+                                    // HistoryItemUi.LocalRace.isPendingDelete.
+                                    if (item.isPendingDelete) {
+                                        TextButton(onClick = withClickSound { pendingDeleteNow = item }) {
+                                            Text("Delete now", color = MaterialTheme.colorScheme.error)
+                                        }
+                                        return@Row
+                                    }
                                     // Offered only for a race that's still active (an un-Reset
                                     // started mode) but isn't this device's current one any
                                     // more — see HistoryItemUi.LocalRace.isCurrentActiveRace's
@@ -232,17 +248,47 @@ fun RaceHistoryScreen(
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
             title = { Text("Delete this race?") },
-            text = { Text("This permanently deletes \"${race.label}\" and its entire history. This cannot be undone.") },
+            text = {
+                Text(
+                    "This permanently deletes \"${race.label}\" and its entire history — here, and on the " +
+                        "server, mules and web app too. It stays listed as pending delete until the server " +
+                        "or a mule has taken the deletion. This cannot be undone.",
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = withClickSound {
-                        viewModel.deleteRace(race.id)
+                        viewModel.requestDeleteRace(race.id)
                         pendingDelete = null
                     },
                 ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
                 TextButton(onClick = withClickSound { pendingDelete = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    pendingDeleteNow?.let { race ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteNow = null },
+            title = { Text("Delete now, on this phone only?") },
+            text = {
+                Text(
+                    "Nothing has taken the deletion of \"${race.label}\" yet. Deleting now removes it from this " +
+                        "phone only — any copy already on the server or a mule stays there.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = withClickSound {
+                        viewModel.deleteRace(race.id)
+                        pendingDeleteNow = null
+                    },
+                ) { Text("Delete now", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = withClickSound { pendingDeleteNow = null }) { Text("Cancel") }
             },
         )
     }

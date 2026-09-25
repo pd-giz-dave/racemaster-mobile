@@ -87,6 +87,11 @@ enum class HistoryAction {
     NEW_RACE,
 }
 
+/** A NEW_RACE row with this note is a deletion tombstone: the race was deleted on this device,
+ *  and its whole history replaced by this one row so every recipient (server, mules, web app)
+ *  drops its copy — see RaceRepository.requestDeleteRace. Carried on the wire as-is in `note`. */
+const val DELETED_RACE_NOTE = "Deleted"
+
 /** Actions that carry a real bib number and participate in expected/duplicate checks. */
 val BIB_REQUIRED_ACTIONS = setOf(HistoryAction.START, HistoryAction.FINISH, HistoryAction.RETIRE, HistoryAction.PASS)
 

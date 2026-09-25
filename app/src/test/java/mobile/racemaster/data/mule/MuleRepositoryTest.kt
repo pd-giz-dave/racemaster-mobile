@@ -188,4 +188,49 @@ class MuleRepositoryTest {
 
         assertTrue(relabeledSourceLabels(candidates, newRace(1_000L), json).isEmpty())
     }
+
+    // classifyPulledBatch — the mule-side generation ordering (mirrors the server's classifyPush).
+
+    private fun tombstone(timestampMillis: Long) = newRace(timestampMillis).copy(note = "Deleted")
+
+    @Test
+    fun aBatchWithTheHeldNewRaceMergesIntoTheSameGeneration() {
+        assertEquals(PulledGeneration.SAME, classifyPulledBatch(newRace(1_000L), newRace(1_000L)))
+    }
+
+    @Test
+    fun aNewerNewRaceOrNothingHeldStartsFresh() {
+        assertEquals(PulledGeneration.FRESH, classifyPulledBatch(newRace(1_000L), tombstone(2_000L)))
+        assertEquals(PulledGeneration.FRESH, classifyPulledBatch(null, newRace(1_000L)))
+    }
+
+    @Test
+    fun anOlderGenerationIsRefused() {
+        assertEquals(PulledGeneration.SUPERSEDED, classifyPulledBatch(tombstone(2_000L), newRace(1_000L)))
+    }
+
+    @Test
+    fun plainDeltasAgainstATombstoneAreRefusedButMergeOtherwise() {
+        assertEquals(PulledGeneration.SUPERSEDED, classifyPulledBatch(tombstone(2_000L), null))
+        assertEquals(PulledGeneration.SAME, classifyPulledBatch(newRace(1_000L), null))
+        assertEquals(PulledGeneration.SAME, classifyPulledBatch(null, null))
+    }
+
+    // generationDiffers — whether the server's copy of a device's history is a different
+    // generation from the one about to be sent (then the whole history must go, not a delta).
+
+    @Test
+    fun aDifferentServerGenerationForcesAFullSend() {
+        // The field case: a tombstone from a deleted race vs the race adopted over it.
+        val server = mapOf("nifty-wombat" to "2026/09/25 15:19:40")
+        assertTrue(generationDiffers(server, "nifty-wombat", "2026/09/25 15:47:55"))
+    }
+
+    @Test
+    fun theSameGenerationOrNothingToCompareLeavesTheDeltaRuleInCharge() {
+        val server = mapOf("nifty-wombat" to "2026/09/25 15:47:55")
+        assertEquals(false, generationDiffers(server, "nifty-wombat", "2026/09/25 15:47:55"))
+        assertEquals(false, generationDiffers(server, "other-device", "2026/09/25 15:47:55"))
+        assertEquals(false, generationDiffers(server, "nifty-wombat", null))
+    }
 }

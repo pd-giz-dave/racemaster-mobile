@@ -67,6 +67,9 @@ sealed interface HistoryItemUi {
         // pressing Start does. Defaults false so existing test call sites that construct this
         // directly don't need updating.
         val isCurrentActiveRace: Boolean = false,
+        // Deleted here, but its deletion tombstone hasn't been acknowledged by the server or a
+        // mule yet — see RaceRepository.requestDeleteRace. Removed automatically once it is.
+        val isPendingDelete: Boolean = false,
     ) : HistoryItemUi
     // A race pulled via Mule from a genuinely different physical device — this device's own
     // data is never staged into that same table at all (see PulledRecordEntity's own doc), so
@@ -141,6 +144,15 @@ private data class HistorySources(
     val maxAgeDays: Int,
     val progressFiles: List<StoredProgress>,
     val activeRaceId: Long?,
+    val pendingDeleteIds: Set<Long>,
+    val tombstonedSources: Set<Pair<String, String>>,
+)
+
+private data class ExtraSources(
+    val progressFiles: List<StoredProgress>,
+    val activeRaceId: Long?,
+    val pendingDeleteIds: Set<Long>,
+    val tombstonedSources: Set<Pair<String, String>>,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -159,14 +171,23 @@ class RaceHistoryViewModel(
         // Paired rather than added as the combine's own 6th argument — kotlinx coroutines'
         // typed combine() overloads only go up to 5, same reason BibsModeViewModel/
         // CpModeViewModel's own RaceContext combines already pair theirs.
-        combine(progressRepository.observeStored(), settingsRepository.activeRaceId) { progressFiles, activeRaceId ->
-            progressFiles to activeRaceId
+        combine(
+            progressRepository.observeStored(),
+            settingsRepository.activeRaceId,
+            raceRepository.observePendingDeleteRaceIds(),
+            muleRepository.tombstonedSources,
+        ) { progressFiles, activeRaceId, pendingDeleteIds, tombstonedSources ->
+            ExtraSources(progressFiles, activeRaceId, pendingDeleteIds.toSet(), tombstonedSources)
         },
-    ) { races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, (progressFiles, activeRaceId) ->
-        HistorySources(races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, progressFiles, activeRaceId)
+    ) { races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, extra ->
+        HistorySources(
+            races, sourceSummaries, lastTouchedAtMillis, maxAgeDays,
+            extra.progressFiles, extra.activeRaceId, extra.pendingDeleteIds, extra.tombstonedSources,
+        )
     }
-        .flatMapLatest { (races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, progressFiles, activeRaceId) ->
-            val muleItems = sourceSummaries.map {
+        .flatMapLatest { (races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, progressFiles, activeRaceId, pendingDeleteIds, tombstonedSources) ->
+            // A relayed source held only as a deletion tombstone — its device deleted that race.
+            val muleItems = sourceSummaries.filterNot { (it.sourceDeviceId to it.sourceRaceLabel) in tombstonedSources }.map {
                 HistoryItemUi.MuleSource(
                     raceLabel = it.sourceRaceLabel,
                     sourceDeviceId = it.sourceDeviceId,
@@ -208,6 +229,7 @@ class RaceHistoryViewModel(
                                 entryCount = entryCount,
                                 lastSyncedAtMillis = lastSyncedAtMillis,
                                 isCurrentActiveRace = race.id == activeRaceId,
+                                isPendingDelete = race.id in pendingDeleteIds,
                             )
                         }
                     },
@@ -233,6 +255,13 @@ class RaceHistoryViewModel(
     // at all for an active race — see HistoryItemUi.LocalRace.isActive).
     fun deleteRace(raceId: Long) {
         viewModelScope.launch { raceRepository.deleteRace(raceId) }
+    }
+
+    // Deletes everywhere — see RaceRepository.requestDeleteRace. The row stays, marked pending
+    // delete, until the tombstone is acknowledged; deleteRace above is the "delete locally now"
+    // escape hatch for a pending one that may never sync.
+    fun requestDeleteRace(raceId: Long) {
+        viewModelScope.launch { raceRepository.requestDeleteRace(raceId) }
     }
 
     // See RaceRepository.forceResetActiveModes' own doc — un-sticks a race whose active mode(s)

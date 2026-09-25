@@ -57,8 +57,14 @@ private fun SyncRecord.toServerSyncRecord() = ServerSyncRecord(
     lineNumber = lineNumber,
     refLineNumber = refLineNumber,
     note = note,
-    timestamp = SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.getDefault()).format(Date(timestampMillis)),
+    timestamp = formatServerTimestamp(timestampMillis),
 )
+
+// The exact "yyyy/MM/dd HH:mm:ss" (device-local) form every record's timestamp is stored in
+// server-side — also what racemaster's GET .../generations reports a generation as, so a
+// generation this device holds compares equal only when formatted exactly this way.
+internal fun formatServerTimestamp(timestampMillis: Long): String =
+    SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.getDefault()).format(Date(timestampMillis))
 
 // Body for POST .../mobile — one flat, chronological line array per device (deviceName ->
 // lines), mirroring the server's own one-JSON-file-per-device storage exactly. A single
@@ -70,6 +76,8 @@ private fun SyncRecord.toServerSyncRecord() = ServerSyncRecord(
 @Serializable
 private data class MobileSyncPayload(
     val devices: Map<String, List<ServerSyncRecord>>,
+    // Device names whose lines come straight from that device — see pushRecords' own doc.
+    val authoritative: List<String> = emptyList(),
 )
 
 // Only `added` is ever actually read (see MuleRepository.pushToServer) — the rest of what the
@@ -83,7 +91,12 @@ private data class MobileSyncPayload(
 // too — worst case, a genuinely new push briefly under-reports "0 new records" instead of
 // crashing.
 @Serializable
-data class MobileSyncResponse(val added: Int = 0)
+data class MobileSyncResponse(
+    val added: Int = 0,
+    // Device names whose records the server refused as an older or deleted generation (see
+    // racemaster's server/mobile.js classifyPush) — the caller drops its stale relayed copy.
+    val superseded: List<String> = emptyList(),
+)
 
 @Serializable
 data class PingResponseBody(val ok: Boolean = false)
@@ -238,20 +251,38 @@ class MuleSyncClient {
         return response.body()
     }
 
+    // Which generation of each device's history the server holds for this race — device name to
+    // that generation's NewRace timestamp (see formatServerTimestamp), null for a file with no
+    // NewRace. See MuleRepository.pushToServer for why the line cursor from getSyncStatus alone
+    // isn't enough.
+    suspend fun getGenerations(baseUrl: String, token: String, raceLabel: String): Map<String, String?> {
+        val response = client.get("${baseUrl.trimEnd('/')}/api/mobile/${encodePathSegment(raceLabel)}/generations") {
+            expectSuccess = false
+            bearerAuth(token)
+        }
+        checkSuccess(response)
+        return response.body()
+    }
+
     // The response's `added` count (genuinely new rows, not the full send size) is what
     // should be shown to the operator. [raceLabel] scopes the push to
     // `mobile/<user>/<raceLabel>/` on the server — the race's own name as recorded on the phone.
+    // [authoritative]: device names whose lines come straight from that device (this phone's own
+    // race) — the server then lets a changed generation from it replace what's stored even when
+    // older (see racemaster's server/mobile.js classifyPush); a relayed copy stays subject to
+    // the "newer generation wins" rule.
     suspend fun pushRecords(
         baseUrl: String,
         token: String,
         raceLabel: String,
         devices: Map<String, List<SyncRecord>>,
+        authoritative: List<String> = emptyList(),
     ): MobileSyncResponse {
         val response = client.post("${baseUrl.trimEnd('/')}/api/mobile/${encodePathSegment(raceLabel)}") {
             expectSuccess = false
             bearerAuth(token)
             contentType(ContentType.Application.Json)
-            setBody(MobileSyncPayload(devices.mapValues { (_, records) -> records.map { it.toServerSyncRecord() } }))
+            setBody(MobileSyncPayload(devices.mapValues { (_, records) -> records.map { it.toServerSyncRecord() } }, authoritative))
         }
         checkSuccess(response)
         return response.body()

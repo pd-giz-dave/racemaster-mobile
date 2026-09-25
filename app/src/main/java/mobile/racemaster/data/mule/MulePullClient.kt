@@ -25,6 +25,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import java.util.Collections
 import kotlin.time.Duration.Companion.milliseconds
@@ -412,6 +413,7 @@ class MulePullClient {
         // normally, cancellation included, must evict the cached Peripheral, not just disconnect
         // it, or a later attempt against this address inherits Kable's "cancelled" instance.
         var succeeded = false
+        var negotiatedMtu: Int? = null
         try {
             try {
                 withTimeout(READ_TIMEOUT) {
@@ -428,7 +430,7 @@ class MulePullClient {
                     // reassembly path entirely. Best-effort like collectChunkedResponse's own copy
                     // — if negotiation fails/isn't supported, this falls back to the same
                     // read-blob path as before, no worse than today.
-                    runCatching { (peripheral as? AndroidPeripheral)?.requestMtu(MuleGattProfile.REQUESTED_MTU) }
+                    negotiatedMtu = runCatching { (peripheral as? AndroidPeripheral)?.requestMtu(MuleGattProfile.REQUESTED_MTU) }.getOrNull()
                 }
             } catch (e: TimeoutCancellationException) {
                 throw MulePhaseTimeoutException("negotiating MTU", e)
@@ -447,7 +449,10 @@ class MulePullClient {
             } catch (e: TimeoutCancellationException) {
                 throw MulePhaseTimeoutException("reading", e)
             }
-            val info = json.decodeFromString<DeviceInfo>(String(bytes, Charsets.UTF_8))
+            val info = decodeDeviceInfo(bytes, negotiatedMtu, json)
+            if (bytes.size > singleReadLimit(negotiatedMtu)) {
+                Log.w(TAG, "DeviceInfo from address=${advertisement.identifier} was ${bytes.size} bytes, over the ${singleReadLimit(negotiatedMtu)} a single read carries (MTU $negotiatedMtu) — read in pieces; decoded OK this time")
+            }
             if (sinkConfirmedOrigins.isNotEmpty()) {
                 val ackCharacteristic = characteristicOf(
                     service = MuleGattProfile.SERVICE_UUID.toKotlinUuid(),
@@ -861,6 +866,24 @@ class MulePullClient {
  * the bare "timeout" it falls back to for anything else that throws a plain, untagged
  * [TimeoutCancellationException].
  */
+/** A [DeviceInfo] read that had to arrive in pieces (it was longer than one read response on this
+ *  link — see [singleReadLimit]) and came back undecodable: the pieces were reassembled wrongly.
+ *  Raised instead of the bare decode error, so the cause is named rather than showing up as
+ *  garbage JSON. */
+internal class OversizedReadException(val size: Int, val singleReadLimit: Int, cause: Throwable) :
+    Exception("DeviceInfo is $size bytes but this connection carries only $singleReadLimit per read; it arrived in pieces and couldn't be decoded", cause)
+
+internal fun decodeDeviceInfo(bytes: ByteArray, negotiatedMtu: Int?, json: Json): DeviceInfo {
+    val limit = singleReadLimit(negotiatedMtu)
+    return try {
+        json.decodeFromString<DeviceInfo>(String(bytes, Charsets.UTF_8))
+    } catch (e: SerializationException) {
+        if (bytes.size >= limit) throw OversizedReadException(bytes.size, limit, e) else throw e
+    } catch (e: IllegalArgumentException) {
+        if (bytes.size >= limit) throw OversizedReadException(bytes.size, limit, e) else throw e
+    }
+}
+
 internal class MulePhaseTimeoutException(val phase: String, cause: TimeoutCancellationException) : Exception("timed out $phase", cause)
 
 /**
@@ -917,7 +940,7 @@ internal fun computeRequestKey(pullerDeviceId: String, originDeviceId: String?, 
  * the field: a write past that throws `IllegalArgumentException`), so this is the one true
  * correctness ceiling for how big a single [AckPayload] batch is *allowed* to be. It says
  * nothing about how many over-the-air ATT packets a write of that size costs, though — that's
- * governed by whatever MTU the connection actually negotiated (REQUESTED_MTU=247 is a request,
+ * governed by whatever MTU the connection actually negotiated (REQUESTED_MTU is a request,
  * "Android doesn't guarantee it matches"), and a write whose encoded size exceeds (negotiated MTU
  * − 3) doesn't fail — it silently becomes a multi-PDU "prepared write" transaction instead
  * (`BluetoothGattServerCallback.onExecuteWrite`). TODO.md's Sony-Mule investigation traced a

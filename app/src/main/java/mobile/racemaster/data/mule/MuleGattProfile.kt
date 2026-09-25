@@ -113,8 +113,18 @@ object MuleGattProfile {
      *  risk rather than a guarantee. */
     val MULE_MODE_MARKER_SERVICE_UUID: UUID = UUID.fromString("0000fff0-0000-1000-8000-00805f9b34fb")
 
-    const val REQUESTED_MTU = 247
+    // The BLE maximum. DeviceInfo must arrive in ONE read response (MTU − 1 bytes): anything
+    // longer falls back to Android's multi-fragment "read blob" reassembly, which corrupts the
+    // value on some chipsets (see MulePullClient.readDeviceInfoOnce). At 247 a DeviceInfo carrying
+    // a full dated race label plus a progressGeneratedAt came to ~251 bytes and failed every read
+    // with a JsonDecodingException (confirmed in the field); 517 covers the longest possible one
+    // (64-char label, long device name) with room to spare. Notification chunks stay capped by
+    // MAX_SAFE_CHUNK_SIZE_BYTES regardless.
+    const val REQUESTED_MTU = 517
     const val FALLBACK_CHUNK_SIZE_BYTES = 20
+
+    // The un-negotiated ATT MTU every BLE link starts at.
+    const val DEFAULT_ATT_MTU = 23
 
     // Android's BluetoothGattServer enforces a hard max GATT attribute value length of 512
     // bytes (GATT_MAX_ATTR_LEN) — notifyCharacteristicChanged throws IllegalArgumentException
@@ -572,3 +582,8 @@ data class ProgressPayload(
     val fromRaceLabel: String? = null,
     val targetDeviceName: String? = null,
 )
+
+/** The most a single GATT read response can carry on a link with [negotiatedMtu] (the ATT
+ *  default when unknown) — anything longer is read in pieces ("read blob"), which some stacks
+ *  reassemble wrongly. See [decodeDeviceInfo]. */
+internal fun singleReadLimit(negotiatedMtu: Int?): Int = (negotiatedMtu ?: MuleGattProfile.DEFAULT_ATT_MTU) - 1

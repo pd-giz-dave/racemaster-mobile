@@ -590,6 +590,12 @@ class MuleSyncEngine(
                 val jitter = Random.nextDouble(-1.0, 1.0) * AUTO_SYNC_JITTER_FRACTION
                 delay(AUTO_SYNC_INTERVAL * (1.0 + jitter))
                 pushIfNeeded(auto = true)
+                // Finishes any race deleted here whose tombstone has now been acknowledged by
+                // this push's status check or a Bluetooth ack — see
+                // RaceRepository.purgeConfirmedDeletes. Runs whether or not this device is
+                // logged in (a mule/web-app ack is enough).
+                runCatching { raceRepository.purgeConfirmedDeletes() }
+                    .onFailure { Log.w(TAG, "purgeConfirmedDeletes failed", it) }
             }
         }
     }
@@ -1364,6 +1370,7 @@ internal fun pushResultMessage(auto: Boolean, result: Result<Int>): String? = re
  * reconnect for as long as anything stayed owed to it.
  */
 internal fun describeConnectFailure(cause: Throwable): String = when (cause) {
+    is OversizedReadException -> "DeviceInfo too large (${cause.size} > ${cause.singleReadLimit} bytes)"
     is MulePhaseTimeoutException -> "timeout (${cause.phase})"
     is TimeoutCancellationException -> "timeout"
     is GattStatusException -> "GATT error ${cause.status}"

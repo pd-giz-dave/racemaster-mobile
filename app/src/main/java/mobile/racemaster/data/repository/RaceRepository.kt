@@ -5,6 +5,7 @@ import mobile.racemaster.data.db.RacemasterDatabase
 import mobile.racemaster.data.db.dao.HistoryLineDao
 import mobile.racemaster.data.db.dao.LineSyncDao
 import mobile.racemaster.data.db.dao.RaceDao
+import mobile.racemaster.data.db.entity.DELETED_RACE_NOTE
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
@@ -16,6 +17,7 @@ import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.data.settings.toHistoryMode
 import mobile.racemaster.data.settings.wireName
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 
 class RaceRepository(
@@ -168,6 +170,7 @@ class RaceRepository(
     // created instead, whose own NEW_RACE marker supersedes the old data on the server.
     suspend fun startOrContinueRace(name: String, location: String, maxAgeDays: Int): Long {
         val existing = raceDao.getByLabel(buildRaceLabel(name))
+            ?.takeIf { it.id !in historyLineDao.observePendingDeleteRaceIds().first() }
         if (existing != null && !isRaceStale(historyLineDao.observeLastActivityAtMillis(existing.id).first(), maxAgeDays)) {
             return existing.id
         }
@@ -396,6 +399,63 @@ class RaceRepository(
         raceDao.deleteById(raceId)
         if (settingsRepository.activeRaceId.first() == raceId) {
             settingsRepository.clearActiveRaceId()
+        }
+    }
+
+    // Deleting a race everywhere, not just on this phone (TODO.md: "if a self history file is
+    // deleted ... ensure it gets flushed from everywhere"). The race's whole history is replaced by
+    // one NEW_RACE row noted DELETED_RACE_NOTE — a new, newer generation that every recipient
+    // already treats as "discard what you hold" (server, mules, web app), and which the server and
+    // mules additionally use to refuse any older copy a lagging mule later resends. The row stays
+    // until that tombstone has been acknowledged (see purgeConfirmedDeletes); until then Race
+    // History shows it as pending delete. Numbering restarts at 1 like any recreated race — the
+    // recipients' existing "line count went down" handling picks it up from scratch. Refuses a
+    // race still active, same as deleteRace.
+    suspend fun requestDeleteRace(raceId: Long, nowMillis: Long = System.currentTimeMillis()) {
+        if (isRaceCurrentlyActive(raceId, this)) return
+        val race = raceDao.getById(raceId) ?: return
+        db.withTransaction {
+            historyLineDao.deleteAllForRace(raceId)
+            lineSyncDao.deleteForRace(raceId)
+            historyLineDao.insert(
+                HistoryLineEntity(
+                    raceId = raceId,
+                    mode = race.mode?.let { AppMode.valueOf(it).toHistoryMode() } ?: HistoryMode.TIME,
+                    action = HistoryAction.NEW_RACE,
+                    bibNumber = null,
+                    splitNumber = null,
+                    lineNumber = 1L,
+                    note = DELETED_RACE_NOTE,
+                    timestampMillis = nowMillis,
+                ),
+            )
+            raceDao.setNextLineNumber(raceId, 2L)
+        }
+        if (settingsRepository.activeRaceId.first() == raceId) settingsRepository.clearActiveRaceId()
+    }
+
+    fun observePendingDeleteRaceIds(): Flow<List<Long>> = historyLineDao.observePendingDeleteRaceIds()
+
+    fun observePendingDeleteRaces(): Flow<List<RaceEntity>> =
+        combine(raceDao.observeAll(), historyLineDao.observePendingDeleteRaceIds()) { races, ids ->
+            val pending = ids.toSet()
+            races.filter { it.id in pending }
+        }
+
+    // Finishes each pending delete once its tombstone has been acknowledged — confirmed on the
+    // server (syncedAtMillis) or taken by a mule/the web app (a LineSync row), which then carries
+    // it on. Also finishes one shadowed by a newer same-label race, whose own NEW_RACE supersedes
+    // the tombstone everywhere anyway (and which MuleRepository.pushToServer pushes instead).
+    suspend fun purgeConfirmedDeletes() {
+        val pendingIds = historyLineDao.observePendingDeleteRaceIds().first()
+        if (pendingIds.isEmpty()) return
+        val races = raceDao.observeAll().first()
+        for (id in pendingIds) {
+            val race = races.firstOrNull { it.id == id } ?: continue
+            val tombstone = historyLineDao.getByLineNumber(id, 1L)
+            val acknowledged = tombstone?.syncedAtMillis != null || lineSyncDao.observeForRace(id).first().isNotEmpty()
+            val shadowed = races.any { it.label == race.label && it.id != id && it.createdAtMillis >= race.createdAtMillis && it.id !in pendingIds }
+            if (acknowledged || shadowed) deleteRace(id)
         }
     }
 

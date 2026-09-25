@@ -14,6 +14,8 @@ import kotlinx.serialization.json.Json
 import mobile.racemaster.data.db.dao.KnownDeviceDao
 import mobile.racemaster.data.db.dao.PulledRecordDao
 import mobile.racemaster.data.db.dao.PulledSourceSummary
+import mobile.racemaster.data.db.entity.DELETED_RACE_NOTE
+import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.KnownDeviceEntity
 import mobile.racemaster.data.db.entity.PulledRecordEntity
 import mobile.racemaster.data.db.entity.SERVER_TARGET_ID
@@ -68,6 +70,8 @@ class MuleRepository(
     val serverSyncOff: Flow<Boolean> = settingsRepository.serverSyncOff
 
     val sourceSummaries: Flow<List<PulledSourceSummary>> = pulledRecordDao.observeSourceSummaries()
+    val tombstonedSources: Flow<Set<Pair<String, String>>> = pulledRecordDao.observeTombstonedSources()
+        .map { keys -> keys.map { it.sourceDeviceId to it.sourceRaceLabel }.toSet() }
     val deviceName: Flow<String?> = settingsRepository.deviceName
 
     // Distinct from lastSyncedAtMillis above, which is really "last time anything was
@@ -307,7 +311,7 @@ class MuleRepository(
             requestOriginRaceLabel,
             sinkConfirmedOrigins,
             onReceived = { records ->
-                count = storePulledRecords(sourceRaceLabel, sourceDeviceId, sourceDeviceName, records)
+                count = storePulledRecords(sourceRaceLabel, sourceDeviceId, sourceDeviceName, records, direct = requestOriginDeviceId == null)
             },
             onConfirmationsRelayed = { relayedOrigins ->
                 // Only retire the "needs relaying" flag once this confirmation has actually
@@ -338,6 +342,9 @@ class MuleRepository(
         sourceDeviceId: String,
         sourceDeviceName: String,
         records: List<SyncRecord>,
+        // Pulled straight from the source device itself (not relayed via another mule) — its
+        // current history is the truth, so the generation ordering below never refuses it.
+        direct: Boolean,
     ): Int {
         if (records.isEmpty()) return 0
         // A "NewRace" marker anywhere in this freshly-pulled batch (see HistoryAction.NEW_RACE's
@@ -352,7 +359,26 @@ class MuleRepository(
         // cursor — lastPulledLineNumber here is derived fresh from PulledRecordEntity's own
         // current contents each time, so wiping the table alone is self-correcting.
         val newRace = records.firstOrNull { it.action == "NewRace" }
-        if (newRace != null) {
+        val heldNewRace = pulledRecordDao.getFirstForSource(sourceDeviceId, sourceRaceLabel)
+            ?.let { runCatching { json.decodeFromString<SyncRecord>(it.payloadJson) }.getOrNull() }
+            ?.takeIf { it.action == "NewRace" }
+        var generation = classifyPulledBatch(heldNewRace, newRace)
+        // An older generation than the one held (a copy another mule pulled before the source
+        // deleted or recreated its race), or plain deltas against a deletion tombstone: refused,
+        // so it can't overwrite the newer data and get relayed or pushed on — unless it came
+        // straight from the device, which is never stale about itself. Then a batch with its
+        // NewRace replaces what's held; one without (only the lines past a cursor that described
+        // what's held, e.g. a tombstone this device has since been adopted over) clears the held
+        // copy so the next pull starts from scratch and brings the NewRace with it.
+        if (generation == PulledGeneration.SUPERSEDED && direct) {
+            if (newRace == null) {
+                pulledRecordDao.deleteForSource(sourceRaceLabel, sourceDeviceId)
+                return 0
+            }
+            generation = PulledGeneration.FRESH
+        }
+        if (generation == PulledGeneration.SUPERSEDED) return 0
+        if (newRace != null && generation == PulledGeneration.FRESH) {
             pulledRecordDao.deleteForSource(sourceRaceLabel, sourceDeviceId)
             // The same NewRace marker (same lineNumber and timestamp) already held under a
             // DIFFERENT label for this device means the device was adopted into a new label
@@ -554,6 +580,10 @@ class MuleRepository(
             if (isRaceStale(touchedAtMillis, maxAgeDays)) continue
 
             val status = runCatching { syncClient.getSyncStatus(baseUrl, token, raceLabel) }.getOrDefault(emptyMap())
+            // Which generation (NewRace) of each device's history the server holds — see
+            // startingFreshDevices below. Empty (no generation-based decisions) on an older
+            // server without the route or any failure; the line-cursor rule still applies.
+            val generations = runCatching { syncClient.getGenerations(baseUrl, token, raceLabel) }.getOrDefault(emptyMap())
 
             // This device's own history, built fresh from the real HistoryLineEntity rows —
             // no locally-staged copy to fall out of sync with what actually happened. Fetched
@@ -611,14 +641,31 @@ class MuleRepository(
             // same push), its own reported status naturally drops to (at most) our own real max,
             // and the bypass naturally, permanently stops on its own — no confirmation-state
             // bookkeeping needed at all.
+            //
+            // Also whenever the server holds a DIFFERENT generation of a device's history than the
+            // one about to be sent (its NewRace timestamp differs): then status's line cursor
+            // describes someone else's lines, so the delta past it would lack this generation's
+            // own NewRace and be refused (confirmed in the field: a race adopted into a label
+            // where this device had earlier deleted a race — the tombstone's line 1 made every
+            // push send lines 2+ only, refused every ~5s, forever). Sending everything lets the
+            // server see the NewRace and replace (or, for an older relayed copy, refuse) properly.
             val startingFreshDevices = buildSet {
                 val selfMax = selfRows.maxOfOrNull { it.lineNumber } ?: 0L
                 if ((status[myDeviceName] ?: 0L) > selfMax) add(myDeviceName)
+                val selfGeneration = selfRows.filter { it.action == HistoryAction.NEW_RACE }.maxByOrNull { it.lineNumber }
+                    ?.let { formatServerTimestamp(it.timestampMillis) }
+                if (generationDiffers(generations, myDeviceName, selfGeneration)) add(myDeviceName)
                 for ((deviceName, rows) in pulledForRace.groupBy { it.deviceName }) {
                     val pulledMax = rows.maxOfOrNull { it.lineNumber } ?: 0L
                     if ((status[deviceName] ?: 0L) > pulledMax) add(deviceName)
+                    val heldGeneration = rows.sortedByDescending { it.lineNumber }.firstNotNullOfOrNull { row ->
+                        decodeSyncRecord(row, json)?.takeIf { it.action == "NewRace" }
+                    }?.let { formatServerTimestamp(it.timestampMillis) }
+                    if (generationDiffers(generations, deviceName, heldGeneration)) add(deviceName)
                 }
             }
+            // This device's own race is pushed straight from the source — see pushRecords' doc.
+            val authoritative = if (selfRecords.isEmpty()) emptyList() else listOf(myDeviceName)
             val devicesToSend = recordsDueForDevices(byDevice, status, startingFreshDevices)
             if (devicesToSend.isNotEmpty()) {
                 // See reauthenticate's own doc: a 401/403 here — this device's saved token no
@@ -627,14 +674,22 @@ class MuleRepository(
                 // login using this phone's own last-saved credentials for this server, before
                 // giving up and letting the original exception reach the operator as-is.
                 val response = try {
-                    syncClient.pushRecords(baseUrl, token, raceLabel, devicesToSend)
+                    syncClient.pushRecords(baseUrl, token, raceLabel, devicesToSend, authoritative)
                 } catch (e: ServerRequestException) {
                     if (reauthAttempted || (e.statusCode != 401 && e.statusCode != 403)) throw e
                     reauthAttempted = true
                     token = reauthenticate(baseUrl) ?: throw e
-                    syncClient.pushRecords(baseUrl, token, raceLabel, devicesToSend)
+                    syncClient.pushRecords(baseUrl, token, raceLabel, devicesToSend, authoritative)
                 }
                 added += response.added
+                // A relayed copy the server refused as older than (or deleted since) what it
+                // holds — the source device deleted or recreated that race after this mule pulled
+                // it. Dropping it stops it being resent forever; this device's own race is never
+                // older than its own server copy, so it's never touched here.
+                for (deviceName in response.superseded) {
+                    if (deviceName == myDeviceName) continue
+                    pulledRecordDao.deleteForDeviceName(raceLabel, deviceName)
+                }
             }
 
             // Only the rows this round's *status check* independently found the server already
@@ -695,6 +750,28 @@ class MuleRepository(
 // decode and relayedRecordsSince, so this tolerance never has to be reimplemented (or drift) a
 // second time. Pulled out as a top-level function (like recordsDueForDevices below) so it's
 // directly testable without standing up MuleRepository's full dependency graph.
+// Whether the server holds a generation of [deviceName]'s history different from [ours] (the
+// NewRace timestamp about to be sent). Only a genuine, known mismatch counts — no server entry,
+// or no NewRace on our side to compare, leaves the ordinary line-cursor rule in charge.
+internal fun generationDiffers(serverGenerations: Map<String, String?>, deviceName: String, ours: String?): Boolean {
+    if (ours == null || !serverGenerations.containsKey(deviceName)) return false
+    return serverGenerations[deviceName] != ours
+}
+
+internal enum class PulledGeneration { FRESH, SAME, SUPERSEDED }
+
+// How a freshly-pulled batch relates to what's already held for that source — the mule-side
+// twin of racemaster's server/mobile.js classifyPush. Generations are ordered by their opening
+// NewRace's timestamp (one device's own clock). FRESH replaces what's held, SAME merges into it,
+// SUPERSEDED (older than held, or deltas with no NewRace against a deletion tombstone) is refused.
+internal fun classifyPulledBatch(held: SyncRecord?, incoming: SyncRecord?): PulledGeneration = when {
+    incoming == null -> if (held?.note == DELETED_RACE_NOTE) PulledGeneration.SUPERSEDED else PulledGeneration.SAME
+    held == null -> PulledGeneration.FRESH
+    held.lineNumber == incoming.lineNumber && held.timestampMillis == incoming.timestampMillis -> PulledGeneration.SAME
+    incoming.timestampMillis < held.timestampMillis -> PulledGeneration.SUPERSEDED
+    else -> PulledGeneration.FRESH
+}
+
 // The labels among [candidates] (rows for one device under other labels) holding this exact
 // [newRace] marker — same lineNumber and timestamp, i.e. the same race relabeled by adoption
 // rather than a genuinely different race that happens to start at the same line.

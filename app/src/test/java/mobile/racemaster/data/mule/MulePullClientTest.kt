@@ -168,4 +168,55 @@ class MulePullClientTest {
         assertEquals(false, shouldDeliverProgress("race-b", "2020-01-01T00:00:00.000Z", "race-a", "2026-08-23T10:00:00.000Z"))
         assertEquals(false, shouldDeliverProgress("race-b", null, "race-a", "2026-08-23T10:00:00.000Z"))
     }
+
+    // DeviceInfo must arrive in ONE read response (see MuleGattProfile.REQUESTED_MTU): a value
+    // read in pieces was being reassembled into garbage in the field. The largest DeviceInfo this
+    // app can produce — server-sanitised names/labels cap at 64 chars — must fit, encoded exactly
+    // as PeripheralSyncService encodes it, so a field added (or a label format grown) later fails
+    // here instead of on a phone.
+    @Test
+    fun theLargestPossibleDeviceInfoFitsInOneReadAtTheRequestedMtu() {
+        val peripheralJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+        val worstCase = DeviceInfo(
+            deviceId = "305792c1-85bc-4199-9d40-984493f78671",
+            raceLabel = "r".repeat(64),
+            lastLineNumber = Long.MAX_VALUE,
+            deviceName = "d".repeat(64),
+            relayCount = Int.MAX_VALUE,
+            relayManifestVersion = Int.MAX_VALUE,
+            pollIntervalMs = Long.MAX_VALUE,
+            progressGeneratedAt = "2026-09-25T14:04:51.115Z",
+        )
+        val size = peripheralJson.encodeToString(worstCase).toByteArray(Charsets.UTF_8).size
+
+        assertTrue("worst-case DeviceInfo is $size bytes", size <= singleReadLimit(MuleGattProfile.REQUESTED_MTU))
+    }
+
+    // decodeDeviceInfo — a read that had to come in pieces and decoded as garbage is named as
+    // such, rather than surfacing as a bare JSON error.
+
+    @Test
+    fun anOversizedUndecodableReadIsReportedAsSuch() {
+        val garbage = ByteArray(251) { 'x'.code.toByte() }
+
+        val e = runCatching { decodeDeviceInfo(garbage, negotiatedMtu = 247, json = json) }.exceptionOrNull()
+
+        assertTrue(e is OversizedReadException)
+        assertEquals(251, (e as OversizedReadException).size)
+        assertEquals(246, e.singleReadLimit)
+    }
+
+    @Test
+    fun aSmallUndecodableReadStaysAnOrdinaryDecodeError() {
+        val e = runCatching { decodeDeviceInfo("{not json".toByteArray(), negotiatedMtu = 517, json = json) }.exceptionOrNull()
+
+        assertTrue(e !is OversizedReadException && e is kotlinx.serialization.SerializationException)
+    }
+
+    @Test
+    fun aValidReadDecodesNormally() {
+        val bytes = """{"deviceId":"d1","raceLabel":"r","lastLineNumber":3}""".toByteArray()
+
+        assertEquals("d1", decodeDeviceInfo(bytes, negotiatedMtu = null, json = json).deviceId)
+    }
 }

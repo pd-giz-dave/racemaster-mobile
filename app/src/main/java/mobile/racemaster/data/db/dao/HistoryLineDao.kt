@@ -47,6 +47,14 @@ interface HistoryLineDao {
     @Insert
     suspend fun insert(entry: HistoryLineEntity): Long
 
+    @Query("DELETE FROM history_lines WHERE raceId = :raceId")
+    suspend fun deleteAllForRace(raceId: Long)
+
+    // Races reduced to a deletion tombstone (see RaceRepository.requestDeleteRace) — a NEW_RACE
+    // row noted "Deleted" only ever exists as such a race's one remaining line.
+    @Query("SELECT DISTINCT raceId FROM history_lines WHERE action = 'NEW_RACE' AND note = 'Deleted'")
+    fun observePendingDeleteRaceIds(): Flow<List<Long>>
+
     // Unscoped (both modes) — delta-sync snapshot spanning every segment of every mode this
     // device has recorded, past whatever the requester already has. Deliberately NOT scoped
     // to whichever AppMode screen happens to be showing: a mixed-mode race must still sync
