@@ -166,3 +166,12 @@ looking in the folder for the arbitrary initial name they gave the race, and its
   - in this scenario the mule (knowing the device name and race name of every phone it can see)
     can read the adopted-to... files on behalf of the device and relay it back to the phones
     (using the existing BT mechanism for doing that)
+
+## An idea
+
+Develop an app that is run on runners phones (many runners carry smartphones) when it passes
+near a CP mode phone and auto communication happens that records their number and time. That
+app could also provide GPS tracking. It then could be used for the Hike to both know where
+competitors are and when they passed a CP.
+
+See racemaster-tracker for more on this.
