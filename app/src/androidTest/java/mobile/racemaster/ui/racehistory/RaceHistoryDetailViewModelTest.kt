@@ -121,12 +121,12 @@ class RaceHistoryDetailViewModelTest {
 
         val timeRow = state.lines.single { it.mode == HistoryMode.TIME && it.action == HistoryAction.SPLIT }
         assertEquals(4_500L, timeRow.elapsedMillis)
+        // A BIBS row has no stopwatch of its own, so it reads null (rendered as "–"), not 0.
         val bibsRow = state.lines.single { it.mode == HistoryMode.BIBS }
-        assertEquals(0L, bibsRow.elapsedMillis)
-        // The Time MODE_START row always reads 0 too — it shares the real Start marker's own
-        // instant here (both explicitly at 1_000L).
+        assertEquals(null, bibsRow.elapsedMillis)
+        // The Time MODE_START row is a boundary marker, not a genuine timed split — null too.
         val modeStartRow = state.lines.single { it.action == HistoryAction.MODE_START }
-        assertEquals(0L, modeStartRow.elapsedMillis)
+        assertEquals(null, modeStartRow.elapsedMillis)
     }
 
     @Test

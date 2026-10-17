@@ -52,7 +52,7 @@ interface HistoryLineDao {
 
     // Races reduced to a deletion tombstone (see RaceRepository.requestDeleteRace) — a NEW_RACE
     // row noted "Deleted" only ever exists as such a race's one remaining line.
-    @Query("SELECT DISTINCT raceId FROM history_lines WHERE action = 'NEW_RACE' AND note = 'Deleted'")
+    @Query("SELECT DISTINCT raceId FROM history_lines WHERE `action` = 'NEW_RACE' AND note = 'Deleted'")
     fun observePendingDeleteRaceIds(): Flow<List<Long>>
 
     // Unscoped (both modes) — delta-sync snapshot spanning every segment of every mode this
