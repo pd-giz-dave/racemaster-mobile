@@ -167,6 +167,16 @@ looking in the folder for the arbitrary initial name they gave the race, and its
     can read the adopted-to... files on behalf of the device and relay it back to the phones
     (using the existing BT mechanism for doing that)
 
+## Usability tweak to help with Robin's handicap race
+
+I would like a proposal that allows a bibs mode phone to have a setting that specifies what the
+event type is when 3 digits are entered, default is 'Finish'. That setting must be visually
+obvious in the bibs mode screen and its options are start, finish retire. A single press of
+something must be all that is required to change the default, the option should not make the
+screen bigger - one suggestion: have 3 small buttons at the left of the number area and right
+align the number input area.
+ - [x] done
+
 ## An idea
 
 Develop an app that is run on runners phones (many runners carry smartphones) when it passes

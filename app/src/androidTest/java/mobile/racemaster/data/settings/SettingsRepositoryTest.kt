@@ -4,6 +4,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import mobile.racemaster.data.db.entity.HistoryAction
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
@@ -52,6 +53,27 @@ class SettingsRepositoryTest {
         val secondInstance = SettingsRepository(dataStoreOverFile(file, secondScope))
         assertEquals(AppMode.BIBS, secondInstance.appMode.first())
         assertEquals(42L, secondInstance.activeRaceId.first())
+        secondScope.cancel()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun bibsAutoSaveActionDefaultsToFinishAndRoundTripsAcrossSimulatedRestart() = runTest {
+        val file = tempFolder.newFile("test.preferences_pb")
+
+        val firstScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
+        val firstInstance = SettingsRepository(dataStoreOverFile(file, firstScope))
+        assertEquals(HistoryAction.FINISH, firstInstance.bibsAutoSaveAction.first())
+
+        firstInstance.setBibsAutoSaveAction(HistoryAction.RETIRE)
+
+        // Simulate a process restart: release the first DataStore's file lock before
+        // reopening a new one over the same file (DataStore enforces one instance per file).
+        firstScope.cancel()
+
+        val secondScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
+        val secondInstance = SettingsRepository(dataStoreOverFile(file, secondScope))
+        assertEquals(HistoryAction.RETIRE, secondInstance.bibsAutoSaveAction.first())
         secondScope.cancel()
     }
 

@@ -64,4 +64,12 @@ class HistoryActionLabelsTest {
         assertEquals(false, HistoryAction.START in BIBS_STANDALONE_OPTIONS)
         assertEquals(false, HistoryAction.RETIRE in BIBS_STANDALONE_OPTIONS)
     }
+
+    @Test
+    fun defaultActionOptionsAreStartThenFinishOnly() {
+        assertEquals(
+            listOf(HistoryAction.START, HistoryAction.FINISH),
+            BIBS_DEFAULT_ACTION_OPTIONS,
+        )
+    }
 }

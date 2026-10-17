@@ -26,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -51,6 +52,46 @@ private const val BUTTON_HEIGHT_DP = 48
 // three buttons share a row — cut it down instead of shrinking the font, so labels like
 // "Event"/"Reset" stay readable.
 private val BUTTON_ROW_CONTENT_PADDING = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+
+// Deliberately much smaller than BUTTON_HEIGHT_DP (48dp, used by the Event/Reset/Undo row) —
+// this selector sits in the row that used to be a bare Text showing the current digits, so it's
+// sized to roughly match that text's own line height rather than grow the row.
+private val DEFAULT_ACTION_BUTTON_HEIGHT_DP = 36.dp
+private val DEFAULT_ACTION_BUTTON_PADDING = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+
+// Bibs Mode's compact, always-visible selector for which HistoryAction a bib's 3rd digit
+// auto-saves as by default (see BibsModeViewModel.onDigit) — distinct from the Event button's
+// ActionPickerDialog, which stays a full modal list for manual, after-the-fact correction. This
+// one trades a full picker for "a single tap changes the default, right here, with the active
+// choice always visible" per TODO.md's own requirement, at the cost of only offering the three
+// bib-required actions (BIBS_DEFAULT_ACTION_OPTIONS) rather than the full marker list.
+@Composable
+private fun DefaultBibsActionSelector(
+    selected: HistoryAction,
+    onSelect: (HistoryAction) -> Unit,
+    enabled: Boolean,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        BIBS_DEFAULT_ACTION_OPTIONS.forEach { action ->
+            val buttonModifier = Modifier.height(DEFAULT_ACTION_BUTTON_HEIGHT_DP)
+            if (action == selected) {
+                Button(
+                    onClick = withClickSound { onSelect(action) },
+                    enabled = enabled,
+                    contentPadding = DEFAULT_ACTION_BUTTON_PADDING,
+                    modifier = buttonModifier,
+                ) { Text(action.displayName(), style = MaterialTheme.typography.labelSmall) }
+            } else {
+                OutlinedButton(
+                    onClick = withClickSound { onSelect(action) },
+                    enabled = enabled,
+                    contentPadding = DEFAULT_ACTION_BUTTON_PADDING,
+                    modifier = buttonModifier,
+                ) { Text(action.displayName(), style = MaterialTheme.typography.labelSmall) }
+            }
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -88,6 +129,7 @@ fun BibsModeScreen(
             btPollingStatus = btPollingStatus,
             onStart = viewModel::startBibsMode,
             onDigit = viewModel::onDigit,
+            onDefaultBibsActionSelected = viewModel::onDefaultBibsActionSelected,
             onBackspace = viewModel::onBackspace,
             onClear = viewModel::onClear,
             onEventTypeSelected = viewModel::onEventTypeSelected,
@@ -110,6 +152,7 @@ private fun BibsModeContent(
     btPollingStatus: BtPollingStatus,
     onStart: () -> Unit,
     onDigit: (Int) -> Unit,
+    onDefaultBibsActionSelected: (HistoryAction) -> Unit,
     onBackspace: () -> Unit,
     onClear: () -> Unit,
     onEventTypeSelected: (HistoryAction) -> Unit,
@@ -187,12 +230,23 @@ private fun BibsModeContent(
                             .height(96.dp),
                     ) { Text("START", style = MaterialTheme.typography.displaySmall) }
                 } else {
-                    Text(
-                        text = uiState.currentDigits.ifEmpty { "Enter bib" },
-                        style = MaterialTheme.typography.headlineSmall,
-                        textAlign = TextAlign.Center,
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
-                    )
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        DefaultBibsActionSelector(
+                            selected = uiState.defaultBibsAction,
+                            onSelect = onDefaultBibsActionSelected,
+                            enabled = uiState.raceId != null,
+                        )
+                        Text(
+                            text = uiState.currentDigits.ifEmpty { "Enter bib" },
+                            style = MaterialTheme.typography.headlineSmall,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
 
                     DigitKeypad(
                         // A digit tap may be the 3rd one, which auto-saves — trigger the list's
@@ -207,9 +261,10 @@ private fun BibsModeContent(
                         spacing = 4.dp,
                     )
 
-                    // No Submit/Finish button — every bib auto-saves as a Finish the moment its
-                    // 3rd digit is typed (see BibsModeViewModel.onDigit); Event is what corrects
-                    // it afterward if it wasn't actually a finish.
+                    // No Submit button — every bib auto-saves the moment its 3rd digit is typed,
+                    // as whichever action DefaultBibsActionSelector above currently has selected
+                    // (see BibsModeViewModel.onDigit); Event is what corrects it afterward if the
+                    // default guessed wrong.
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         OutlinedButton(
                             onClick = withClickSound { showEventPicker = true },
@@ -235,7 +290,7 @@ private fun BibsModeContent(
                     if (showEventPicker) {
                         ActionPickerDialog(
                             options = uiState.eventOptions,
-                            current = uiState.entries.firstOrNull()?.type ?: HistoryAction.FINISH,
+                            current = uiState.entries.firstOrNull()?.type ?: uiState.defaultBibsAction,
                             onSelect = { type ->
                                 listClickGuard.trigger()
                                 onEventTypeSelected(type)

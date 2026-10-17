@@ -80,6 +80,10 @@ data class BibsModeUiState(
     // a just-auto-saved entry to retag, BIBS_STANDALONE_OPTIONS otherwise (see
     // BibsModeViewModel.onEventTypeSelected's own doc).
     val eventOptions: List<HistoryAction> = EVENT_PICKER_OPTIONS,
+    // Which HistoryAction a bib's 3rd digit currently auto-saves as (see
+    // BibsModeViewModel.onDigit's own doc) — drives BibsModeScreen's DefaultBibsActionSelector,
+    // operator-settable there with a single tap.
+    val defaultBibsAction: HistoryAction = HistoryAction.FINISH,
     val nextSplitNumber: Int = 1,
     val dupCount: Int = 0,
     val entries: List<EntryLogUi> = emptyList(),
@@ -123,6 +127,12 @@ class BibsModeViewModel(
 
     private val raceIdFlow: StateFlow<Long?> = settingsRepository.activeRaceId
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    // Eagerly, not WhileSubscribed(5_000), like raceIdFlow above — onDigit needs to read the
+    // current default synchronously via .value the instant it's called, which can happen before
+    // a screen-driven WhileSubscribed collector would have started.
+    private val defaultBibsActionFlow: StateFlow<HistoryAction> = settingsRepository.bibsAutoSaveAction
+        .stateIn(viewModelScope, SharingStarted.Eagerly, HistoryAction.FINISH)
 
     val deviceName: StateFlow<String?> = settingsRepository.deviceName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -197,7 +207,8 @@ class BibsModeViewModel(
         raceAndEntriesFlow,
         digitsFlow,
         canRetagFlow,
-    ) { context, digits, canRetag ->
+        defaultBibsActionFlow,
+    ) { context, digits, canRetag, defaultBibsAction ->
         val (race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync, serverStatus, progressEntries) = context
         val dupRefs = findDuplicateSplitRefs(entries)
         val raceLocation = race?.location.orEmpty()
@@ -217,6 +228,7 @@ class BibsModeViewModel(
             // them. Undo last is the only way back from there: it removes the marker outright
             // and exposes whatever bib-carrying entry was under it.
             eventOptions = if (canRetag && entries.firstOrNull()?.bibNumber != null) EVENT_PICKER_OPTIONS else BIBS_STANDALONE_OPTIONS,
+            defaultBibsAction = defaultBibsAction,
             nextSplitNumber = race?.bibsModeNextSplit ?: 1,
             dupCount = countDuplicateExtras(entries),
             // LOCATION rows are deliberately left out of the rendered list — the race's own
@@ -274,10 +286,11 @@ class BibsModeViewModel(
     // A fresh digit always starts a new entry — if the digits on screen are a frozen (already
     // committed, or undo-repopulated) value, clear them first rather than appending onto a
     // number that's already 3 digits long. Reaching the 3rd digit immediately auto-saves it as
-    // a FINISH (see this file's own doc / TODO.md's "Re-jig bibs mode" for why): the vast
-    // majority of entries are ordinary finishes, and a wrong guess is one Event tap away from
-    // being corrected via onEventTypeSelected rather than costing an extra keystroke on every
-    // single entry.
+    // whichever action defaultBibsActionFlow currently holds (FINISH unless the operator has
+    // picked Start via BibsModeScreen's DefaultBibsActionSelector — see this file's own doc /
+    // TODO.md's "Re-jig bibs mode" for why FINISH is the default): the vast majority of entries
+    // are ordinary finishes, and a wrong guess is one Event tap away from being corrected via
+    // onEventTypeSelected rather than costing an extra keystroke on every single entry.
     fun onDigit(digit: Int) {
         if (digitsFrozenFlow.value) {
             digitsFlow.value = ""
@@ -290,12 +303,16 @@ class BibsModeViewModel(
             val raceId = raceIdFlow.value ?: return
             val bib = digitsFlow.value.toIntOrNull() ?: return
             viewModelScope.launch {
-                bibsModeRepository.recordEntry(raceId, HistoryAction.FINISH, bib, note = null)
+                bibsModeRepository.recordEntry(raceId, defaultBibsActionFlow.value, bib, note = null)
                 digitsFrozenFlow.value = true
                 canRetagFlow.value = true
                 beeper.beep()
             }
         }
+    }
+
+    fun onDefaultBibsActionSelected(action: HistoryAction) {
+        viewModelScope.launch { settingsRepository.setBibsAutoSaveAction(action) }
     }
 
     fun onBackspace() {

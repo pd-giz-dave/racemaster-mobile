@@ -63,3 +63,13 @@ val CP_ACTION_OPTIONS: List<HistoryAction> = listOf(HistoryAction.PASS, HistoryA
 // none of these carry a bib, so they're the only types that still make sense to log as a
 // standalone entry with nothing typed in the keypad.
 val BIBS_STANDALONE_OPTIONS: List<HistoryAction> = EVENT_PICKER_OPTIONS.filterNot { it in BIB_REQUIRED_ACTIONS }
+
+// Bibs Mode's own compact default-action selector (see BibsModeScreen's DefaultBibsActionSelector)
+// — just the two common cases an operator pre-selects for a whole segment (e.g. a handicap
+// race's staggered starts). Retire is deliberately left out: it's an occasional, one-off
+// correction for a single bib, never something you'd want every subsequent 3-digit entry to
+// auto-save as — still reachable via Event the same as any other correction.
+val BIBS_DEFAULT_ACTION_OPTIONS: List<HistoryAction> = listOf(
+    HistoryAction.START,
+    HistoryAction.FINISH,
+)

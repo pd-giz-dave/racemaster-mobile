@@ -146,15 +146,22 @@ fun HelpScreen(onBack: () -> Unit) {
             HelpSection(
                 title = "Bibs Mode — logging",
                 body = "Type a bib number on the keypad — as soon as its 3rd digit is entered it's " +
-                    "recorded automatically as a Finish, no separate button tap needed. That's why a " +
-                    "bib below 100 must still be typed with leading zeros (e.g. \"007\", not \"7\") — " +
-                    "nothing is recorded until 3 digits have been typed. The number stays showing on " +
-                    "screen afterwards so you can double-check it before moving on; typing the next " +
-                    "bib's first digit clears it automatically. If that entry wasn't actually a " +
-                    "Finish, tap Event straight after and pick Start or Retire instead — both correct " +
-                    "the entry you just made in place, keeping the same bib, and the field keeps " +
-                    "showing that bib afterwards instead of clearing; they're only offered when the " +
-                    "entry on top actually has a bib to correct. Picking Ignore/Seniors/Juniors/Male/" +
+                    "recorded automatically, no separate button tap needed, as whichever of the two " +
+                    "small Start/Finish buttons above the number field is currently highlighted " +
+                    "(Finish by default). Tap the other one to switch the default with a single " +
+                    "press — handy for a handicap race's staggered starts, where most entries for a " +
+                    "while are Starts, not Finishes; the highlighted choice stays set across restarts " +
+                    "until changed again. That's why a bib below 100 must still be typed with leading " +
+                    "zeros (e.g. \"007\", not \"7\") — nothing is recorded until 3 digits have been " +
+                    "typed. The number stays showing on screen afterwards so you can double-check it " +
+                    "before moving on; typing the next bib's first digit clears it automatically. If " +
+                    "that entry wasn't actually what the default just recorded, tap Event straight " +
+                    "after and pick Start, Finish, or Retire instead — all three correct the entry " +
+                    "you just made in place, keeping the same bib, and the field keeps showing that " +
+                    "bib afterwards instead of clearing; they're only offered when the entry on top " +
+                    "actually has a bib to correct. Retire isn't one of the two default buttons since " +
+                    "it's an occasional one-off, not something you'd want every subsequent entry to " +
+                    "auto-save as — Event is how you reach it. Picking Ignore/Seniors/Juniors/Male/" +
                     "Female instead never touches that entry — a marker is a flag about the moment, " +
                     "not a correction, so it always logs as its own fresh, bib-less row on top, " +
                     "whether or not a bib entry is showing. Tapping Event before typing any digits " +

@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.util.generateDeviceName
 
 @Serializable
@@ -36,6 +37,10 @@ const val DEFAULT_RACE_STALE_AFTER_DAYS = 2
 
 // See SettingsRepository.pingIntervalSeconds's own doc.
 const val DEFAULT_PING_INTERVAL_SECONDS = 60
+
+// See SettingsRepository.bibsAutoSaveAction's own doc. Not `const` — an enum reference isn't a
+// Kotlin compile-time constant the way the Int defaults above are.
+val DEFAULT_BIBS_AUTO_SAVE_ACTION: HistoryAction = HistoryAction.FINISH
 
 class SettingsRepository(
     private val dataStore: DataStore<Preferences>,
@@ -65,6 +70,7 @@ class SettingsRepository(
         // install's setting back to the default on upgrade for no benefit.
         val RACE_STALE_AFTER_DAYS = intPreferencesKey("server_sync_max_age_days")
         val PING_INTERVAL_SECONDS = intPreferencesKey("ping_interval_seconds")
+        val BIBS_AUTO_SAVE_ACTION = stringPreferencesKey("bibs_auto_save_action")
     }
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -389,5 +395,20 @@ class SettingsRepository(
 
     suspend fun setPingIntervalSeconds(seconds: Int) {
         dataStore.edit { prefs -> prefs[Keys.PING_INTERVAL_SECONDS] = seconds }
+    }
+
+    // Which HistoryAction a bib's 3rd digit auto-saves as by default (see
+    // BibsModeViewModel.onDigit's own doc) — operator-settable from Bibs Mode's own compact
+    // selector rather than buried in Setup Options, since it's consulted on every entry.
+    // runCatching + fallback to DEFAULT_BIBS_AUTO_SAVE_ACTION, same reasoning as appMode above:
+    // a value held under a HistoryAction that's since been renamed/removed must degrade to the
+    // default, never crash the app on launch.
+    val bibsAutoSaveAction: Flow<HistoryAction> = dataStore.data.map { prefs ->
+        prefs[Keys.BIBS_AUTO_SAVE_ACTION]?.let { raw -> runCatching { HistoryAction.valueOf(raw) }.getOrNull() }
+            ?: DEFAULT_BIBS_AUTO_SAVE_ACTION
+    }
+
+    suspend fun setBibsAutoSaveAction(action: HistoryAction) {
+        dataStore.edit { prefs -> prefs[Keys.BIBS_AUTO_SAVE_ACTION] = action.name }
     }
 }
