@@ -15,6 +15,7 @@ import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.repository.LineSyncState
+import mobile.racemaster.data.repository.hasRealEntries
 import mobile.racemaster.data.repository.isRaceActive
 import mobile.racemaster.data.repository.lineSyncState
 import mobile.racemaster.data.repository.linesWithAnySync
@@ -133,8 +134,8 @@ class TimeModeViewModel(
                                 syncState = lineSyncState(it.syncedAtMillis, it.lineNumber in linesWithAnySync),
                             )
                         },
-                        canUndo = splits.isNotEmpty(),
-                        raceInProgress = isRaceActive(startedAt, race?.bibsModeStartedAtMillis, race?.cpModeStartedAtMillis),
+                        canUndo = splits.hasRealEntries(),
+                        raceInProgress = isRaceActive(startedAt, race?.bibsModeStartedAtMillis),
                         unsyncedCount = unsyncedCount,
                         lastSyncedAtMillis = lastSyncedAtMillis,
                         splitCount = splits.count { it.action == HistoryAction.SPLIT },

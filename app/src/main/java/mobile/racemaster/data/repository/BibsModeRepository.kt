@@ -45,10 +45,9 @@ class BibsModeRepository(
     // rather than something race creation (or a mode switch onto an already-active race — see
     // ModePickerViewModel) does automatically: this is what makes opening Bibs Mode
     // side-effect-free to just look at, exactly like Time Mode's own Start button — nothing is
-    // written until the operator actually presses Start. (CP Mode's own start writes the same
-    // kind of Clock marker — see CpModeRepository.startCpMode.) Also sets
-    // RaceEntity.bibsModeStartedAtMillis, exactly like Time/CP's own start methods — the Clock
-    // row above is still written (it's a real logged event, kept for the permanent record), but
+    // written until the operator actually presses Start. Also sets
+    // RaceEntity.bibsModeStartedAtMillis, exactly like Time's own start method — the Clock row
+    // above is still written (it's a real logged event, kept for the permanent record), but
     // is no longer what "started" is derived from; see that field's own doc for why. Its own
     // MODE_START boundary marker (see that action's own doc) is written earlier, up front, by
     // RaceRepository.recordModeStart (Setup Race / Relocate) — this only writes the real Clock

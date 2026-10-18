@@ -64,15 +64,18 @@ private val DEFAULT_ACTION_BUTTON_PADDING = PaddingValues(horizontal = 6.dp, ver
 // ActionPickerDialog, which stays a full modal list for manual, after-the-fact correction. This
 // one trades a full picker for "a single tap changes the default, right here, with the active
 // choice always visible" per TODO.md's own requirement, at the cost of only offering the three
-// bib-required actions (BIBS_DEFAULT_ACTION_OPTIONS) rather than the full marker list.
+// bib-required actions (BIBS_DEFAULT_ACTION_OPTIONS) rather than the full marker list. [options]
+// is that same list already narrowed by isBibsActionAllowedAtLocation for the race's current
+// location (see BibsModeUiState.defaultActionOptions) — just one button at a CP, two at Start/Finish.
 @Composable
 private fun DefaultBibsActionSelector(
     selected: HistoryAction,
+    options: List<HistoryAction>,
     onSelect: (HistoryAction) -> Unit,
     enabled: Boolean,
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        BIBS_DEFAULT_ACTION_OPTIONS.forEach { action ->
+        options.forEach { action ->
             val buttonModifier = Modifier.height(DEFAULT_ACTION_BUTTON_HEIGHT_DP)
             if (action == selected) {
                 Button(
@@ -237,6 +240,7 @@ private fun BibsModeContent(
                     ) {
                         DefaultBibsActionSelector(
                             selected = uiState.defaultBibsAction,
+                            options = uiState.defaultActionOptions,
                             onSelect = onDefaultBibsActionSelected,
                             enabled = uiState.raceId != null,
                         )

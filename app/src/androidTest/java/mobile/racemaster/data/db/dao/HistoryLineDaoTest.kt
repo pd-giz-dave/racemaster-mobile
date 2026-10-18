@@ -88,10 +88,10 @@ class HistoryLineDaoTest {
 
     @Test
     fun getAllForRaceAndModeIsTheOneShotEquivalentOfTheFlow() = runTest {
-        dao.insert(line(HistoryMode.CP, HistoryAction.PASS, lineNumber = 1))
-        dao.insert(line(HistoryMode.CP, HistoryAction.PASS, lineNumber = 2))
+        dao.insert(line(HistoryMode.BIBS, HistoryAction.PASS, lineNumber = 1))
+        dao.insert(line(HistoryMode.BIBS, HistoryAction.PASS, lineNumber = 2))
 
-        val snapshot = dao.getAllForRaceAndMode(raceId, HistoryMode.CP)
+        val snapshot = dao.getAllForRaceAndMode(raceId, HistoryMode.BIBS)
         assertEquals(listOf(1L, 2L), snapshot.map { it.lineNumber })
     }
 

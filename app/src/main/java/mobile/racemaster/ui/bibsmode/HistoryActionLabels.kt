@@ -42,10 +42,17 @@ fun HistoryAction.displayName(): String = when (this) {
 // its web-app time semantics are consumed anywhere in this codebase yet); Reset is only ever
 // inserted by BibsModeRepository.resetBibsMode as a fixed history boundary marker; Undo is only
 // ever inserted by BibsModeRepository.undoMostRecent as a fixed history marker; Ping is only
-// ever inserted by the background heartbeat loop — none are ever operator-selectable here.
+// ever inserted by the background heartbeat loop — none are ever operator-selectable here. Pass
+// is included since Bibs is location-aware (TODO.md: "A rationalisation") and can record at a
+// CPn location. This is the full candidate list — BibsModeViewModel.uiState further narrows
+// whatever subset of it (and of BIBS_STANDALONE_OPTIONS below) it actually offers at any given
+// moment down to what data/repository/LocationValidation.kt's isBibsActionAllowedAtLocation
+// permits at the race's current location (e.g. Pass/Retire/Ignore only at a CP, never Pass at
+// Start or Finish).
 val EVENT_PICKER_OPTIONS: List<HistoryAction> = listOf(
     HistoryAction.FINISH,
     HistoryAction.START,
+    HistoryAction.PASS,
     HistoryAction.RETIRE,
     HistoryAction.IGNORE,
     HistoryAction.SENIORS,
@@ -54,10 +61,6 @@ val EVENT_PICKER_OPTIONS: List<HistoryAction> = listOf(
     HistoryAction.FEMALE,
 )
 
-// CP Mode's own, much smaller picker — offered only when editing an existing entry (its main
-// entry flow has PASS/RETIRE as fixed buttons, no picker at all — see CpModeScreen).
-val CP_ACTION_OPTIONS: List<HistoryAction> = listOf(HistoryAction.PASS, HistoryAction.RETIRE)
-
 // Bibs Mode's Event button offers this narrower list instead of the full EVENT_PICKER_OPTIONS
 // whenever there's no just-auto-saved entry to retag (see BibsModeViewModel.canRetagFlow) —
 // none of these carry a bib, so they're the only types that still make sense to log as a
@@ -65,11 +68,19 @@ val CP_ACTION_OPTIONS: List<HistoryAction> = listOf(HistoryAction.PASS, HistoryA
 val BIBS_STANDALONE_OPTIONS: List<HistoryAction> = EVENT_PICKER_OPTIONS.filterNot { it in BIB_REQUIRED_ACTIONS }
 
 // Bibs Mode's own compact default-action selector (see BibsModeScreen's DefaultBibsActionSelector)
-// — just the two common cases an operator pre-selects for a whole segment (e.g. a handicap
-// race's staggered starts). Retire is deliberately left out: it's an occasional, one-off
-// correction for a single bib, never something you'd want every subsequent 3-digit entry to
-// auto-save as — still reachable via Event the same as any other correction.
+// — the three common cases an operator pre-selects for a whole segment (e.g. a handicap race's
+// staggered starts, or a CPn station). Pass joins Start/Finish now that Bibs is location-aware
+// (TODO.md: "A rationalisation") — RaceRepository.recordModeStart seeds this selector from
+// location automatically. This is the full candidate list, not what's actually shown: like
+// EVENT_PICKER_OPTIONS above, BibsModeUiState.defaultActionOptions narrows it by
+// isBibsActionAllowedAtLocation for the race's current location first — just [PASS] at a CP,
+// [START, FINISH] (no Pass) at Start or Finish — so the operator can only ever land on a choice
+// that's valid for where they actually are. Retire is deliberately left out of this list
+// entirely: it's an occasional, one-off correction for a single bib, never something you'd want
+// every subsequent 3-digit entry to auto-save as — still reachable via Event the same as any
+// other correction.
 val BIBS_DEFAULT_ACTION_OPTIONS: List<HistoryAction> = listOf(
     HistoryAction.START,
+    HistoryAction.PASS,
     HistoryAction.FINISH,
 )

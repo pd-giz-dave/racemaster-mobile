@@ -21,7 +21,6 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.bibsmode.BibsModeScreen
-import mobile.racemaster.ui.cpmode.CpModeScreen
 import mobile.racemaster.ui.editentry.EditEntryScreen
 import mobile.racemaster.ui.help.HelpScreen
 import mobile.racemaster.ui.modepicker.ModePickerScreen
@@ -152,14 +151,7 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                     BibsModeScreen(
                         onChangeMode = { navController.navigateToModePicker() },
                         onEditRace = { raceId -> navController.navigate(Routes.raceDetails(raceId)) },
-                        onEditEntry = { entryId -> navController.navigate(Routes.editEntry(AppMode.BIBS, entryId)) },
-                    )
-                }
-                composable(Routes.CP_MODE) {
-                    CpModeScreen(
-                        onChangeMode = { navController.navigateToModePicker() },
-                        onEditRace = { raceId -> navController.navigate(Routes.raceDetails(raceId)) },
-                        onEditEntry = { entryId -> navController.navigate(Routes.editEntry(AppMode.CP, entryId)) },
+                        onEditEntry = { entryId -> navController.navigate(Routes.editEntry(entryId)) },
                     )
                 }
                 composable(
@@ -175,15 +167,10 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                 }
                 composable(
                     route = Routes.EDIT_ENTRY,
-                    arguments = listOf(
-                        navArgument("mode") { type = NavType.StringType },
-                        navArgument("entryId") { type = NavType.LongType },
-                    ),
+                    arguments = listOf(navArgument("entryId") { type = NavType.LongType }),
                 ) { backStackEntry ->
-                    val mode = AppMode.valueOf(backStackEntry.arguments?.getString("mode") ?: return@composable)
                     val entryId = backStackEntry.arguments?.getLong("entryId") ?: return@composable
                     EditEntryScreen(
-                        mode = mode,
                         entryId = entryId,
                         onSaved = { navController.popBackStack() },
                         onCancel = { navController.popBackStack() },
@@ -277,7 +264,6 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
 private fun AppMode?.toRoute(): String = when (this) {
     AppMode.TIME -> Routes.TIME_MODE
     AppMode.BIBS -> Routes.BIBS_MODE
-    AppMode.CP -> Routes.CP_MODE
     null -> Routes.MODE_PICKER
 }
 

@@ -169,8 +169,8 @@ class RaceHistoryViewModel(
         muleRepository.raceLabelLastTouchedAtMillis,
         muleRepository.raceStaleAfterDays,
         // Paired rather than added as the combine's own 6th argument — kotlinx coroutines'
-        // typed combine() overloads only go up to 5, same reason BibsModeViewModel/
-        // CpModeViewModel's own RaceContext combines already pair theirs.
+        // typed combine() overloads only go up to 5, same reason BibsModeViewModel's own
+        // RaceContext combine already pairs theirs.
         combine(
             progressRepository.observeStored(),
             settingsRepository.activeRaceId,
@@ -223,8 +223,8 @@ class RaceHistoryViewModel(
                                 id = race.id,
                                 label = race.label,
                                 createdByDeviceName = race.createdByDeviceName,
-                                isActive = isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.cpModeStartedAtMillis),
-                                activeModeLabels = activeModeLabels(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.cpModeStartedAtMillis),
+                                isActive = isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis),
+                                activeModeLabels = activeModeLabels(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis),
                                 serverSyncSkippedAsStale = isSkippedAsStale(lastActivityAtMillis, maxAgeDays),
                                 entryCount = entryCount,
                                 lastSyncedAtMillis = lastSyncedAtMillis,

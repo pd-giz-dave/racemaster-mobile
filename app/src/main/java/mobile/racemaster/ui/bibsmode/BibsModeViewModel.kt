@@ -24,6 +24,7 @@ import mobile.racemaster.data.repository.duplicateBibNumbers
 import mobile.racemaster.data.repository.expectedBibsAtLocation
 import mobile.racemaster.data.repository.findDuplicateSplitRefs
 import mobile.racemaster.data.repository.hasRealEntries
+import mobile.racemaster.data.repository.isBibsActionAllowedAtLocation
 import mobile.racemaster.data.repository.isRaceActive
 import mobile.racemaster.data.repository.lineSyncState
 import mobile.racemaster.data.repository.linesWithAnySync
@@ -46,6 +47,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -71,19 +73,25 @@ data class BibsModeUiState(
     // Whether Bibs Mode has been started for this segment — false for a fresh race, a race
     // just switched into from a different mode, or one just Reset, in which case the screen
     // shows a Start button instead of the entry keypad/list (see BibsModeScreen). Sourced
-    // directly from RaceEntity.bibsModeStartedAtMillis, same as CpModeUiState.started — see
-    // that field's own doc for why its Clock marker's mere presence isn't what this is derived
-    // from, even though Start still writes one.
+    // directly from RaceEntity.bibsModeStartedAtMillis — see that field's own doc for why its
+    // Clock marker's mere presence isn't what this is derived from, even though Start still
+    // writes one.
     val started: Boolean = false,
     val currentDigits: String = "",
     // Which options the Event button's picker should offer — EVENT_PICKER_OPTIONS while there's
     // a just-auto-saved entry to retag, BIBS_STANDALONE_OPTIONS otherwise (see
-    // BibsModeViewModel.onEventTypeSelected's own doc).
+    // BibsModeViewModel.onEventTypeSelected's own doc) — then further narrowed to whatever
+    // isBibsActionAllowedAtLocation permits at the race's current location (e.g. Pass/Retire/
+    // Ignore only at a CP).
     val eventOptions: List<HistoryAction> = EVENT_PICKER_OPTIONS,
     // Which HistoryAction a bib's 3rd digit currently auto-saves as (see
     // BibsModeViewModel.onDigit's own doc) — drives BibsModeScreen's DefaultBibsActionSelector,
     // operator-settable there with a single tap.
     val defaultBibsAction: HistoryAction = HistoryAction.FINISH,
+    // Which buttons DefaultBibsActionSelector should actually render — BIBS_DEFAULT_ACTION_OPTIONS
+    // narrowed by isBibsActionAllowedAtLocation for the race's current location: just [PASS] at a
+    // CP, [START, FINISH] (no Pass) at Start or Finish.
+    val defaultActionOptions: List<HistoryAction> = BIBS_DEFAULT_ACTION_OPTIONS,
     val nextSplitNumber: Int = 1,
     val dupCount: Int = 0,
     val entries: List<EntryLogUi> = emptyList(),
@@ -165,11 +173,17 @@ class BibsModeViewModel(
         // sitting on top of the list — e.g. a Retire from a prior session — and has no way to
         // tell Event "fix that one" once eventOptions has silently fallen back to
         // BIBS_STANDALONE_OPTIONS (which excludes Finish/Start/Retire, since none of them mean
-        // anything without a live bib to retag). Runs once per race selection (distinct raceId),
-        // never on every entries update, so it can't clobber the operator's own later typing,
-        // undo, or retag calls.
+        // anything without a live bib to retag). Runs once per race selection AND once again
+        // every time this race's own location changes (a Relocate) — never on every entries
+        // update, so it can't clobber the operator's own later typing, undo, or retag calls, but
+        // a Relocate always moves this device onto a different (often empty) segment, so the
+        // field needs to catch up to whatever — if anything — is already on top of THAT segment,
+        // rather than keep showing a bib left over from the one just left.
         viewModelScope.launch {
-            raceIdFlow.filterNotNull().distinctUntilChanged().collectLatest { raceId ->
+            raceIdFlow.filterNotNull().flatMapLatest { raceId ->
+                raceRepository.observeRace(raceId).map { it?.location }.distinctUntilChanged()
+                    .map { raceId }
+            }.collectLatest { raceId ->
                 val topEntry = bibsModeRepository.observeCurrentSegmentEntries(raceId).first().firstOrNull()
                 digitsFlow.value = topEntry?.bibNumber?.let { it.toString().padStart(MAX_BIB_DIGITS, '0') }.orEmpty()
                 digitsFrozenFlow.value = topEntry?.bibNumber != null
@@ -227,8 +241,10 @@ class BibsModeViewModel(
             // (see this class's own init doc), with nothing here Event could retag into one of
             // them. Undo last is the only way back from there: it removes the marker outright
             // and exposes whatever bib-carrying entry was under it.
-            eventOptions = if (canRetag && entries.firstOrNull()?.bibNumber != null) EVENT_PICKER_OPTIONS else BIBS_STANDALONE_OPTIONS,
+            eventOptions = (if (canRetag && entries.firstOrNull { it.action != HistoryAction.LOCATION }?.bibNumber != null) EVENT_PICKER_OPTIONS else BIBS_STANDALONE_OPTIONS)
+                .filter { isBibsActionAllowedAtLocation(it, raceLocation) },
             defaultBibsAction = defaultBibsAction,
+            defaultActionOptions = BIBS_DEFAULT_ACTION_OPTIONS.filter { isBibsActionAllowedAtLocation(it, raceLocation) },
             nextSplitNumber = race?.bibsModeNextSplit ?: 1,
             dupCount = countDuplicateExtras(entries),
             // LOCATION rows are deliberately left out of the rendered list — the race's own
@@ -251,7 +267,7 @@ class BibsModeViewModel(
                 )
             },
             canUndo = entries.hasRealEntries(),
-            raceInProgress = isRaceActive(race?.timeModeStartedAtMillis, race?.bibsModeStartedAtMillis, race?.cpModeStartedAtMillis),
+            raceInProgress = isRaceActive(race?.timeModeStartedAtMillis, race?.bibsModeStartedAtMillis),
             unsyncedCount = unsyncedCount,
             lastSyncedAtMillis = lastSyncedAtMillis,
             expectedCount = expectedBibs.size,

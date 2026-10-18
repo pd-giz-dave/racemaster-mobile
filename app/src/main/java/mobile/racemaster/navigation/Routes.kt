@@ -1,12 +1,9 @@
 package mobile.racemaster.navigation
 
-import mobile.racemaster.data.settings.AppMode
-
 object Routes {
     const val MODE_PICKER = "mode_picker"
     const val TIME_MODE = "time_mode"
     const val BIBS_MODE = "bibs_mode"
-    const val CP_MODE = "cp_mode"
     const val MULE_MODE = "mule_mode"
     const val RACE_HISTORY = "race_history"
     const val RACE_HISTORY_DETAIL = "race_history_detail/{raceId}"
@@ -33,7 +30,7 @@ object Routes {
     const val SETUP_OPTIONS_PATTERN = "setup_options?fromMule={fromMule}"
 
     const val EDIT_SPLIT = "edit_split/{splitId}"
-    const val EDIT_ENTRY = "edit_entry/{mode}/{entryId}"
+    const val EDIT_ENTRY = "edit_entry/{entryId}"
 
     fun raceHistoryDetail(raceId: Long) = "race_history_detail/$raceId"
 
@@ -52,10 +49,10 @@ object Routes {
     // own doc for why this replaced composing the editor inline over the live splits list.
     fun editSplit(splitId: Long) = "edit_split/$splitId"
 
-    // Shared by Bibs and CP Mode — mode picks which repository the screen reads/writes through
-    // and which action-type options it offers, same as RACE_DETAILS already does for its own
-    // per-mode field set.
-    fun editEntry(mode: AppMode, entryId: Long) = "edit_entry/${mode.name}/$entryId"
+    // Bibs Mode's own edit-entry screen (CP Mode used to share this route too, picking its own
+    // repository/action-type options via a `mode` arg — removed along with CP Mode itself, see
+    // TODO.md: "A rationalisation").
+    fun editEntry(entryId: Long) = "edit_entry/$entryId"
 
     // raceLabel is free-form user text (race names can contain spaces/punctuation), so it
     // must be URL-encoded to travel safely as a nav argument. sourceDeviceId disambiguates

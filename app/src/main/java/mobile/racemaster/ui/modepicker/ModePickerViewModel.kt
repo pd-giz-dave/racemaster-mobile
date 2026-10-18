@@ -12,7 +12,6 @@ import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.data.repository.BibsModeRepository
-import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.repository.isModeStarted
@@ -20,7 +19,6 @@ import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.util.formatBibsSoFarText
-import mobile.racemaster.util.formatCpSoFarText
 import mobile.racemaster.util.formatTimeSplitsText
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -50,7 +48,6 @@ class ModePickerViewModel(
     private val raceRepository: RaceRepository,
     private val timeModeRepository: TimeModeRepository,
     private val bibsModeRepository: BibsModeRepository,
-    private val cpModeRepository: CpModeRepository,
     private val settingsRepository: SettingsRepository,
     private val serverStatusRepository: ServerStatusRepository,
     bluetoothStateRepository: BluetoothStateRepository,
@@ -111,8 +108,8 @@ class ModePickerViewModel(
 
     // Once a race has genuinely been set up (a race exists AND its mode is known), the same
     // device/race/location/sync/progress summary the live mode screens themselves show (see
-    // RaceProgressSummary) — sourced from whichever of Time/Bibs/CP repositories matches
-    // [raceMode], since that's this race's one currently-recording mode.
+    // RaceProgressSummary) — sourced from whichever of Time/Bibs repositories matches [raceMode],
+    // since that's this race's one currently-recording mode.
     val raceSummary: StateFlow<RaceSummaryUiState?> = combine(settingsRepository.activeRaceId, raceMode) { raceId, mode -> raceId to mode }
         .flatMapLatest { (raceId, mode) ->
             if (raceId == null || mode == null) {
@@ -121,12 +118,10 @@ class ModePickerViewModel(
                 val unsyncedFlow: Flow<Int> = when (mode) {
                     AppMode.TIME -> timeModeRepository.observeUnsyncedCount(raceId)
                     AppMode.BIBS -> bibsModeRepository.observeUnsyncedCount(raceId)
-                    AppMode.CP -> cpModeRepository.observeUnsyncedCount(raceId)
                 }
                 val lastSyncedFlow: Flow<Long?> = when (mode) {
                     AppMode.TIME -> timeModeRepository.observeLastSyncedAtMillis(raceId)
                     AppMode.BIBS -> bibsModeRepository.observeLastSyncedAtMillis(raceId)
-                    AppMode.CP -> cpModeRepository.observeLastSyncedAtMillis(raceId)
                 }
                 val progressTextFlow: Flow<String> = when (mode) {
                     // Matches TimeModeViewModel's own splitCount exactly (action == SPLIT, an
@@ -138,8 +133,6 @@ class ModePickerViewModel(
                         .map { formatTimeSplitsText(it.count { s -> s.action == HistoryAction.SPLIT }) }
                     AppMode.BIBS -> bibsModeRepository.observeCurrentSegmentEntries(raceId)
                         .map { formatBibsSoFarText(it.count { e -> e.action !in NON_ENTRY_ACTIONS }) }
-                    AppMode.CP -> cpModeRepository.observeCurrentSegmentEntries(raceId)
-                        .map { formatCpSoFarText(it.count { e -> e.action !in NON_ENTRY_ACTIONS }) }
                 }
                 combine(
                     raceRepository.observeRace(raceId),
@@ -152,7 +145,6 @@ class ModePickerViewModel(
                     val nextSplitNumber = when (mode) {
                         AppMode.TIME -> race.timeModeNextSplit
                         AppMode.BIBS -> race.bibsModeNextSplit
-                        AppMode.CP -> race.cpModeNextSplit
                     }
                     RaceSummaryUiState(
                         raceLabel = race.label,
@@ -176,7 +168,6 @@ class ModePickerViewModel(
                     container.raceRepository,
                     container.timeModeRepository,
                     container.bibsModeRepository,
-                    container.cpModeRepository,
                     container.settingsRepository,
                     container.serverStatusRepository,
                     container.bluetoothStateRepository,

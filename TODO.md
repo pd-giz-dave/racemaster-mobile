@@ -74,8 +74,8 @@ one.
 
 ## Tweaks from observations of using the app
 
-- [ ] races history is showing multiple (self) lists for the same race
-- [ ] races history is showing multiple progress lists for the same race
+- [x] races history is showing multiple (self) lists for the same race
+- [x] races history is showing multiple progress lists for the same race
      (maybe due to coming via different sources?)
 - [x] if a self history file is deleted, delete it on the web too and tell any connected mules
       to dump it as well (ie. ensure it gets flushed from everywhere, mule should also tell the
@@ -176,6 +176,22 @@ something must be all that is required to change the default, the option should 
 screen bigger - one suggestion: have 3 small buttons at the left of the number area and right
 align the number input area.
  - [x] done
+
+## A rationalisation
+
+Merge CP mode and Bibs mode and make the location have meaning. Currently, location is just an
+arbitrary name, instead give it meaning, there are 3 locations: Start, Finish, CPn. When the
+location is start the bibs mode sets the default action to start, when the location is finish
+the bibs mode sets the default action as finish, when the location is CPn bibs mode sets the
+default action as pass (a new action default between start and finish). CP mode is then
+redundant and can be removed. So there are only 2 modes: bibs (location aware) and time (as now).
+Treat any location that is not 'Start' or 'Finish' as a CP location and enforce its rules. Setting
+a location is compulsory in race setup, its not allowed to be blank.
+ - [x] done
+
+## Update help
+
+- [ ] The Claude.AI generated help is confusing, re-do it manually.
 
 ## An idea
 

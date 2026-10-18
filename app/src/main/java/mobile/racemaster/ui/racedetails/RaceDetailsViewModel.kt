@@ -38,7 +38,7 @@ class RaceDetailsViewModel(
     // Computed reactively (not a one-shot check) so it updates live if this race's state
     // changes while the form is open, same as NameDeviceViewModel.hasActiveRace already does.
     val raceIsActive: StateFlow<Boolean> = existingRace.map { race ->
-        race != null && isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.cpModeStartedAtMillis)
+        race != null && isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     val deviceName: StateFlow<String?> = settingsRepository.deviceName

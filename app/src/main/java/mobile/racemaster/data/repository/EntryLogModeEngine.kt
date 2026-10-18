@@ -13,10 +13,9 @@ import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.settings.AppMode
 
-// The Clock marker's fixed split number, outside the normal 1,2,3... sequence — shared by both
-// Bibs' and CP's own start (see BibsModeRepository.startBibsMode/CpModeRepository.startCpMode),
-// so it doesn't consume either mode's own display counter (see NO_SPLIT_ACTIONS' own doc for the
-// same idea applied to RETIRE).
+// The Clock marker's fixed split number, outside the normal 1,2,3... sequence — see
+// BibsModeRepository.startBibsMode — so it doesn't consume Bibs' own display counter (see
+// NO_SPLIT_ACTIONS' own doc for the same idea applied to RETIRE).
 const val CLOCK_SPLIT_NUMBER = 0
 
 // Root row kinds that must never be edited or undone through the generic path — Undo/Edit
@@ -29,25 +28,26 @@ private val NON_EDITABLE_ROOT_ACTIONS = setOf(
     HistoryAction.MODE_START, HistoryAction.LOCATION, HistoryAction.NEW_RACE, HistoryAction.PING,
 )
 
-// RETIRE never crosses the timing point at all (Bibs or CP), so it gets no splitNumber and
-// doesn't consume the shared counter — see HistoryLineEntity.splitNumber's own doc. PASS, by
-// contrast, DOES get one: even though a CP checkpoint is never paired with a Time Mode device the
-// way Bibs Mode's finish line is, so a CP row's splitNumber never aligns with any real timing
-// split, CP Mode still wants it as a plain running count of "how many have passed since
-// Start/Reset" (see CpModeRepository's own doc) — exactly the same counter mechanism Bibs Mode
-// already used for FINISH, just repurposed here as a count rather than a split-time index. CLOCK
-// is here too — the fixed Start marker never consumed the counter either (see
+// RETIRE never crosses the timing point at all, so it gets no splitNumber and doesn't consume
+// the shared counter — see HistoryLineEntity.splitNumber's own doc. PASS, by contrast, DOES get
+// one: a CPn-location Bibs entry is never paired with a Time Mode device the way the finish line
+// is, so its splitNumber never aligns with any real timing split, but it's still wanted as a
+// plain running count of "how many have passed since Start/Reset" — exactly the same counter
+// mechanism already used for FINISH, just repurposed here as a count rather than a split-time
+// index. CLOCK is here too — the fixed Start marker never consumed the counter either (see
 // CLOCK_SPLIT_NUMBER's own doc); undoing it must not decrement one (see Part 5's own doc on
 // undoMostRecent's CLOCK branch below for why undoing Clock is now reachable at all).
 private val NO_SPLIT_ACTIONS = setOf(HistoryAction.RETIRE, HistoryAction.CLOCK)
 
 /** Per-mode wiring for the display-counter/started-at [RaceEntity] columns [EntryLogModeEngine]
- *  needs — one implementation per [HistoryMode] family (see `BibsModeRepository`/
- *  `CpModeRepository`), each a thin pass-through to that family's own dedicated [RaceDao]
- *  queries/[RaceEntity] fields. Kept separate from the engine itself since this is the one
- *  piece genuinely specific to each mode (different column names) — the same reason TIME/BIBS
- *  already each got a fully separate column pair rather than sharing one; CP follows that same
- *  established pattern instead of trying to share BIBS's columns. */
+ *  needs — implemented by `BibsModeRepository`, a thin pass-through to Bibs' own dedicated
+ *  [RaceDao] queries/[RaceEntity] fields. Kept separate from the engine itself since this is the
+ *  one piece genuinely specific to the mode (its own column names) — the same reason TIME/BIBS
+ *  each got a fully separate column pair rather than sharing one. (CP Mode used to be a second
+ *  implementation here, following that same pattern, before it was removed — see TODO.md: "A
+ *  rationalisation". The engine stays parameterized over [HistoryMode] rather than being
+ *  collapsed into BibsModeRepository directly, in case a future mode needs this same segmented
+ *  entry-logging shape again.) */
 interface ModeProgressColumns {
     fun nextSplitOf(race: RaceEntity): Int
     suspend fun incrementCounter(raceId: Long)
@@ -66,22 +66,21 @@ interface ModeProgressColumns {
 }
 
 /**
- * The mode-agnostic core behind `BibsModeRepository`/`CpModeRepository` — segmented,
- * LOCATION-anchored entry logging (see [HistoryFold]'s own doc) with append-only edit/undo
- * semantics (see [foldLatestVisible]), generalized over which [HistoryMode] family it's serving
- * and which [RaceEntity] columns track that family's own display counter/started-at state (see
+ * The mode-agnostic core behind `BibsModeRepository` — segmented, LOCATION-anchored entry
+ * logging (see [HistoryFold]'s own doc) with append-only edit/undo semantics (see
+ * [foldLatestVisible]), generalized over which [HistoryMode] family it's serving and which
+ * [RaceEntity] columns track that family's own display counter/started-at state (see
  * [ModeProgressColumns]). Lifted verbatim from `BibsModeRepository`'s original method bodies,
- * parameterized rather than duplicated, so a third (or later, fourth) segmented-entry mode never
- * needs its own hand-copied twin of this logic.
+ * parameterized rather than duplicated — originally so CP Mode's near-identical logic never
+ * needed its own hand-copied twin (see [ModeProgressColumns]'s own doc for why CP was later
+ * removed), and still parameterized in case a future mode needs this same shape again.
  *
- * Deliberately does **not** include a "start" method: both Bibs and CP Mode start by inserting
- * a fixed Clock marker row (a permanent split #0 outside the normal sequence, consuming a real
- * line number but not the display counter — see [CLOCK_SPLIT_NUMBER]) *and* setting their own
- * [RaceEntity] started-at timestamp, but each writes to a different pair of columns
- * ([ModeProgressColumns] is only wired to one mode's own display counter, not its started-at
- * field) — different enough that forcing this into one shared method wouldn't actually remove
- * duplication, just hide it behind one signature. Each mode's own thin repository keeps its own
- * trivial start method instead (`BibsModeRepository.startBibsMode`/`CpModeRepository.startCpMode`).
+ * Deliberately does **not** include a "start" method: Bibs Mode starts by inserting a fixed
+ * Clock marker row (a permanent split #0 outside the normal sequence, consuming a real line
+ * number but not the display counter — see [CLOCK_SPLIT_NUMBER]) *and* setting its own
+ * [RaceEntity] started-at timestamp — different enough from a generic shared method (and from
+ * Time Mode's own unrelated stopwatch-start shape) that it isn't worth forcing in here. Bibs'
+ * own thin repository keeps its own trivial start method instead (`BibsModeRepository.startBibsMode`).
  */
 internal class EntryLogModeEngine(
     private val mode: HistoryMode,
@@ -201,7 +200,15 @@ internal class EntryLogModeEngine(
         db.withTransaction {
             val raw = historyLineDao.getAllForRaceAndMode(raceId, mode)
             val current = currentSegment(raw)
-            val target = current.firstOrNull() ?: return@withTransaction
+            // Never targets a LOCATION row — relocating is undone only by relocating back to
+            // where you came from (TODO.md), never by Undo reaching across it. Without this
+            // skip, relocating BACK to an already-visited location merges its old, real content
+            // into the current view (see HistoryFold.currentSegmentVisits), but the resumed
+            // visit's own brand-new LOCATION marker has a higher lineNumber than that merged-in
+            // content — so a plain firstOrNull() would hand Undo the relocate marker itself
+            // instead of the real entry the operator is actually looking at (confirmed as a real,
+            // reachable bug).
+            val target = current.firstOrNull { it.action != HistoryAction.LOCATION } ?: return@withTransaction
             val rootLineNumber = target.refLineNumber ?: target.lineNumber
             val root = raw.first { it.lineNumber == rootLineNumber }
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
@@ -230,16 +237,6 @@ internal class EntryLogModeEngine(
                 // ModeProgressColumns.clearStartedAt's own doc) — the counter was never consumed
                 // by Clock in the first place (see NO_SPLIT_ACTIONS), so nothing to restore there.
                 root.action == HistoryAction.CLOCK -> columns.clearStartedAt(raceId)
-                // A LOCATION root never merely "consumed one count" the way a real entry does —
-                // its own forward write reset (or resumed — see RaceRepository.recordModeStart)
-                // the counter, so undoing it must restore whatever the counter (and
-                // RaceEntity.location) actually were beforehand, not decrement whatever they
-                // happen to be now. Falling through to decrementCounter() here (as an unguarded
-                // `else` would) would silently corrupt the counter.
-                root.action == HistoryAction.LOCATION -> {
-                    root.priorSplitCounter?.let { columns.setCounterTo(raceId, it) }
-                    root.previousLocation?.let { raceDao.updateModeAndLocation(raceId, root.previousMode, it) }
-                }
                 // RETIRE never consumed the counter in the first place (see recordEntry/
                 // NO_SPLIT_ACTIONS), so undoing one must not decrement it either.
                 root.action !in NO_SPLIT_ACTIONS -> columns.decrementCounter(raceId)
@@ -260,16 +257,15 @@ internal class EntryLogModeEngine(
     // RESET rows, walkable by pressing Reset again) and clears the display counter/started-at
     // back to their pre-start defaults. True means this closed the race's own very first
     // segment, reverting the device to "no race set up" — the caller announces this to the
-    // server right away (see BibsModeViewModel/CpModeViewModel's own resetXMode wiring).
+    // server right away (see BibsModeViewModel's own resetXMode wiring).
     suspend fun reset(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()): Boolean =
         raceRepository.closeCurrentSegment(raceId, mode, resetAtMillis)
 
-    // Exposed so each mode's own thin start method (BibsModeRepository.startBibsMode/
-    // CpModeRepository.startCpMode) can call the same defensive self-heal Time Mode's own
-    // startStopwatch does before writing its Clock row — see RaceRepository.ensureOpenSegment's
-    // own doc for what this guards against and why it's normally a no-op. [appMode] is threaded
-    // through the constructor rather than each start method passing its own literal, so this
-    // stays a single, un-duplicated call site.
+    // Exposed so Bibs' own thin start method (BibsModeRepository.startBibsMode) can call the
+    // same defensive self-heal Time Mode's own startStopwatch does before writing its Clock row
+    // — see RaceRepository.ensureOpenSegment's own doc for what this guards against and why it's
+    // normally a no-op. [appMode] is threaded through the constructor rather than each start
+    // method passing its own literal, so this stays a single, un-duplicated call site.
     suspend fun ensureOpenSegment(raceId: Long) {
         raceRepository.ensureOpenSegment(raceId, appMode)
     }

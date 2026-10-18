@@ -28,10 +28,12 @@ import mobile.racemaster.data.db.entity.TargetedProgressEntity
         ProgressEntity::class,
         TargetedProgressEntity::class,
     ],
-    // Bumped for the *StoppedAtMillis column removal (see RaceEntity's own doc) — no explicit
-    // Migration needed, AppContainer's fallbackToDestructiveMigration(dropAllTables = true)
-    // already wipes and recreates the whole local DB on any version mismatch.
-    version = 34,
+    // Bumped for the cpModeNextSplit/cpModeStartedAtMillis column removal, once CP Mode itself
+    // was removed (TODO.md: "A rationalisation" — Bibs became location-aware instead). No
+    // explicit Migration needed, same as the last several bumps — AppContainer's
+    // fallbackToDestructiveMigration(dropAllTables = true) already wipes and recreates the whole
+    // local DB on any version mismatch.
+    version = 35,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

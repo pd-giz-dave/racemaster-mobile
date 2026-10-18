@@ -186,19 +186,22 @@ object MuleGattProfile {
     // branch already treats it — like any other unrecognized byte — as null, so an old build
     // still advertising a 3 here degrades gracefully rather than being misread as some other
     // mode.
-    private const val MODE_WIRE_CP: Byte = 4
+    //
+    // 4 was MODE_WIRE_CP, back when CP was a 3rd value of the AppMode enum this byte encodes —
+    // likewise retired, not reassigned, once CP Mode itself was removed (TODO.md: "A
+    // rationalisation"). Same graceful degradation: a not-yet-updated phone still advertising a
+    // 4 here is simply read as "mode unknown" by an updated one, nothing crashes or misreads it
+    // as Time/Bibs.
 
     private fun encodeMode(mode: AppMode?): Byte = when (mode) {
         AppMode.TIME -> MODE_WIRE_TIME
         AppMode.BIBS -> MODE_WIRE_BIBS
-        AppMode.CP -> MODE_WIRE_CP
         null -> 0
     }
 
     private fun decodeMode(wire: Byte): AppMode? = when (wire) {
         MODE_WIRE_TIME -> AppMode.TIME
         MODE_WIRE_BIBS -> AppMode.BIBS
-        MODE_WIRE_CP -> AppMode.CP
         else -> null
     }
 

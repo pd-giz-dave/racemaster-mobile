@@ -12,11 +12,11 @@ import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.util.withClickSound
 
-/** A small "pick one of these action types" dialog — shared by Bibs Mode (offering
- *  `EVENT_PICKER_OPTIONS`) and CP Mode (offering `CP_ACTION_OPTIONS`, just Pass/Retire) for
- *  changing an existing entry's type while editing (see
- *  [mobile.racemaster.ui.editentry.EditEntryScreen]). [options] is what makes this reusable
- *  rather than each mode needing its own copy of an otherwise-identical dialog. */
+/** A small "pick one of these action types" dialog — Bibs Mode's own, offering
+ *  `EVENT_PICKER_OPTIONS`, for changing an existing entry's type while editing (see
+ *  [mobile.racemaster.ui.editentry.EditEntryScreen]). [options] is what used to make this
+ *  reusable between Bibs and CP Mode's own smaller option list before CP Mode was removed (see
+ *  TODO.md: "A rationalisation"). */
 @Composable
 fun ActionPickerDialog(
     options: List<HistoryAction>,

@@ -179,21 +179,20 @@ fun RaceDetailsScreen(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 RelocateModeButton("Time", mode == AppMode.TIME, fieldsEnabled, Modifier.weight(1f)) { mode = AppMode.TIME }
                 RelocateModeButton("Bibs", mode == AppMode.BIBS, fieldsEnabled, Modifier.weight(1f)) { mode = AppMode.BIBS }
-                RelocateModeButton("CP", mode == AppMode.CP, fieldsEnabled, Modifier.weight(1f)) { mode = AppMode.CP }
             }
             HistoryTextField(
                 value = location,
                 onValueChange = { location = it },
-                label = if (mode == AppMode.CP) "Location (e.g. CP1, CP2-Bridge)" else "Location (e.g. Finish, CP1, CP2, et al)",
+                label = if (mode == AppMode.BIBS) "Location (e.g. Start, Finish, CP1, CP2-Bridge)" else "Location (e.g. Finish, CP1, CP2, et al)",
                 history = locationHistory,
                 enabled = fieldsEnabled,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                 modifier = Modifier.fillMaxWidth(),
             )
-            if (mode == AppMode.CP && location.isNotBlank() && !locationValid) {
+            if (mode == AppMode.BIBS && location.isNotBlank() && !locationValid) {
                 Text(
-                    "CP Mode's location must look like CP1, CP2-Bridge, etc. — \"CP\" followed by a number from 1 upwards, with an optional -name.",
+                    "Bibs Mode's location must be \"Start\", \"Finish\", or look like CP1, CP2-Bridge, etc.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -201,8 +200,9 @@ fun RaceDetailsScreen(
             if (raceIsActive) {
                 Text(
                     "Saving a new location and/or mode here records that this device has moved " +
-                        "and/or switched — its already-recorded entries stay exactly as they are, " +
-                        "and this is undoable like any other entry if it was a mistake.",
+                        "and/or switched — its already-recorded entries stay exactly as they are. " +
+                        "If this was a mistake, fix it by relocating again back to where you came " +
+                        "from — Undo Last never undoes a relocate.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

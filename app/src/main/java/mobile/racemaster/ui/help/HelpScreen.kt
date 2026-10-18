@@ -89,10 +89,11 @@ fun HelpScreen(onBack: () -> Unit) {
                     "produce results. Rather than one person juggling both a stopwatch and a bib list " +
                     "as runners cross the line, any number of phones can run this app side by side, " +
                     "each logging its own station: Time Mode acts as a stopwatch (recording exactly " +
-                    "when each finisher crossed the line, in order), Bibs Mode records which bib " +
-                    "number each finisher was wearing in the same order, and CP Mode is a lighter " +
-                    "Pass/Retire checkpoint variant of Bibs Mode for stations out on the course. " +
-                    "Every race also records a location (e.g. \"Finish\", \"CP1\") so logs from " +
+                    "when each finisher crossed the line, in order), and Bibs Mode records which bib " +
+                    "number each finisher was wearing in the same order — location-aware, so a " +
+                    "station out on the course logs Pass instead of Start/Finish (see \"Bibs Mode — " +
+                    "logging\" below). Every race also records a location (e.g. \"Finish\", \"CP1\") " +
+                    "so logs from " +
                     "different stations can be told apart, and matched up by position afterwards to " +
                     "produce finishing times per runner. The screen is kept on for the whole race, " +
                     "and in Time Mode an external clicker, or the volume up/down buttons, can be used " +
@@ -128,8 +129,9 @@ fun HelpScreen(onBack: () -> Unit) {
                     "from the Races list. Press RESET again to walk back and close the segment before " +
                     "it too, and so on all the way back to the race's very first one, at which point " +
                     "this device reverts to having no race set up at all. Undo last removes only the " +
-                    "most recent split — it also reaches back across a Relocate to an earlier segment, " +
-                    "right back to that segment's own Start marker, without needing a Reset first. " +
+                    "most recent split, right back to this segment's own Start marker, without " +
+                    "needing a Reset first — it never undoes a Relocate itself; to fix a mistaken " +
+                    "relocate, relocate again back to where you came from. " +
                     "Relocating back to a location this mode has already recorded at (and not since " +
                     "Reset) picks up exactly where it left off — same split numbering, same entries " +
                     "still showing — rather than starting over; see \"General\" below. " +
@@ -141,30 +143,48 @@ fun HelpScreen(onBack: () -> Unit) {
                     "START records a fixed \"Clock\" marker as split S0 and opens the keypad. There's " +
                     "no bib range to configure any more — every bib is accepted; if the first bib " +
                     "you'll ever log is below 100, still type it as 3 digits with leading zeros " +
-                    "(e.g. \"007\") — see \"Bibs Mode — logging\" below for why.",
+                    "(e.g. \"007\") — see \"Bibs Mode — logging\" below for why. Bibs Mode's own " +
+                    "Location must be \"Start\", \"Finish\", or \"CP\" followed by a number from 1 " +
+                    "upwards with an optional \"-name\" suffix (e.g. \"CP1\", \"CP2-Bridge\"), checked " +
+                    "when START is pressed (Setup Race itself doesn't know the mode yet, so it can't " +
+                    "enforce this); if it's wrong, fix it via \"Relocate\" on this screen's own top bar.",
             )
             HelpSection(
                 title = "Bibs Mode — logging",
                 body = "Type a bib number on the keypad — as soon as its 3rd digit is entered it's " +
-                    "recorded automatically, no separate button tap needed, as whichever of the two " +
-                    "small Start/Finish buttons above the number field is currently highlighted " +
-                    "(Finish by default). Tap the other one to switch the default with a single " +
-                    "press — handy for a handicap race's staggered starts, where most entries for a " +
-                    "while are Starts, not Finishes; the highlighted choice stays set across restarts " +
-                    "until changed again. That's why a bib below 100 must still be typed with leading " +
-                    "zeros (e.g. \"007\", not \"7\") — nothing is recorded until 3 digits have been " +
-                    "typed. The number stays showing on screen afterwards so you can double-check it " +
-                    "before moving on; typing the next bib's first digit clears it automatically. If " +
-                    "that entry wasn't actually what the default just recorded, tap Event straight " +
-                    "after and pick Start, Finish, or Retire instead — all three correct the entry " +
-                    "you just made in place, keeping the same bib, and the field keeps showing that " +
-                    "bib afterwards instead of clearing; they're only offered when the entry on top " +
-                    "actually has a bib to correct. Retire isn't one of the two default buttons since " +
-                    "it's an occasional one-off, not something you'd want every subsequent entry to " +
-                    "auto-save as — Event is how you reach it. Picking Ignore/Seniors/Juniors/Male/" +
-                    "Female instead never touches that entry — a marker is a flag about the moment, " +
-                    "not a correction, so it always logs as its own fresh, bib-less row on top, " +
-                    "whether or not a bib entry is showing. Tapping Event before typing any digits " +
+                    "recorded automatically, no separate button tap needed, as whichever of the " +
+                    "small Start/Pass/Finish buttons above the number field is currently highlighted. " +
+                    "That default is set automatically from the race's own Location (Start → " +
+                    "Start, Finish → Finish, a CPn location → Pass — Pass is a checkpoint " +
+                    "crossing, counted the same way a Finish is) every time the race is set up or " +
+                    "relocated, and any remaining button can still be tapped at any time to switch " +
+                    "it with a single press — handy for a handicap race's staggered starts, where " +
+                    "most entries for a while are Starts, not Finishes. Only buttons that make " +
+                    "sense at the current Location are shown at all: just Pass at a CPn location, " +
+                    "or Start and Finish (never Pass) at Start or Finish — so there's only one " +
+                    "button to tap at a checkpoint. The highlighted choice stays set across " +
+                    "restarts until changed again. That's why a bib below 100 must still be typed with " +
+                    "leading zeros (e.g. \"007\", not \"7\") — nothing is recorded until 3 digits have " +
+                    "been typed. The number stays showing on screen afterwards so you can double-check " +
+                    "it before moving on; typing the next bib's first digit clears it automatically, " +
+                    "and so does relocating to a fresh location — a Relocate always refreshes the " +
+                    "field to match the new location's own segment, which is empty unless relocating " +
+                    "back to one already in progress, in which case it resumes showing (and lets you " +
+                    "correct via Event) whatever was last recorded there. " +
+                    "If that entry wasn't actually what the default just recorded, tap Event straight " +
+                    "after and pick a different type instead — correcting to Start, Pass, Finish, or " +
+                    "Retire keeps the same bib and leaves it showing afterwards instead of clearing; " +
+                    "they're only offered when the entry on top actually has a bib to correct, and " +
+                    "(like the default buttons) only whichever of them actually make sense at the " +
+                    "current Location — Start/Finish/the gender and age markers never appear as " +
+                    "options at a CPn location, and Pass never appears at Start or Finish. Retire " +
+                    "isn't one of the default buttons since it's an occasional one-off, not " +
+                    "something you'd want every subsequent entry to auto-save as — Event is how you " +
+                    "reach it. Picking Ignore/Seniors/Juniors/Male/Female instead never touches that " +
+                    "entry — a marker is a flag about the moment, not a correction, so it always " +
+                    "logs as its own fresh, bib-less row on top, whether or not a bib entry is " +
+                    "showing (Seniors/Juniors/Male/Female aren't offered at all at a CPn location, " +
+                    "same restriction as above). Tapping Event before typing any digits " +
                     "logs a marker the same way, on its own. Undo last removes the most recent entry " +
                     "and brings whatever's now on top back into the field, ready to correct via Event " +
                     "if needed. The \"Next:\" line always shows the split number (as S1, S2, and so " +
@@ -209,40 +229,17 @@ fun HelpScreen(onBack: () -> Unit) {
                     "History regardless, genuine deletion only ever happens explicitly from the Races " +
                     "list. Press RESET again to walk back and close the segment before it too, all the " +
                     "way back to the race's very first one, at which point this device reverts to " +
-                    "having no race set up at all. Undo last reaches back across a Relocate to an " +
-                    "earlier segment, right back to that segment's own Clock marker, without needing a " +
-                    "Reset first. Relocating back to a location this mode has already recorded at (and " +
+                    "having no race set up at all. Undo last removes only the most recent entry, right " +
+                    "back to this segment's own Clock marker, without needing a Reset first — it never " +
+                    "undoes a Relocate itself; to fix a mistaken relocate, relocate again back to where " +
+                    "you came from. Relocating back to a location this mode has already recorded at (and " +
                     "not since Reset) picks up exactly where it left off — same numbering, same " +
                     "entries still showing — rather than starting over; see \"General\" below.",
             )
             HelpSection(
-                title = "CP Mode",
-                body = "CP Mode is a lighter checkpoint variant of Bibs Mode, for a station out on " +
-                    "the course rather than at the finish line — same keypad, entry list, duplicate " +
-                    "flagging, who's-expected flagging (see \"Bibs Mode — who's expected\" above; " +
-                    "here it's driven by this device's own CP number in its Location), row editing, " +
-                    "and Clock-marker Start (split S0), " +
-                    "and the same auto-save-on-3-digits entry: typing a bib's 3rd digit records it " +
-                    "automatically as a Pass, so bibs below 100 still need leading zeros (e.g. " +
-                    "\"007\"). Each Pass gets a running split number too, counting how many have " +
-                    "passed since Start/Reset — Retire doesn't (shown as S–), since it never actually " +
-                    "crosses the checkpoint. CP has no Event picker — instead there's a single " +
-                    "Pass/Retire toggle button that always shows the opposite of whatever the top " +
-                    "entry currently is, so it retags that entry in place (keeping the same bib) and " +
-                    "can flip it back and forth as many times as needed; the field keeps showing that " +
-                    "bib rather than clearing. Tap any row to correct it, and RESET/Undo last " +
-                    "all work exactly as in Bibs Mode — Undo last brings whatever's now on top back " +
-                    "into the field the same way. CP Mode needs its race's Location to be \"CP\" " +
-                    "followed by a number from 1 upwards, with an optional \"-name\" suffix (e.g. " +
-                    "\"CP1\", \"CP2-Bridge\") so its entries can be told apart from other stations " +
-                    "recording the same race — checked when START is pressed (Setup Race itself " +
-                    "doesn't know the mode yet, so it can't enforce this); if it's wrong, fix it via " +
-                    "\"Relocate\" on this screen's own top bar.",
-            )
-            HelpSection(
                 title = "Mule Mode",
                 body = "Mule Mode is an on/off toggle (Setup Device > Options > Enable/Disable Mule " +
-                    "Mode), not a mode a phone is limited to instead of Time/Bibs/CP — a phone can " +
+                    "Mode), not a mode a phone is limited to instead of Time/Bibs — a phone can " +
                     "record its own race in any of those and also mule at the same time. This is " +
                     "for a phone with no internet access at its station: a second, internet-connected " +
                     "phone nearby (in any mode, muling turned on) picks up and forwards its data to " +
@@ -279,7 +276,7 @@ fun HelpScreen(onBack: () -> Unit) {
                 title = "Setup Device",
                 body = "Setup Device — reached from every mode via the \"Setup: <device name>\" " +
                     "button on the Mode Picker — is where a phone's own identity and connectivity are " +
-                    "configured, independently of which mode (Time/Bibs/CP, or none) it's currently " +
+                    "configured, independently of which mode (Time/Bibs, or none) it's currently " +
                     "recording and of whether muling is on. Setup Name renames this device, the label " +
                     "every other phone sees it by. Setup Server configures the RaceMaster server URL " +
                     "and login — needed only if this phone should push its own data to the server " +
@@ -324,8 +321,8 @@ fun HelpScreen(onBack: () -> Unit) {
                 title = "External triggers",
                 body = "A USB (via OTG) or Bluetooth clicker, presenter remote, camera shutter remote, " +
                     "or foot pedal that enumerates as a HID keyboard can be used in place of tapping " +
-                    "SPLIT while Time Mode is on screen. Bibs and CP Mode have no external trigger of " +
-                    "their own — entry there is bib-driven (typing 3 digits is what logs it), with no " +
+                    "SPLIT while Time Mode is on screen. Bibs Mode has no external trigger of " +
+                    "its own — entry there is bib-driven (typing 3 digits is what logs it), with no " +
                     "single \"log the next event\" action left for a clicker to stand in for. No " +
                     "pairing code is needed on our end, just pair the device with the phone as normal " +
                     "in Android's Bluetooth settings.",

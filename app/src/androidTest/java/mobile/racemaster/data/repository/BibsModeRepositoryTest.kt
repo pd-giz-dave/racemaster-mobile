@@ -174,7 +174,7 @@ class BibsModeRepositoryTest {
 
     @Test
     fun startBibsModeSetsStartedAtTimestamp() = runTest {
-        // Shaped identically to Time/CP's own start methods now — see
+        // Shaped identically to Time's own start method now — see
         // RaceEntity.bibsModeStartedAtMillis's own doc for why this, not the Clock row's mere
         // presence, is what "started" is derived from.
         setupRace()
@@ -187,7 +187,7 @@ class BibsModeRepositoryTest {
     fun undoingTheOnlyRealEntryLeavesStartedAtIntact() = runTest {
         // This is the whole point of bibsModeStartedAtMillis existing: undoing the very first
         // real entry must leave the screen still showing the keypad rather than reverting to a
-        // pre-Start state, same as CP's own cpModeStartedAtMillis already guarantees.
+        // pre-Start state.
         setupRace()
         repository.startBibsMode(raceId, startedAtMillis = 5_000L)
         repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
@@ -322,7 +322,7 @@ class BibsModeRepositoryTest {
     }
 
     @Test
-    fun undoingARelocateRevealsWhateverWasVisibleBeforeIt() = runTest {
+    fun undoRightAfterABareRelocateIsANoOp() = runTest {
         setupRace()
         repository.startBibsMode(raceId)
         repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
@@ -335,16 +335,104 @@ class BibsModeRepositoryTest {
             repository.observeCurrentSegmentEntries(raceId).first().map { it.action },
         )
 
-        // Undo: undoes the relocate — with the relocate's own LOCATION group folded away, the
-        // race's own original (setupRace's own) LOCATION marker is what's left standing, so it
-        // correctly reveals the whole pre-relocate segment (the Finish, the Clock marker, and
-        // that original LOCATION row itself) exactly as it stood before.
+        // Undo never targets a LOCATION row (a relocate is undone only by relocating back, never
+        // by Undo — see EntryLogModeEngine.undoMostRecent's own doc), so with nothing else to
+        // undo at this brand-new location, Undo is a no-op: the relocate stands untouched.
         repository.undoMostRecent(raceId)
         assertEquals(
-            listOf(HistoryAction.FINISH, HistoryAction.CLOCK, HistoryAction.LOCATION),
+            listOf(HistoryAction.LOCATION),
             repository.observeCurrentSegmentEntries(raceId).first().map { it.action },
         )
-        assertEquals("Finish", db.raceDao().getById(raceId)?.location)
+        assertEquals("CP1", db.raceDao().getById(raceId)?.location)
+    }
+
+    @Test
+    fun undoAfterRelocatingBackToAPreviouslyVisitedLocationTargetsTheResumedEntryNotTheRelocate() = runTest {
+        setupRace("Start")
+        repository.startBibsMode(raceId)
+        repository.recordEntry(raceId, HistoryAction.START, 101, note = null)
+
+        raceRepository.recordModeStart(raceId, AppMode.BIBS, "CP1")
+        repository.recordEntry(raceId, HistoryAction.PASS, 101, note = null)
+
+        raceRepository.recordModeStart(raceId, AppMode.BIBS, "Finish")
+        repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
+
+        // Relocate BACK to CP1 — a previously-visited, not-yet-reset location resumes its own
+        // earlier entries (see EntryLogModeEngine's resume/merge behavior) rather than starting
+        // fresh, so the Pass logged there earlier is visible again, under a brand-new LOCATION
+        // row of its own (the resume) plus the original visit's own LOCATION row underneath.
+        raceRepository.recordModeStart(raceId, AppMode.BIBS, "CP1")
+        assertEquals(
+            listOf(HistoryAction.LOCATION, HistoryAction.PASS, HistoryAction.LOCATION),
+            repository.observeCurrentSegmentEntries(raceId).first().map { it.action },
+        )
+
+        // Undo must remove the resumed Pass entry itself, not the brand-new resume's own LOCATION
+        // marker on top (which — before this fix — outranked it by raw lineNumber and was wrongly
+        // picked as the undo target, reverting the relocate back to Finish instead). Both LOCATION
+        // rows stay untouched either way — Undo never targets one.
+        repository.undoMostRecent(raceId)
+        assertEquals(
+            listOf(HistoryAction.LOCATION, HistoryAction.LOCATION),
+            repository.observeCurrentSegmentEntries(raceId).first().map { it.action },
+        )
+        assertEquals("CP1", db.raceDao().getById(raceId)?.location)
+    }
+
+    @Test
+    fun undoingTheFirstEntryLoggedAfterARelocateUndoesThatEntryNotTheRelocate() = runTest {
+        setupRace()
+        repository.startBibsMode(raceId)
+        repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
+
+        raceRepository.recordModeStart(raceId, AppMode.BIBS, "CP1")
+        repository.recordEntry(raceId, HistoryAction.PASS, 202, note = null)
+
+        assertEquals(
+            listOf(HistoryAction.PASS, HistoryAction.LOCATION),
+            repository.observeCurrentSegmentEntries(raceId).first().map { it.action },
+        )
+
+        repository.undoMostRecent(raceId)
+
+        // Should still be at CP1, with only the just-logged Pass hidden — not back at Finish.
+        assertEquals("CP1", db.raceDao().getById(raceId)?.location)
+        assertEquals(
+            listOf(HistoryAction.LOCATION),
+            repository.observeCurrentSegmentEntries(raceId).first().map { it.action },
+        )
+    }
+
+    @Test
+    fun undoingTwoEntriesAfterARelocateUndoesBothBeforeTouchingTheRelocate() = runTest {
+        setupRace()
+        repository.startBibsMode(raceId)
+        repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
+
+        raceRepository.recordModeStart(raceId, AppMode.BIBS, "CP1")
+        repository.recordEntry(raceId, HistoryAction.PASS, 202, note = null)
+        repository.recordEntry(raceId, HistoryAction.PASS, 303, note = null)
+
+        assertEquals(
+            listOf(303, 202),
+            repository.observeCurrentSegmentEntries(raceId).first()
+                .filter { it.action == HistoryAction.PASS }.map { it.bibNumber },
+        )
+
+        repository.undoMostRecent(raceId) // should remove 303
+        assertEquals(
+            listOf(HistoryAction.PASS, HistoryAction.LOCATION),
+            repository.observeCurrentSegmentEntries(raceId).first().map { it.action },
+        )
+        assertEquals("CP1", db.raceDao().getById(raceId)?.location)
+
+        repository.undoMostRecent(raceId) // should remove 202 (the FIRST entry at CP1), not the relocate
+        assertEquals(
+            listOf(HistoryAction.LOCATION),
+            repository.observeCurrentSegmentEntries(raceId).first().map { it.action },
+        )
+        assertEquals("CP1", db.raceDao().getById(raceId)?.location)
     }
 
     @Test

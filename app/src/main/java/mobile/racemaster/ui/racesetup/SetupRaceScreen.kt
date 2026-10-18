@@ -232,21 +232,20 @@ fun SetupRaceScreen(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ModeChoiceButton("Time", mode == AppMode.TIME, !hasActiveRace, Modifier.weight(1f)) { mode = AppMode.TIME }
                 ModeChoiceButton("Bibs", mode == AppMode.BIBS, !hasActiveRace, Modifier.weight(1f)) { mode = AppMode.BIBS }
-                ModeChoiceButton("CP", mode == AppMode.CP, !hasActiveRace, Modifier.weight(1f)) { mode = AppMode.CP }
             }
             HistoryTextField(
                 value = location,
                 onValueChange = { location = it },
-                label = "Location (e.g. Finish, CP1, CP2, et al)",
+                label = if (mode == AppMode.BIBS) "Location (e.g. Start, Finish, CP1, CP2-Bridge)" else "Location (e.g. Finish, CP1, CP2, et al)",
                 history = locationHistory,
                 enabled = !hasActiveRace,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                 modifier = Modifier.fillMaxWidth(),
             )
-            if (location.isNotBlank() && mode == AppMode.CP && !locationValid) {
+            if (location.isNotBlank() && mode == AppMode.BIBS && !locationValid) {
                 Text(
-                    "CP Mode's location must look like \"CP1\", \"CP2-Bridge\", etc.",
+                    "Bibs Mode's location must be \"Start\", \"Finish\", or look like \"CP1\", \"CP2-Bridge\", etc.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )

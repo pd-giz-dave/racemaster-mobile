@@ -28,10 +28,10 @@ class HistoryActionLabelsTest {
     }
 
     @Test
-    fun eventPickerOptionsExcludeMarkerOnlyActionsForBothModes() {
+    fun eventPickerOptionsExcludeMarkerOnlyActions() {
         assertEquals(
             setOf(
-                HistoryAction.FINISH, HistoryAction.START, HistoryAction.RETIRE, HistoryAction.IGNORE,
+                HistoryAction.FINISH, HistoryAction.START, HistoryAction.PASS, HistoryAction.RETIRE, HistoryAction.IGNORE,
                 HistoryAction.SENIORS, HistoryAction.JUNIORS, HistoryAction.MALE, HistoryAction.FEMALE,
             ),
             EVENT_PICKER_OPTIONS.toSet(),
@@ -43,13 +43,6 @@ class HistoryActionLabelsTest {
         assertEquals(false, HistoryAction.PING in EVENT_PICKER_OPTIONS)
         // The Time-only action never belongs on this Bibs-only picker either.
         assertEquals(false, HistoryAction.SPLIT in EVENT_PICKER_OPTIONS)
-        // CP's own action never belongs on the Bibs picker either.
-        assertEquals(false, HistoryAction.PASS in EVENT_PICKER_OPTIONS)
-    }
-
-    @Test
-    fun cpActionOptionsAreExactlyPassAndRetire() {
-        assertEquals(listOf(HistoryAction.PASS, HistoryAction.RETIRE), CP_ACTION_OPTIONS)
     }
 
     @Test
@@ -58,17 +51,18 @@ class HistoryActionLabelsTest {
             setOf(HistoryAction.IGNORE, HistoryAction.SENIORS, HistoryAction.JUNIORS, HistoryAction.MALE, HistoryAction.FEMALE),
             BIBS_STANDALONE_OPTIONS.toSet(),
         )
-        // Finish/Start/Retire always carry a bib, so they're never offered when there's nothing
-        // typed to log a standalone entry against.
+        // Finish/Start/Pass/Retire always carry a bib, so they're never offered when there's
+        // nothing typed to log a standalone entry against.
         assertEquals(false, HistoryAction.FINISH in BIBS_STANDALONE_OPTIONS)
         assertEquals(false, HistoryAction.START in BIBS_STANDALONE_OPTIONS)
+        assertEquals(false, HistoryAction.PASS in BIBS_STANDALONE_OPTIONS)
         assertEquals(false, HistoryAction.RETIRE in BIBS_STANDALONE_OPTIONS)
     }
 
     @Test
-    fun defaultActionOptionsAreStartThenFinishOnly() {
+    fun defaultActionOptionsAreStartPassThenFinish() {
         assertEquals(
-            listOf(HistoryAction.START, HistoryAction.FINISH),
+            listOf(HistoryAction.START, HistoryAction.PASS, HistoryAction.FINISH),
             BIBS_DEFAULT_ACTION_OPTIONS,
         )
     }

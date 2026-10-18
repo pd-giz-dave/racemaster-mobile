@@ -8,15 +8,14 @@ import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.util.formatBibsExpectedText
 
-/** The device/race/location/progress/sync/duplicate/outstanding-bib info block shared by Bibs
- *  Mode and CP Mode's near-identical headers — both modes track the exact same "first bib
- *  number + runner count" range and dup/outstanding logic (see
- *  `data/repository/BibValidation.kt`), so this is one shared block rather than two
- *  copy-pasted ones. Rendered directly into whatever Column the caller already has open (no
- *  Column of its own) — matches how these lines were laid out inline in BibsModeScreen before
- *  this was extracted. Wraps [RaceProgressSummary] for the prefix common to every mode's own
- *  header (and Mode Picker's own summary), appending the dup-count badge into its "Next" row and
- *  then this pair's own extra bib/CP-specific lines below it. */
+/** The device/race/location/progress/sync/duplicate/outstanding-bib info block for Bibs Mode's
+ *  header — tracks the "first bib number + runner count" range and dup/outstanding logic (see
+ *  `data/repository/BibValidation.kt`). CP Mode used to share this exact block too, before it
+ *  was removed (see TODO.md: "A rationalisation"). Rendered directly into whatever Column the
+ *  caller already has open (no Column of its own) — matches how these lines were laid out inline
+ *  in BibsModeScreen before this was extracted. Wraps [RaceProgressSummary] for the prefix common
+ *  to every mode's own header (and Mode Picker's own summary), appending the dup-count badge into
+ *  its "Next" row and then this own extra bib-specific lines below it. */
 @Composable
 fun EntryModeHeaderInfo(
     deviceName: String?,

@@ -558,7 +558,6 @@ class RaceRepositoryTest {
         when (mode) {
             HistoryMode.TIME -> db.raceDao().setTimeModeStartedAt(raceId, startedAtMillis)
             HistoryMode.BIBS -> db.raceDao().setBibsModeStartedAt(raceId, startedAtMillis)
-            HistoryMode.CP -> db.raceDao().setCpModeStartedAt(raceId, startedAtMillis)
         }
         val race = db.raceDao().getById(raceId)!!
         db.historyLineDao().insert(
@@ -585,14 +584,12 @@ class RaceRepositoryTest {
         // each is reset independently.
         markStartedWithHistory(HistoryMode.TIME, 1_000L)
         markStartedWithHistory(HistoryMode.BIBS, 2_000L)
-        markStartedWithHistory(HistoryMode.CP, 3_000L)
 
         repository.forceResetActiveModes(raceId)
 
         val race = repository.getRace(raceId)
         assertNull(race?.timeModeStartedAtMillis)
         assertNull(race?.bibsModeStartedAtMillis)
-        assertNull(race?.cpModeStartedAtMillis)
     }
 
     @Test
@@ -612,13 +609,13 @@ class RaceRepositoryTest {
 
     @Test
     fun forceResetActiveModesNeverInsertsAMarkerForAModeThatWasNeverStarted() = runTest {
-        // Only Bibs was ever started for this race — Time/CP must stay completely untouched,
-        // not gain a spurious Reset line for a mode this race never actually used.
+        // Only Bibs was ever started for this race — Time must stay completely untouched, not
+        // gain a spurious Reset line for a mode this race never actually used.
         markStartedWithHistory(HistoryMode.BIBS, 1_000L)
 
         repository.forceResetActiveModes(raceId)
 
-        // The bare Clock row plus the new Reset marker — nothing for Time/CP.
+        // The bare Clock row plus the new Reset marker — nothing for Time.
         assertEquals(2, db.historyLineDao().observeAllForRace(raceId).first().size)
     }
 
@@ -650,13 +647,53 @@ class RaceRepositoryTest {
 
     @Test
     fun recordModeStartSwitchesModeEvenWhileAnotherModeIsStillStarted() = runTest {
-        db.raceDao().setCpModeStartedAt(raceId, 1_000L)
+        db.raceDao().setTimeModeStartedAt(raceId, 1_000L)
 
         repository.recordModeStart(raceId, AppMode.BIBS, "Finish")
 
         assertEquals("BIBS", repository.getRace(raceId)?.mode)
-        // CP's own started-at is untouched — relocating away from it doesn't Reset it, so it
+        // Time's own started-at is untouched — relocating away from it doesn't Reset it, so it
         // stays resumable later via Relocate (see recordModeStart's own resume doc).
-        assertEquals(1_000L, repository.getRace(raceId)?.cpModeStartedAtMillis)
+        assertEquals(1_000L, repository.getRace(raceId)?.timeModeStartedAtMillis)
+    }
+
+    // Bibs is location-aware (TODO.md: "A rationalisation") — recordModeStart is the one place
+    // location ever changes, so it's the one place that seeds a fresh default action from it
+    // (see LocationValidation.defaultActionForLocation's own doc).
+    @Test
+    fun recordModeStartSeedsBibsDefaultActionFromLocation() = runTest {
+        repository.recordModeStart(raceId, AppMode.BIBS, "CP3")
+        assertEquals(HistoryAction.PASS, settingsRepository.bibsAutoSaveAction.first())
+
+        repository.recordModeStart(raceId, AppMode.BIBS, "Start")
+        assertEquals(HistoryAction.START, settingsRepository.bibsAutoSaveAction.first())
+
+        repository.recordModeStart(raceId, AppMode.BIBS, "Finish")
+        assertEquals(HistoryAction.FINISH, settingsRepository.bibsAutoSaveAction.first())
+    }
+
+    // The derived default is purely a starting point — an operator's own later manual pick (via
+    // Bibs' own default-action selector, simulated here as a direct settingsRepository write)
+    // simply overwrites the same setting, with no separate "locked"/"derived" state to protect.
+    @Test
+    fun manualBibsDefaultActionPickSurvivesUntilNextLocationChange() = runTest {
+        repository.recordModeStart(raceId, AppMode.BIBS, "Finish")
+        assertEquals(HistoryAction.FINISH, settingsRepository.bibsAutoSaveAction.first())
+
+        settingsRepository.setBibsAutoSaveAction(HistoryAction.START)
+        assertEquals(HistoryAction.START, settingsRepository.bibsAutoSaveAction.first())
+
+        repository.recordModeStart(raceId, AppMode.BIBS, "CP1")
+        assertEquals(HistoryAction.PASS, settingsRepository.bibsAutoSaveAction.first())
+    }
+
+    // Only Bibs is location-aware — Time's own relocations must never touch Bibs' setting.
+    @Test
+    fun recordModeStartLeavesBibsDefaultActionAloneForOtherModes() = runTest {
+        settingsRepository.setBibsAutoSaveAction(HistoryAction.START)
+
+        repository.recordModeStart(raceId, AppMode.TIME, "CP1")
+
+        assertEquals(HistoryAction.START, settingsRepository.bibsAutoSaveAction.first())
     }
 }

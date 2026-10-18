@@ -8,7 +8,6 @@ import mobile.racemaster.data.db.RacemasterDatabase
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.repository.BibsModeRepository
-import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.db.entity.RaceEntity
@@ -37,7 +36,6 @@ class RaceHistoryDetailViewModelTest {
     private lateinit var raceRepository: RaceRepository
     private lateinit var timeModeRepository: TimeModeRepository
     private lateinit var bibsModeRepository: BibsModeRepository
-    private lateinit var cpModeRepository: CpModeRepository
     private var raceId: Long = 0
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -62,7 +60,6 @@ class RaceHistoryDetailViewModelTest {
         )
         timeModeRepository = TimeModeRepository(db, db.raceDao(), db.historyLineDao(), raceRepository)
         bibsModeRepository = BibsModeRepository(db, db.raceDao(), db.historyLineDao(), raceRepository)
-        cpModeRepository = CpModeRepository(db, db.raceDao(), db.historyLineDao(), raceRepository)
         raceId = db.raceDao().insert(RaceEntity(label = "Mixed Race", createdAtMillis = 0L, createdByDeviceName = "quiet-thicket"))
     }
 
@@ -71,7 +68,7 @@ class RaceHistoryDetailViewModelTest {
         db.close()
     }
 
-    private fun viewModel() = RaceHistoryDetailViewModel(raceId, raceRepository, timeModeRepository, bibsModeRepository, cpModeRepository)
+    private fun viewModel() = RaceHistoryDetailViewModel(raceId, raceRepository, timeModeRepository, bibsModeRepository)
 
     // Explicit recordModeStart call, at the SAME timestamp startStopwatch is about to use, so
     // TimeModeRepository.startStopwatch's own ensureOpenSegment self-heal (see its own doc) finds

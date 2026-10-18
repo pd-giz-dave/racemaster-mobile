@@ -172,7 +172,12 @@ class TimeModeRepository(
         db.withTransaction {
             val raw = historyLineDao.getAllForRaceAndMode(raceId, HistoryMode.TIME)
             val current = currentSegment(raw)
-            val target = current.firstOrNull() ?: return@withTransaction
+            // Never targets a LOCATION row: a relocate is undone only by relocating back to
+            // where you came from, not by Undo — see EntryLogModeEngine.undoMostRecent's own
+            // doc for the resume/merge bug this also fixes (currentSegmentVisits merges a
+            // revisited, not-yet-reset location's older entries in under a brand-new LOCATION
+            // marker that otherwise outranks them by raw lineNumber).
+            val target = current.firstOrNull { it.action != HistoryAction.LOCATION } ?: return@withTransaction
             val rootLineNumber = target.refLineNumber ?: target.lineNumber
             val root = raw.first { it.lineNumber == rootLineNumber }
             val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
@@ -190,16 +195,6 @@ class TimeModeRepository(
             raceDao.incrementLineNumber(raceId)
             when (root.action) {
                 HistoryAction.START -> raceDao.clearTimeModeStartedAt(raceId)
-                // A LOCATION root never merely "consumed one count" — its own forward write
-                // reset (or resumed — see RaceRepository.recordModeStart) the counter, so
-                // undoing it must restore whatever the counter (and RaceEntity.location) actually
-                // were beforehand, never decrementTimeCounter — that would silently corrupt it
-                // (this was the bug in this `when` before this branch existed: LOCATION fell into
-                // `else` and got wrongly decremented).
-                HistoryAction.LOCATION -> {
-                    root.priorSplitCounter?.let { raceDao.setTimeModeNextSplit(raceId, it) }
-                    root.previousLocation?.let { raceDao.updateModeAndLocation(raceId, root.previousMode, it) }
-                }
                 else -> raceDao.decrementTimeCounter(raceId)
             }
         }

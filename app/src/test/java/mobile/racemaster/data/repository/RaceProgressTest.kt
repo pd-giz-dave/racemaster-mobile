@@ -12,29 +12,24 @@ class RaceProgressTest {
     // isRaceActive — used both to guard a destructive action and to decide "in progress" for the
     // mode picker/blocking a new race (see its own doc — the two questions collapsed into one
     // once Stop was dropped, see HistoryAction's own doc: there's no more separate "running vs.
-    // merely stopped" distinction). Time, Bibs, and CP each contribute independently via a plain
-    // started-at timestamp, so a race active in only one of the three must still block a "New
-    // Race" from any mode's screen — a blind spot that would otherwise let that mode's own live
-    // segment be silently orphaned.
-
-    @Test
-    fun cpStartedAloneCountsAsActive() {
-        assertEquals(true, isRaceActive(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null, cpModeStartedAtMillis = 1_000L))
-    }
+    // merely stopped" distinction). Time and Bibs each contribute independently via a plain
+    // started-at timestamp, so a race active in only one of the two must still block a "New
+    // Race" from either mode's screen — a blind spot that would otherwise let that mode's own
+    // live segment be silently orphaned.
 
     @Test
     fun bibsStartedAloneCountsAsActive() {
-        assertEquals(true, isRaceActive(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = 1_000L, cpModeStartedAtMillis = null))
+        assertEquals(true, isRaceActive(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = 1_000L))
     }
 
     @Test
     fun timeStartedAloneCountsAsActive() {
-        assertEquals(true, isRaceActive(timeModeStartedAtMillis = 1_000L, bibsModeStartedAtMillis = null, cpModeStartedAtMillis = null))
+        assertEquals(true, isRaceActive(timeModeStartedAtMillis = 1_000L, bibsModeStartedAtMillis = null))
     }
 
     @Test
     fun nothingStartedIsNotActive() {
-        assertEquals(false, isRaceActive(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null, cpModeStartedAtMillis = null))
+        assertEquals(false, isRaceActive(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null))
     }
 
     // activeModeLabels — names which mode(s) isRaceActive is actually keying off, for
@@ -45,9 +40,8 @@ class RaceProgressTest {
 
     @Test
     fun namesOnlyTheModeThatsActuallyStarted() {
-        assertEquals(listOf("Time Mode"), activeModeLabels(timeModeStartedAtMillis = 1_000L, bibsModeStartedAtMillis = null, cpModeStartedAtMillis = null))
-        assertEquals(listOf("Bibs Mode"), activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = 1_000L, cpModeStartedAtMillis = null))
-        assertEquals(listOf("CP Mode"), activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null, cpModeStartedAtMillis = 1_000L))
+        assertEquals(listOf("Time Mode"), activeModeLabels(timeModeStartedAtMillis = 1_000L, bibsModeStartedAtMillis = null))
+        assertEquals(listOf("Bibs Mode"), activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = 1_000L))
     }
 
     @Test
@@ -55,18 +49,18 @@ class RaceProgressTest {
         // The exact scenario that motivated this: Time reset (null) but Bibs still started from
         // an earlier mode switch on the same race — must name Bibs, not silently drop it.
         assertEquals(
-            listOf("Bibs Mode", "CP Mode"),
-            activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = 1_000L, cpModeStartedAtMillis = 2_000L),
+            listOf("Bibs Mode"),
+            activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = 1_000L),
         )
     }
 
     @Test
     fun namesNothingWhenNoModeIsActive() {
-        assertEquals(emptyList<String>(), activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null, cpModeStartedAtMillis = null))
+        assertEquals(emptyList<String>(), activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null))
     }
 
     // isModeStarted — the per-mode mapping onto whichever of RaceEntity's own
-    // timeModeStartedAtMillis/bibsModeStartedAtMillis/cpModeStartedAtMillis fields is right.
+    // timeModeStartedAtMillis/bibsModeStartedAtMillis fields is right.
 
     @Test
     fun isModeStartedReadsEachModesOwnField() {
@@ -75,11 +69,9 @@ class RaceProgressTest {
             createdAtMillis = 0L,
             timeModeStartedAtMillis = 1_000L,
             bibsModeStartedAtMillis = 2_000L,
-            cpModeStartedAtMillis = 3_000L,
         )
         assertTrue(isModeStarted(AppMode.TIME, race))
         assertTrue(isModeStarted(AppMode.BIBS, race))
-        assertTrue(isModeStarted(AppMode.CP, race))
     }
 
     @Test
@@ -87,7 +79,6 @@ class RaceProgressTest {
         val race = RaceEntity(label = "Test Race", createdAtMillis = 0L, bibsModeStartedAtMillis = 2_000L)
         assertFalse(isModeStarted(AppMode.TIME, race))
         assertTrue(isModeStarted(AppMode.BIBS, race))
-        assertFalse(isModeStarted(AppMode.CP, race))
     }
 
     @Test

@@ -41,7 +41,6 @@ import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.formatSplitRef
 import mobile.racemaster.data.repository.unexpectedBibWarning
-import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.ui.components.ActionPickerDialog
 import mobile.racemaster.ui.components.DiscardChangesDialog
@@ -49,24 +48,22 @@ import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.util.withClickSound
 
 /**
- * A dedicated screen for editing a single Bibs/CP Mode entry — reached by navigating (see
+ * A dedicated screen for editing a single Bibs Mode entry — reached by navigating (see
  * Routes.editEntry), replacing an inline editor (`EditEntryPanel`) that used to be composed
  * above the live entries list. See [mobile.racemaster.ui.timemode.EditSplitScreen]'s own doc
  * for why: that inline editor lived inside the mode screen's own height-capped, ime-inset-driven
  * header scroll region, and imePadding()/WindowInsets.ime don't reliably report the keyboard's
  * real height on some devices (confirmed in the field on a Cubot), leaving it genuinely
- * unreachable. [mode] picks which entry type this is (Bibs' full event list vs CP's Pass/Retire
- * pair) — same per-mode split [mobile.racemaster.ui.racedetails.RaceDetailsScreen] already uses
- * for its own field set.
+ * unreachable. (Used to also back CP Mode's own entry editor, picking its own smaller option
+ * list via a `mode` arg — removed along with CP Mode itself, see TODO.md: "A rationalisation".)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditEntryScreen(
-    mode: AppMode,
     entryId: Long,
     onSaved: () -> Unit,
     onCancel: () -> Unit,
-    viewModel: EditEntryViewModel = viewModel(factory = EditEntryViewModel.factory(mode, entryId)),
+    viewModel: EditEntryViewModel = viewModel(factory = EditEntryViewModel.factory(entryId)),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val entry = uiState.entry
@@ -138,10 +135,9 @@ fun EditEntryScreen(
                 return@Column
             }
 
-            // A Clock row (written by either mode's own start — see
-            // BibsModeRepository.startBibsMode/CpModeRepository.startCpMode) is a time-only
-            // note edit, no type/bib to change, same distinct minimal form the old inline
-            // EditEntryPanel gave it.
+            // A Clock row (written by Bibs' own start — see BibsModeRepository.startBibsMode)
+            // is a time-only note edit, no type/bib to change, same distinct minimal form the
+            // old inline EditEntryPanel gave it.
             if (entry.action == HistoryAction.CLOCK) {
                 OutlinedTextField(
                     value = noteText,

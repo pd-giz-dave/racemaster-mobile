@@ -6,9 +6,9 @@ import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.mule.ProgressEntry
 
 // A bib is no longer expected to cross the line once it's FINISH (they crossed), PASS (they
-// passed this checkpoint — CP Mode's own equivalent of FINISH), or RETIRE (they've been
-// accounted for elsewhere and won't cross) — either way, nothing left to wait for from that
-// bib. START doesn't count: they're on course, still expected to show up one way or the other.
+// passed this checkpoint — the CPn equivalent of FINISH), or RETIRE (they've been accounted for
+// elsewhere and won't cross) — either way, nothing left to wait for from that bib. START doesn't
+// count: they're on course, still expected to show up one way or the other.
 private val ACCOUNTED_FOR_ACTIONS = setOf(HistoryAction.FINISH, HistoryAction.PASS, HistoryAction.RETIRE)
 
 /**

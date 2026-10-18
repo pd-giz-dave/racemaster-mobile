@@ -65,23 +65,6 @@ interface RaceDao {
     @Query("UPDATE races SET bibsModeNextSplit = 1, bibsModeStartedAtMillis = NULL WHERE id = :raceId")
     suspend fun resetBibsMode(raceId: Long)
 
-    @Query("UPDATE races SET cpModeNextSplit = cpModeNextSplit + 1 WHERE id = :raceId")
-    suspend fun incrementCpCounter(raceId: Long)
-
-    @Query("UPDATE races SET cpModeNextSplit = cpModeNextSplit - 1 WHERE id = :raceId")
-    suspend fun decrementCpCounter(raceId: Long)
-
-    @Query("UPDATE races SET cpModeStartedAtMillis = :startedAtMillis WHERE id = :raceId")
-    suspend fun setCpModeStartedAt(raceId: Long, startedAtMillis: Long)
-
-    @Query("UPDATE races SET cpModeStartedAtMillis = NULL WHERE id = :raceId")
-    suspend fun clearCpModeStartedAt(raceId: Long)
-
-    // Clears cpModeStartedAtMillis too — this is what returns the screen to its pre-Start state
-    // (see RaceEntity.cpModeStartedAtMillis's own doc).
-    @Query("UPDATE races SET cpModeNextSplit = 1, cpModeStartedAtMillis = NULL WHERE id = :raceId")
-    suspend fun resetCpMode(raceId: Long)
-
     // The permanent, race-wide history line counter — see RaceEntity.nextLineNumber. Only
     // ever incremented, including across a Reset (unlike the display counters above).
     @Query("UPDATE races SET nextLineNumber = nextLineNumber + 1 WHERE id = :raceId")
@@ -103,8 +86,8 @@ interface RaceDao {
     suspend fun updateDetails(raceId: Long, name: String, location: String, label: String)
 
     // Relocation's own counter reset/restore — deliberately narrower than resetTimeMode/
-    // resetBibsMode/resetCpMode above, which also clear started/stoppedAtMillis and would wrongly
-    // kick an in-progress mode back to pre-Start state. A relocation mid-recording only needs the
+    // resetBibsMode above, which also clear started/stoppedAtMillis and would wrongly kick an
+    // in-progress mode back to pre-Start state. A relocation mid-recording only needs the
     // display counter itself to move (forward: reset to 1 after saving the old value into the new
     // marker row's own priorSplitCounter; on undo: restored back to that saved value) — see
     // RaceRepository.recordModeStart and EntryLogModeEngine/TimeModeRepository's own
@@ -114,9 +97,6 @@ interface RaceDao {
 
     @Query("UPDATE races SET bibsModeNextSplit = :value WHERE id = :raceId")
     suspend fun setBibsModeNextSplit(raceId: Long, value: Int)
-
-    @Query("UPDATE races SET cpModeNextSplit = :value WHERE id = :raceId")
-    suspend fun setCpModeNextSplit(raceId: Long, value: Int)
 
     // RaceRepository.recordModeStart's own mode+location update — used both for its forward
     // write (Setup Race / Relocate choosing a new mode/location) and, with the *previous*

@@ -36,7 +36,6 @@ import mobile.racemaster.data.db.dao.PulledSourceSummary
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.KnownDeviceEntity
 import mobile.racemaster.data.repository.BibsModeRepository
-import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.settings.AppMode
@@ -199,7 +198,6 @@ class MuleSyncEngine(
     private val raceRepository: RaceRepository,
     private val timeModeRepository: TimeModeRepository,
     private val bibsModeRepository: BibsModeRepository,
-    private val cpModeRepository: CpModeRepository,
     private val settingsRepository: SettingsRepository,
     private val progressRepository: ProgressRepository,
 ) {
@@ -338,20 +336,19 @@ class MuleSyncEngine(
                     raceRepository.observeRace(raceId),
                     timeModeRepository.observeUnsyncedCount(raceId),
                     bibsModeRepository.observeUnsyncedCount(raceId),
-                    cpModeRepository.observeUnsyncedCount(raceId),
                     muleRepository.deviceName,
-                ) { race, unsyncedSplits, unsyncedEntries, unsyncedCpEntries, deviceName ->
+                ) { race, unsyncedSplits, unsyncedEntries, deviceName ->
                     DiscoveredDevice(
                         deviceKey = SELF_DEVICE_KEY,
                         advertisement = null,
                         deviceId = SELF_DEVICE_KEY,
                         deviceName = deviceName.orEmpty(),
                         raceLabel = race?.label.orEmpty(),
-                        // Time, Bibs, and CP are independently-scoped counts (a HistoryLineEntity
-                        // row has exactly one mode), so summing them is safe here — unlike the
+                        // Time and Bibs are independently-scoped counts (a HistoryLineEntity row
+                        // has exactly one mode), so summing them is safe here — unlike the
                         // BLE-pulled path below, there's no risk of double-counting the same
                         // line under two different reads.
-                        unsyncedCount = unsyncedSplits + unsyncedEntries + unsyncedCpEntries,
+                        unsyncedCount = unsyncedSplits + unsyncedEntries,
                         isSelf = true,
                     )
                 }

@@ -49,16 +49,6 @@ class SyncRecordMappingTest {
         refLineNumber: Long? = null,
     ) = line(HistoryMode.BIBS, action, splitNumber, timestampMillis, bibNumber = bibNumber, note = note, lineNumber = lineNumber, refLineNumber = refLineNumber)
 
-    private fun cpEntry(
-        bibNumber: Int?,
-        action: HistoryAction,
-        splitNumber: Int,
-        timestampMillis: Long,
-        note: String? = null,
-        lineNumber: Long = 1L,
-        refLineNumber: Long? = null,
-    ) = line(HistoryMode.CP, action, splitNumber, timestampMillis, bibNumber = bibNumber, note = note, lineNumber = lineNumber, refLineNumber = refLineNumber)
-
     // Time-mode HistoryLineEntity.toSyncRecord
 
     @Test
@@ -208,42 +198,21 @@ class SyncRecordMappingTest {
         assertNull(bibOriginal.refLineNumber)
     }
 
-    // CP-mode HistoryLineEntity.toSyncRecord — CP shares Bibs' wire shape exactly (bibNumber
-    // passed straight through, splitTime always null) rather than getting its own.
+    // Pass — a Bibs entry at a CPn location (TODO.md: "A rationalisation"; used to be CP Mode's
+    // own action, on its own HistoryMode.CP rows, before CP Mode was removed). Shares Bibs'
+    // wire shape exactly, same as Finish/Retire above.
 
     @Test
     fun passTypeMapsToPassAction() {
-        val record = cpEntry(101, HistoryAction.PASS, splitNumber = 1, timestampMillis = 60_000L).toSyncRecord(null)
+        val record = bibEntry(101, HistoryAction.PASS, splitNumber = 1, timestampMillis = 60_000L).toSyncRecord(null)
         assertEquals("Pass", record.action)
         assertEquals(101, record.bibNumber)
     }
 
     @Test
-    fun cpRetireTypeMapsToDnfActionSameAsBibs() {
-        val record = cpEntry(101, HistoryAction.RETIRE, splitNumber = 1, timestampMillis = 0L).toSyncRecord(null)
-        assertEquals("DNF", record.action)
-    }
-
-    @Test
-    fun cpEntryTimeIsAlwaysNullCpModeHasNoStopwatchOfItsOwn() {
-        val record = cpEntry(101, HistoryAction.PASS, splitNumber = 1, timestampMillis = 360_000L).toSyncRecord(0L)
+    fun passEntryTimeIsAlwaysNullBibsModeHasNoStopwatchOfItsOwn() {
+        val record = bibEntry(101, HistoryAction.PASS, splitNumber = 1, timestampMillis = 360_000L).toSyncRecord(0L)
         assertNull(record.splitTime)
-    }
-
-    @Test
-    fun cpMarkerActionsSendNullBibNumber() {
-        assertNull(cpEntry(null, HistoryAction.RESET, 1, 0L).toSyncRecord(null).bibNumber)
-        assertNull(cpEntry(null, HistoryAction.UNDO, 1, 0L).toSyncRecord(null).bibNumber)
-        assertNull(cpEntry(null, HistoryAction.PING, 1, 0L).toSyncRecord(null).bibNumber)
-    }
-
-    @Test
-    fun roundTripsEveryCpModeActionThroughTheWireAndBack() {
-        assertEquals(HistoryAction.PASS, cpEntry(101, HistoryAction.PASS, 1, 0L).toSyncRecord(null).toHistoryAction())
-        assertEquals(HistoryAction.RETIRE, cpEntry(101, HistoryAction.RETIRE, 1, 0L).toSyncRecord(null).toHistoryAction())
-        assertEquals(HistoryAction.RESET, cpEntry(null, HistoryAction.RESET, 1, 0L).toSyncRecord(null).toHistoryAction())
-        assertEquals(HistoryAction.UNDO, cpEntry(null, HistoryAction.UNDO, 1, 0L).toSyncRecord(null).toHistoryAction())
-        assertEquals(HistoryAction.PING, cpEntry(null, HistoryAction.PING, 1, 0L).toSyncRecord(null).toHistoryAction())
     }
 
     // SyncRecord.toHistoryAction — the exact inverse of toServerAction, exercised via a full
@@ -357,6 +326,7 @@ class SyncRecordMappingTest {
     fun roundTripsEveryBibsModeActionThroughTheWireAndBack() {
         assertEquals(HistoryAction.FINISH, bibEntry(101, HistoryAction.FINISH, 1, 0L).toSyncRecord(null).toHistoryAction())
         assertEquals(HistoryAction.START, bibEntry(101, HistoryAction.START, 1, 0L).toSyncRecord(null).toHistoryAction())
+        assertEquals(HistoryAction.PASS, bibEntry(101, HistoryAction.PASS, 1, 0L).toSyncRecord(null).toHistoryAction())
         assertEquals(HistoryAction.RETIRE, bibEntry(101, HistoryAction.RETIRE, 1, 0L).toSyncRecord(null).toHistoryAction())
         assertEquals(HistoryAction.IGNORE, bibEntry(null, HistoryAction.IGNORE, 1, 0L).toSyncRecord(null).toHistoryAction())
         assertEquals(HistoryAction.SENIORS, bibEntry(null, HistoryAction.SENIORS, 1, 0L).toSyncRecord(null).toHistoryAction())

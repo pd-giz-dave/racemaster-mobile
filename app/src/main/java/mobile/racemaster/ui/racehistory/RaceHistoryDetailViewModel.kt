@@ -8,7 +8,6 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.repository.BibsModeRepository
-import mobile.racemaster.data.repository.CpModeRepository
 import mobile.racemaster.data.repository.LineSyncState
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
@@ -44,7 +43,7 @@ data class ArchivedHistoryLineUi(
     // previously 0L for both cases, which rendered as a misleading "00:00:00" instead of "–".
     val elapsedMillis: Long?,
     val note: String?,
-    // Only meaningful for a BIBS/CP-mode row — empty for a TIME-mode row.
+    // Only meaningful for a BIBS-mode row — empty for a TIME-mode row.
     val dupSplitRefs: List<Int?>,
     val timestampMillis: Long,
     val syncState: LineSyncState,
@@ -65,14 +64,12 @@ class RaceHistoryDetailViewModel(
     raceRepository: RaceRepository,
     timeModeRepository: TimeModeRepository,
     bibsModeRepository: BibsModeRepository,
-    cpModeRepository: CpModeRepository,
 ) : ViewModel() {
 
     private val lastSyncedFlow = combine(
         timeModeRepository.observeLastSyncedAtMillis(raceId),
         bibsModeRepository.observeLastSyncedAtMillis(raceId),
-        cpModeRepository.observeLastSyncedAtMillis(raceId),
-    ) { timeSynced, bibsSynced, cpSynced -> maxOfNullable(maxOfNullable(timeSynced, bibsSynced), cpSynced) }
+    ) { timeSynced, bibsSynced -> maxOfNullable(timeSynced, bibsSynced) }
 
     val uiState: StateFlow<RaceHistoryDetailUiState> = combine(
         raceRepository.observeRace(raceId),
@@ -87,13 +84,11 @@ class RaceHistoryDetailViewModel(
         val syncedToByLine = lineSyncs.groupBy({ it.lineNumber }, { it.targetName })
         val linesWithAnySync = linesWithAnySync(lineSyncs)
 
-        // Duplicate bib detection, scoped per Bibs/CP segment (bounded by RESET markers) rather
+        // Duplicate bib detection, scoped per Bibs segment (bounded by RESET markers) rather
         // than across the whole history — a bib legitimately reused in a later segment must
         // not be flagged against an earlier, already-reset-away segment (fixes a real bug:
-        // this screen used to feed the full multi-segment history into one flat check). CP
-        // shares this exact dup logic with Bibs (see BIB_REQUIRED_ACTIONS/ACCOUNTED_FOR_ACTIONS'
-        // own doc for why PASS is treated identically to FINISH).
-        val dupRefs = findDuplicateSplitRefsPerSegment(rows.filter { it.mode == HistoryMode.BIBS || it.mode == HistoryMode.CP })
+        // this screen used to feed the full multi-segment history into one flat check).
+        val dupRefs = findDuplicateSplitRefsPerSegment(rows.filter { it.mode == HistoryMode.BIBS })
 
         // A race's history can span more than one segment (each bounded by a Reset marker),
         // and each Time segment has its own Start time — so elapsed time can't be computed
@@ -122,8 +117,8 @@ class RaceHistoryDetailViewModel(
                 // start was would show a stale, misleading number instead. PING/LOCATION/RESET/
                 // NEW_RACE read 0 too — none of them is a genuine timed split (see
                 // HistoryAction.PING's own doc and SyncRecordMapping.toSyncRecord's identical
-                // treatment of all five on the wire) — matching Bibs/CP's own rows for these,
-                // which already show nothing here (any non-Time mode always reads 0 below).
+                // treatment of all five on the wire) — matching Bibs' own rows for these, which
+                // already show nothing here (any non-Time mode always reads 0 below).
                 elapsedMillis = when {
                     it.mode != HistoryMode.TIME -> null
                     it.action in NON_ELAPSED_TIME_ACTIONS -> null
@@ -166,7 +161,6 @@ class RaceHistoryDetailViewModel(
                     container.raceRepository,
                     container.timeModeRepository,
                     container.bibsModeRepository,
-                    container.cpModeRepository,
                 )
             }
         }

@@ -338,7 +338,7 @@ class TimeModeRepositoryTest {
     }
 
     @Test
-    fun undoingARelocateRevealsWhateverWasVisibleBeforeIt() = runTest {
+    fun undoRightAfterABareRelocateIsANoOp() = runTest {
         setupRace()
         repository.startStopwatch(raceId, startedAtMillis = 1_000L)
         repository.recordSplit(raceId, timestampMillis = 1_500L)
@@ -353,15 +353,50 @@ class TimeModeRepositoryTest {
             repository.observeCurrentSegmentSplits(raceId).first().map { it.action },
         )
 
-        // Undo: undoes the relocate — with the relocate's own LOCATION group folded away, the
-        // race's own original (setupRace's own) LOCATION marker is what's left standing, so it
-        // correctly reveals the whole pre-relocate segment (the split, the Start marker, and
-        // that original LOCATION row itself) exactly as it stood before.
+        // Undo never targets a LOCATION row (a relocate is undone only by relocating back, never
+        // by Undo — see EntryLogModeEngine.undoMostRecent's own doc, which TimeModeRepository's
+        // own undoMostRecent now mirrors), so with nothing else to undo at this brand-new
+        // location, Undo is a no-op: the relocate stands untouched.
         repository.undoMostRecent(raceId)
         assertEquals(
-            listOf(HistoryAction.SPLIT, HistoryAction.START, HistoryAction.LOCATION),
+            listOf(HistoryAction.LOCATION),
             repository.observeCurrentSegmentSplits(raceId).first().map { it.action },
         )
-        assertEquals("Finish", db.raceDao().getById(raceId)?.location)
+        assertEquals("CP1", db.raceDao().getById(raceId)?.location)
+    }
+
+    @Test
+    fun undoAfterRelocatingBackToAPreviouslyVisitedLocationTargetsTheResumedSplitNotTheRelocate() = runTest {
+        setupRace("Finish")
+        repository.startStopwatch(raceId, startedAtMillis = 1_000L)
+        repository.recordSplit(raceId) // Finish split 1
+
+        raceRepository.recordModeStart(raceId, AppMode.TIME, "CP1")
+        repository.recordSplit(raceId) // CP1's own split 1
+
+        raceRepository.recordModeStart(raceId, AppMode.TIME, "Finish")
+        repository.recordSplit(raceId) // Finish split 2
+
+        // Relocate BACK to CP1 — a previously-visited, not-yet-reset location resumes its own
+        // earlier entries rather than starting fresh, so CP1's own split is visible again, under
+        // a brand-new LOCATION row of its own (the resume) plus the original visit's own LOCATION
+        // row underneath.
+        raceRepository.recordModeStart(raceId, AppMode.TIME, "CP1")
+        val resumed = repository.observeCurrentSegmentSplits(raceId).first()
+        assertEquals(
+            listOf(HistoryAction.LOCATION, HistoryAction.SPLIT, HistoryAction.LOCATION),
+            resumed.map { it.action },
+        )
+
+        // Undo must remove the resumed split itself, not the brand-new resume's own LOCATION
+        // marker on top (which — before this fix — outranked it by raw lineNumber and was wrongly
+        // picked as the undo target, reverting the relocate back to Finish instead). Both LOCATION
+        // rows stay untouched either way — Undo never targets one.
+        repository.undoMostRecent(raceId)
+        assertEquals(
+            listOf(HistoryAction.LOCATION, HistoryAction.LOCATION),
+            repository.observeCurrentSegmentSplits(raceId).first().map { it.action },
+        )
+        assertEquals("CP1", db.raceDao().getById(raceId)?.location)
     }
 }

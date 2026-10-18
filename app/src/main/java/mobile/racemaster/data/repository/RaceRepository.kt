@@ -87,7 +87,6 @@ class RaceRepository(
             when (mode) {
                 HistoryMode.TIME -> raceDao.resetTimeMode(raceId)
                 HistoryMode.BIBS -> raceDao.resetBibsMode(raceId)
-                HistoryMode.CP -> raceDao.resetCpMode(raceId)
             }
             // The earliest of the visits just closed is the race's very first segment (for ANY
             // mode) exactly when the row right before its own LOCATION marker is NEW_RACE — see
@@ -150,8 +149,8 @@ class RaceRepository(
     // raceStaleAfterDays gate naturally lets a race with no further activity fade out of future
     // pushes on its own — each Reset call site is instead responsible for firing one best-effort
     // immediate push right after (mirroring Setup Race's own "push right away" pattern) so this
-    // reversion reaches the server promptly; see TimeModeViewModel/BibsModeViewModel/
-    // CpModeViewModel's own resetXStopwatch/resetXMode wiring.
+    // reversion reaches the server promptly; see TimeModeViewModel/BibsModeViewModel's own
+    // resetXStopwatch/resetXMode wiring.
     private suspend fun abandonRaceSetup(raceId: Long) {
         settingsRepository.clearActiveRaceId()
         settingsRepository.clearSetupRaceDraft()
@@ -269,7 +268,6 @@ class RaceRepository(
             val priorSplitCounter = when (historyMode) {
                 HistoryMode.TIME -> race.timeModeNextSplit
                 HistoryMode.BIBS -> race.bibsModeNextSplit
-                HistoryMode.CP -> race.cpModeNextSplit
             }
             historyLineDao.insert(
                 HistoryLineEntity(
@@ -305,7 +303,6 @@ class RaceRepository(
             when (historyMode) {
                 HistoryMode.TIME -> raceDao.setTimeModeNextSplit(raceId, nextSplit)
                 HistoryMode.BIBS -> raceDao.setBibsModeNextSplit(raceId, nextSplit)
-                HistoryMode.CP -> raceDao.setCpModeNextSplit(raceId, nextSplit)
             }
             raceDao.updateModeAndLocation(raceId, mode.name, location)
         }
@@ -316,6 +313,14 @@ class RaceRepository(
         // now updates it, replacing ModePickerViewModel's old direct setAppMode call (mode is no
         // longer chosen there — see that screen's own doc).
         settingsRepository.setAppMode(mode)
+        // Bibs is location-aware (TODO.md: "A rationalisation") — this is the one place location
+        // ever changes (Setup Race and Relocate both funnel through here), so it's the one place
+        // that seeds a fresh default action from it. Purely a default: the operator's own later
+        // picks via Bibs' own selector simply overwrite this same setting afterward, same as
+        // always — see defaultActionForLocation's own doc.
+        if (mode == AppMode.BIBS) {
+            settingsRepository.setBibsAutoSaveAction(defaultActionForLocation(location))
+        }
     }
 
     // name/location genuinely can change here now — RaceDetailsScreen only locks them once the
@@ -507,7 +512,6 @@ class RaceRepository(
         val race = raceDao.getById(raceId) ?: return
         if (race.timeModeStartedAtMillis != null) closeCurrentSegment(raceId, HistoryMode.TIME)
         if (race.bibsModeStartedAtMillis != null) closeCurrentSegment(raceId, HistoryMode.BIBS)
-        if (race.cpModeStartedAtMillis != null) closeCurrentSegment(raceId, HistoryMode.CP)
     }
 
     // Resolves a race label back to this device's own local race — see
