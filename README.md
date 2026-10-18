@@ -9,26 +9,27 @@ line, any number of phones run this app side by side, each logging its own stati
 - **Time Mode** — acts as a stopwatch, recording exactly when each finisher crossed the
   line, in order.
 - **Bibs Mode** — records which bib number each finisher was wearing, in the same order,
-  with a configurable legal bib range (an out-of-range or duplicate entry is flagged
-  inline rather than blocked), and full row editing for correcting mis-keyed entries live.
-- **CP Mode** — a lighter checkpoint variant of Bibs Mode (a fixed Pass/Retire button pair
-  instead of a full event picker) for stations out on the course rather than at the finish
-  line, each identified by a required location like "CP1" or "CP2-Bridge".
+  with full row editing for correcting mis-keyed entries live. It's location-aware: a
+  race's location is "Start", "Finish", or a checkpoint like "CP1"/"CP2-Bridge", which
+  drives the default logging action (Start/Pass/Finish) and which actions are even
+  selectable there (e.g. Pass only makes sense at a CP). A bib unexpected at the current
+  location — derived from other stations' own progress, not a fixed configured range — is
+  flagged inline rather than blocked, same as a duplicate entry.
 - **Mule Mode** — has no stopwatch/keypad of its own. Instead it continuously discovers
   every other RaceMaster Mobile device nearby over Bluetooth, pulls whatever data they're
   holding, and pushes it on to a genuine data "sink" — either the RaceMaster server, or a
   Bluetooth device that identifies as one (the RaceMaster web app can connect to a phone
   directly and pull its data with no internet involved at all). A Mule can push to more
   than one sink at once (e.g. the server and a Bluetooth-connected laptop). This is how
-  data recorded on isolated Time/Bibs/CP phones out in the field actually gets back to
-  race control, potentially hopping through several Mule phones along the way.
+  data recorded on isolated Time/Bibs phones out in the field actually gets back to race
+  control, potentially hopping through several Mule phones along the way.
 
 Every logged line shows a three-way sync status: red until it's left the recording
 device at all, orange once a Mule has a copy but that hasn't yet reached a genuine sink,
 green once it's confirmed reaching one — this can take a couple of sync ticks to climb
 back through however many Mule hops separate the recording device from an actual sink.
 
-Every race records a name, course, and location (e.g. "Finish", "CP1", "CP2") so results
+Every race records a name and a location (e.g. "Start", "Finish", "CP1", "CP2") so results
 recorded by several stations can be reassembled afterwards. The screen stays on for the
 whole race (the app also requests exemption from battery optimization, since some OEM
 power-saving policies dim/lock the screen regardless of that), and an external
@@ -44,7 +45,7 @@ An in-app Help screen (Mode Picker → Help) covers the full operator workflow.
 - Kable (BLE central/peripheral) for Mule Mode's phone-to-phone sync, Ktor + kotlinx.serialization
   for its HTTP push to the RaceMaster server
 - Manual dependency injection (no Hilt/Koin/Dagger) — see `STRUCTURE.md`
-- `minSdk 24`, `targetSdk`/`compileSdk 37`, AGP 9.3.0
+- `minSdk 24`, `targetSdk`/`compileSdk 37`, AGP 9.4.1
 
 ## Building
 
