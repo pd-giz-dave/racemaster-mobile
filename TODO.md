@@ -204,10 +204,25 @@ See racemaster-tracker for more on this.
 
 ## Another idea
 
-Extend this app to recognise bluetooth beacons worn by runners
+Extend this app to recognise bluetooth beacons worn by runners.
 Such trackers can be had for £3 each for 1 yr use (before battery dies), 
 or £7 each for a 6 year battery life that is replaceable.
 See alibaba express for examples.
+
+### Implementation notes
+
+Full design: [docs/beacon-detection-plan.md](docs/beacon-detection-plan.md) (on the
+`beacon-tracking` branch) — includes architecture, code sketches, phased build-out, test plan,
+and a "How to resume this later" section. **Parked until real BLE tracker fobs are acquired.**
+
+- [ ] detection timed at peak signal strength (closest approach), not first/last-seen — the fob
+      doubles as a timing device (photo-finish resolution), not just bib ID
+- [ ] use measured-power to estimate distance; enforce a max-range threshold, tighter at
+      registration than during race detection
+- [ ] bib-beacon pairing happens at registration in the Racemaster web-app (not on the phone),
+      broadcast to phones piggy-backed on the existing bib/name propagation system; each fob has
+      a short-code known to the web-app, similar to the dibber number allocation scheme (see
+      ~/racemaster)
 
 ## Use dedicated cheap phones rather than asking marshalls to use their own.
 
