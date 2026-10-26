@@ -201,3 +201,38 @@ app could also provide GPS tracking. It then could be used for the Hike to both 
 competitors are and when they passed a CP.
 
 See racemaster-tracker for more on this.
+
+## Another idea
+
+Extend this app to recognise bluetooth beacons worn by runners
+Such trackers can be had for £3 each for 1 yr use (before battery dies), 
+or £7 each for a 6 year battery life that is replaceable.
+See alibaba express for examples.
+
+## Use dedicated cheap phones rather than asking marshalls to use their own.
+
+Can this app run on Samsumg XCover 4?
+They can be had from ebay for ~£25 and have a replaceable battery.
+Answer (via Claude) is yes.
+
+Before buying a batch of these second-hand, run this checklist on one example unit. The main
+risk is that `minSdk`/Android version doesn't guarantee BLE *peripheral* (advertising/GATT
+server) support, which Mule Mode's hosting role (`PeripheralSyncService.kt`) needs - that's a
+chipset capability, not an OS one.
+
+- [ ] confirm BLE peripheral/advertising hardware support (quick, no app needed):
+  `adb shell dumpsys bluetooth_manager | grep -iE "state|address|le_audio|advertis|multiple"`
+  and look for any "LE Advertising not supported" line (not fully reliable on its own, see next)
+- [ ] confirm with nRF Connect (free Play Store app): install on the XCover 4 and on a known-good
+      second phone; on the XCover 4 open Advertiser tab and start an advertisement; on the second
+      phone's Scanner tab confirm it's seen. If the Advertiser tab is missing/greyed out/errors,
+      the hardware doesn't support peripheral mode - hard blocker for using it as a Mule host
+- [ ] battery health: `adb shell dumpsys battery`, check `level`/`temperature`/`health` (want
+      `GOOD`); also do a real check - charge to 100%, screen off, see how much it drops in an
+      hour (check every unit received, not just this one - used 2017 batteries vary)
+- [ ] real end-to-end test with the actual app: `./gradlew installDebug` on the XCover 4 and a
+      second device, then run one real Mule sync in each direction - XCover 4 as host/peripheral
+      vs puller/central, and swap. Watch with:
+      `adb logcat | grep -iE "mule|peripheral|gatt|advertis"`
+- [ ] if peripheral mode or the host-role test fails, don't buy the batch (or only use these
+      units in the scanning/puller role with a different device acting as host)
