@@ -31,6 +31,10 @@ bottom:
        DAO / Room DB
 ```
 
+(A dated graphical snapshot of this and the Mule Mode wiring below lives in
+[`docs/architecture-diagrams.md`](docs/architecture-diagrams.md) — regenerate rather than trust
+it if it's drifted from the code.)
+
 - **Screens** (`ui/<feature>/XScreen.kt`) draw pixels and forward user actions. They hold no
   logic of their own — just `collectAsStateWithLifecycle()` on the ViewModel's state and call
   ViewModel functions on button clicks.

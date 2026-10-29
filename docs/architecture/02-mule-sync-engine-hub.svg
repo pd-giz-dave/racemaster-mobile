@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 620" role="img" aria-label="MuleSyncEngine is a hub that holds a live reference to seven different repositories at once, unlike every other class in the app which holds at most two. This fan-out is the real source of the complexity in this subsystem.">
+  <title>Why Mule Mode's background engine touches seven repositories at once</title>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; }
+    .box { fill: none; stroke: #1B2129; stroke-width: 1.3; }
+    .hub { fill: none; stroke: #0E7C7B; stroke-width: 2.4; }
+    .lbl { fill: #1B2129; }
+    .muted { fill: #5B6572; }
+    .edge { stroke: #1B2129; stroke-width: 1.1; }
+    .arrow { fill: #1B2129; }
+    .bg { fill: #F6F7FA; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #11151B; }
+      .box { stroke: #E8ECF1; }
+      .hub { stroke: #4FD1C9; }
+      .lbl { fill: #E8ECF1; }
+      .muted { fill: #8793A3; }
+      .edge { stroke: #E8ECF1; }
+      .arrow { fill: #E8ECF1; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrow" />
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="920" height="620" class="bg" />
+
+  <rect x="350" y="280" width="220" height="60" rx="10" class="hub" />
+  <text x="460" y="306" text-anchor="middle" font-size="14" font-weight="700" class="lbl">MuleSyncEngine</text>
+  <text x="460" y="322" text-anchor="middle" font-size="10" class="mono muted">the background sync loop</text>
+
+  <rect x="20" y="40" width="240" height="56" rx="8" class="box" />
+  <text x="140" y="63" text-anchor="middle" font-size="12.5" font-weight="600" class="lbl">raceRepository</text>
+  <text x="140" y="80" text-anchor="middle" font-size="10" class="muted">shared race identity</text>
+
+  <rect x="340" y="40" width="240" height="56" rx="8" class="box" />
+  <text x="460" y="63" text-anchor="middle" font-size="12.5" font-weight="600" class="lbl">timeModeRepository</text>
+  <text x="460" y="80" text-anchor="middle" font-size="10" class="muted">writes pulled splits</text>
+
+  <rect x="660" y="40" width="240" height="56" rx="8" class="box" />
+  <text x="780" y="63" text-anchor="middle" font-size="12.5" font-weight="600" class="lbl">bibsModeRepository</text>
+  <text x="780" y="80" text-anchor="middle" font-size="10" class="muted">writes pulled entries</text>
+
+  <rect x="20" y="282" width="240" height="56" rx="8" class="box" />
+  <text x="140" y="305" text-anchor="middle" font-size="12.5" font-weight="600" class="lbl">muleRepository</text>
+  <text x="140" y="322" text-anchor="middle" font-size="10" class="muted">pullFrom() &#8212; every pull</text>
+
+  <rect x="660" y="282" width="240" height="56" rx="8" class="box" />
+  <text x="780" y="305" text-anchor="middle" font-size="12.5" font-weight="600" class="lbl">settingsRepository</text>
+  <text x="780" y="322" text-anchor="middle" font-size="10" class="muted">device id, base URL</text>
+
+  <rect x="340" y="524" width="240" height="56" rx="8" class="box" />
+  <text x="460" y="547" text-anchor="middle" font-size="12.5" font-weight="600" class="lbl">progressRepository</text>
+  <text x="460" y="564" text-anchor="middle" font-size="10" class="muted">forwards progress deltas</text>
+
+  <rect x="660" y="524" width="240" height="56" rx="8" class="box" />
+  <text x="780" y="547" text-anchor="middle" font-size="12.5" font-weight="600" class="lbl">bluetoothStateRepository</text>
+  <text x="780" y="564" text-anchor="middle" font-size="10" class="muted">radio on/off gate</text>
+
+  <line x1="140" y1="96" x2="400" y2="280" class="edge" marker-end="url(#arrow2)" />
+  <line x1="460" y1="96" x2="460" y2="280" class="edge" marker-end="url(#arrow2)" />
+  <line x1="780" y1="96" x2="520" y2="280" class="edge" marker-end="url(#arrow2)" />
+  <line x1="260" y1="310" x2="350" y2="310" class="edge" marker-end="url(#arrow2)" />
+  <line x1="660" y1="310" x2="570" y2="310" class="edge" marker-end="url(#arrow2)" />
+  <line x1="460" y1="524" x2="460" y2="340" class="edge" marker-end="url(#arrow2)" />
+  <line x1="780" y1="524" x2="520" y2="340" class="edge" marker-end="url(#arrow2)" />
+</svg>

@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 470" role="img" aria-label="TimeModeScreen calls TimeModeViewModel, which calls TimeModeRepository, which delegates active-race lookups to RaceRepository; both write through their DAOs into the one Room database. AppContainer constructs every box in this chain once, at app start.">
+  <title>An ordinary feature's call chain (Time Mode)</title>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; }
+    .box { fill: none; stroke: #1B2129; stroke-width: 1.4; }
+    .boxThick { fill: none; stroke: #1B2129; stroke-width: 1.6; }
+    .dashed { fill: none; stroke: #1B2129; stroke-width: 1.2; stroke-dasharray: 4 3; }
+    .lbl { fill: #1B2129; }
+    .muted { fill: #5B6572; }
+    .edge { stroke: #1B2129; stroke-width: 1.3; }
+    .edgeThin { stroke: #1B2129; stroke-width: 1.1; stroke-dasharray: 3 3; }
+    .arrow { fill: #1B2129; }
+    .bg { fill: #F6F7FA; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #11151B; }
+      .box, .boxThick { stroke: #E8ECF1; }
+      .dashed { stroke: #E8ECF1; }
+      .lbl { fill: #E8ECF1; }
+      .muted { fill: #8793A3; }
+      .edge { stroke: #E8ECF1; }
+      .edgeThin { stroke: #E8ECF1; }
+      .arrow { fill: #E8ECF1; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrow" />
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="920" height="470" class="bg" />
+
+  <rect x="350" y="20" width="220" height="46" rx="8" class="box" />
+  <text x="460" y="48" text-anchor="middle" font-size="13" font-weight="600" class="lbl">TimeModeScreen</text>
+
+  <rect x="350" y="104" width="220" height="46" rx="8" class="box" />
+  <text x="460" y="132" text-anchor="middle" font-size="13" font-weight="600" class="lbl">TimeModeViewModel</text>
+
+  <rect x="130" y="200" width="230" height="46" rx="8" class="box" />
+  <text x="245" y="223" text-anchor="middle" font-size="13" font-weight="600" class="lbl">TimeModeRepository</text>
+
+  <rect x="560" y="200" width="230" height="46" rx="8" class="box" />
+  <text x="675" y="223" text-anchor="middle" font-size="13" font-weight="600" class="lbl">RaceRepository</text>
+
+  <rect x="130" y="300" width="230" height="46" rx="8" class="box" />
+  <text x="245" y="323" text-anchor="middle" font-size="13" font-weight="600" class="lbl">HistoryLineDao</text>
+
+  <rect x="560" y="300" width="230" height="46" rx="8" class="box" />
+  <text x="675" y="323" text-anchor="middle" font-size="13" font-weight="600" class="lbl">RaceDao</text>
+
+  <rect x="260" y="400" width="400" height="50" rx="8" class="boxThick" />
+  <text x="460" y="423" text-anchor="middle" font-size="13" font-weight="600" class="lbl">racemaster.db</text>
+  <text x="460" y="440" text-anchor="middle" font-size="10.5" class="mono muted">Room / SQLite &#8212; one file, every feature's tables</text>
+
+  <line x1="460" y1="66" x2="460" y2="104" class="edge" marker-end="url(#arrow1)" />
+  <text x="476" y="90" font-size="10.5" class="muted">events / observes StateFlow</text>
+
+  <line x1="420" y1="150" x2="260" y2="200" class="edge" marker-end="url(#arrow1)" />
+  <text x="205" y="182" font-size="10.5" class="muted">split() / correct()</text>
+
+  <line x1="360" y1="223" x2="560" y2="223" class="edge" marker-end="url(#arrow1)" />
+  <text x="460" y="214" text-anchor="middle" font-size="10.5" class="muted">delegates active-race lookups</text>
+
+  <line x1="245" y1="246" x2="245" y2="300" class="edge" marker-end="url(#arrow1)" />
+  <line x1="675" y1="246" x2="675" y2="300" class="edge" marker-end="url(#arrow1)" />
+
+  <line x1="270" y1="346" x2="400" y2="400" class="edge" marker-end="url(#arrow1)" />
+  <line x1="650" y1="346" x2="520" y2="400" class="edge" marker-end="url(#arrow1)" />
+
+  <rect x="690" y="20" width="200" height="46" rx="8" class="dashed" />
+  <text x="790" y="42" text-anchor="middle" font-size="12" font-weight="600" class="lbl">AppContainer</text>
+  <text x="790" y="57" text-anchor="middle" font-size="9.5" class="mono muted">di/</text>
+  <line x1="730" y1="66" x2="580" y2="104" class="edgeThin" marker-end="url(#arrow1)" />
+  <line x1="780" y1="66" x2="700" y2="200" class="edgeThin" marker-end="url(#arrow1)" />
+  <text x="805" y="130" font-size="10" class="muted">builds every box once,</text>
+  <text x="805" y="144" font-size="10" class="muted">at app start (lazy val /</text>
+  <text x="805" y="158" font-size="10" class="muted">companion object Factory)</text>
+</svg>

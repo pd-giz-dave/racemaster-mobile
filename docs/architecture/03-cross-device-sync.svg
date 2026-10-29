@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" role="img" aria-label="Phone A hosts a BLE GATT server with its race data. Phone B scans, connects, and pulls that data over BLE using Kable, then separately pushes everything it has accumulated to the companion Node server over HTTP using Ktor, whenever it has a network connection.">
+  <title>How race data crosses a device boundary (Mule Mode)</title>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; }
+    .box { fill: none; stroke: #1B2129; stroke-width: 1.3; }
+    .boundary { fill: none; stroke: #1B2129; stroke-width: 1.6; }
+    .serverBox { fill: none; stroke: #B5622A; stroke-width: 1.8; }
+    .lbl { fill: #1B2129; }
+    .muted { fill: #5B6572; }
+    .edge { stroke: #1B2129; stroke-width: 1.2; }
+    .arrow { fill: #1B2129; }
+    .ble { stroke: #0E7C7B; }
+    .bleLbl { fill: #0E7C7B; }
+    .arrowB { fill: #0E7C7B; }
+    .http { stroke: #B5622A; }
+    .httpLbl { fill: #B5622A; }
+    .arrowH { fill: #B5622A; }
+    .bg { fill: #F6F7FA; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #11151B; }
+      .box, .boundary { stroke: #E8ECF1; }
+      .serverBox { stroke: #E2914F; }
+      .lbl { fill: #E8ECF1; }
+      .muted { fill: #8793A3; }
+      .edge { stroke: #E8ECF1; }
+      .arrow { fill: #E8ECF1; }
+      .ble { stroke: #4FD1C9; }
+      .bleLbl { fill: #4FD1C9; }
+      .arrowB { fill: #4FD1C9; }
+      .http { stroke: #E2914F; }
+      .httpLbl { fill: #E2914F; }
+      .arrowH { fill: #E2914F; }
+    }
+  </style>
+  <defs>
+    <marker id="arrowB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrowB" />
+    </marker>
+    <marker id="arrowH" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrowH" />
+    </marker>
+    <marker id="arrowN" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrow" />
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1000" height="600" class="bg" />
+
+  <rect x="40" y="60" width="340" height="300" rx="12" class="boundary" />
+  <text x="60" y="88" font-size="12.5" font-weight="700" class="lbl">Phone A</text>
+  <text x="60" y="103" font-size="10" class="muted">already holds this race's data</text>
+
+  <rect x="70" y="130" width="280" height="60" rx="8" class="box" />
+  <text x="210" y="155" text-anchor="middle" font-size="12.5" font-weight="600" class="lbl">PeripheralSyncService</text>
+  <text x="210" y="172" text-anchor="middle" font-size="10" class="mono muted">GATT server + advertiser, foreground</text>
+
+  <rect x="70" y="250" width="280" height="60" rx="8" class="box" />
+  <text x="210" y="275" text-anchor="middle" font-size="12.5" font-weight="600" class="lbl">Room DB</text>
+  <text x="210" y="292" text-anchor="middle" font-size="10" class="muted">this phone's own race</text>
+
+  <line x1="210" y1="250" x2="210" y2="190" class="edge" marker-end="url(#arrowN)" />
+  <text x="226" y="222" font-size="10" class="muted">reads, to serve</text>
+
+  <rect x="620" y="60" width="340" height="400" rx="12" class="boundary" />
+  <text x="640" y="88" font-size="12.5" font-weight="700" class="lbl">Phone B &#8212; the Mule</text>
+  <text x="640" y="103" font-size="10" class="muted">pulling it in, then relaying it on</text>
+
+  <rect x="650" y="130" width="280" height="60" rx="8" class="box" />
+  <text x="790" y="155" text-anchor="middle" font-size="12.5" font-weight="600" class="lbl">MulePullClient</text>
+  <text x="790" y="172" text-anchor="middle" font-size="10" class="mono muted">Kable &#8212; BLE central / scanning</text>
+
+  <rect x="650" y="210" width="280" height="50" rx="8" class="box" />
+  <text x="790" y="240" text-anchor="middle" font-size="12.5" font-weight="600" class="lbl">MuleSyncEngine</text>
+
+  <rect x="650" y="290" width="280" height="60" rx="8" class="box" />
+  <text x="790" y="315" text-anchor="middle" font-size="12.5" font-weight="600" class="lbl">Room DB &#8212; inbox tables</text>
+  <text x="790" y="332" text-anchor="middle" font-size="10" class="mono muted">PulledRecordEntity / ProgressEntity</text>
+
+  <rect x="650" y="380" width="280" height="60" rx="8" class="box" />
+  <text x="790" y="405" text-anchor="middle" font-size="12.5" font-weight="600" class="lbl">MuleSyncClient</text>
+  <text x="790" y="422" text-anchor="middle" font-size="10" class="mono muted">Ktor &#8212; HTTP, bearer token</text>
+
+  <line x1="790" y1="190" x2="790" y2="210" class="edge" marker-end="url(#arrowN)" />
+  <line x1="790" y1="260" x2="790" y2="290" class="edge" marker-end="url(#arrowN)" />
+  <text x="806" y="280" font-size="10" class="muted">pullFrom()</text>
+  <line x1="790" y1="350" x2="790" y2="380" class="edge" marker-end="url(#arrowN)" />
+
+  <line x1="350" y1="160" x2="650" y2="160" class="ble" stroke-width="2" marker-end="url(#arrowB)" />
+  <text x="500" y="146" text-anchor="middle" font-size="11" class="bleLbl" font-weight="600">BLE &#8212; GATT read</text>
+  <text x="500" y="178" text-anchor="middle" font-size="9.5" class="bleLbl" opacity="0.85">MuleGattProfile characteristics</text>
+
+  <text x="500" y="100" text-anchor="middle" font-size="10" class="muted">&#8592; two separate physical devices, no server involved &#8594;</text>
+
+  <rect x="650" y="500" width="280" height="60" rx="8" class="serverBox" />
+  <text x="790" y="525" text-anchor="middle" font-size="12.5" font-weight="700" class="lbl">Companion server</text>
+  <text x="790" y="542" text-anchor="middle" font-size="10" class="mono muted">Node.js, /home/dave/racemaster</text>
+
+  <line x1="790" y1="440" x2="790" y2="500" class="http" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrowH)" />
+  <text x="806" y="472" font-size="10" class="httpLbl">POST /mobile, when reachable</text>
+</svg>
