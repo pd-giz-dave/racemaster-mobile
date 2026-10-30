@@ -61,7 +61,7 @@ data class ConnectHealth(
     }
 }
 
-/** What Time/Bibs/CP mode's own "am I actually being polled over BT" line is built from — see
+/** What Time/Bibs mode's own "am I actually being polled over BT" line is built from — see
  *  [mobile.racemaster.ui.components.BtPollingStatusLine]. [advertisingWarning] (a definite, actively-detected
  *  failure — see [BluetoothStateRepository.advertisingWarning]'s own doc) takes priority when
  *  present; otherwise [lastPolledAtMillis] is shown plain, same "operator judges staleness by
