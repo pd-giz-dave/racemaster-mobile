@@ -222,6 +222,15 @@ class RaceRepository(
     // between (e.g. Finish -> CP1 -> Finish) is unaffected: its own visit(s) sit untouched, with
     // their own counter progressing independently of whatever Finish resumes to here.
     suspend fun recordModeStart(raceId: Long, mode: AppMode, location: String, timestampMillis: Long = System.currentTimeMillis()) {
+        // Time is never location-aware (TODO.md's "A rationalisation") — forced to "Finish" once,
+        // here, at the single place a LOCATION row/race.location is ever written, rather than
+        // overriding every later reader of it. Ignores whatever the caller actually passed (a
+        // lingering Bibs-mode value sitting in Setup Race's own hidden-for-Time draft, or free
+        // text still typed into Relocate's location field while Time is selected) — so the stored
+        // value is simply correct from the moment it's written, and everything downstream (local
+        // display, server/Mule sync) sees it exactly like any other row, with nothing special to
+        // know about Time.
+        val effectiveLocation = if (mode == AppMode.TIME) "Finish" else location
         db.withTransaction {
             val historyMode = mode.toHistoryMode()
             var race = raceDao.getById(raceId) ?: return@withTransaction
@@ -234,7 +243,7 @@ class RaceRepository(
                 // rationalisation") and always continues from whatever's still open, regardless
                 // of where it was recorded — relocating mid-race never restarts its own counter.
                 val resumable = snapshot.allVisits.filter {
-                    (historyMode != HistoryMode.BIBS || it.note == location) && it.locationLineNumber !in snapshot.resetTargetLineNumbers
+                    (historyMode != HistoryMode.BIBS || it.note == effectiveLocation) && it.locationLineNumber !in snapshot.resetTargetLineNumbers
                 }
                 if (resumable.isEmpty()) null else (resumable.flatMap { it.rows }.mapNotNull { it.splitNumber }.maxOrNull() ?: 0) + 1
             }
@@ -273,7 +282,7 @@ class RaceRepository(
                     bibNumber = null,
                     splitNumber = null,
                     lineNumber = race.nextLineNumber,
-                    note = location,
+                    note = effectiveLocation,
                     timestampMillis = timestampMillis,
                     priorSplitCounter = priorSplitCounter,
                     previousLocation = race.location,
@@ -300,7 +309,7 @@ class RaceRepository(
                 HistoryMode.TIME -> raceDao.setTimeModeNextSplit(raceId, nextSplit)
                 HistoryMode.BIBS -> raceDao.setBibsModeNextSplit(raceId, nextSplit)
             }
-            raceDao.updateModeAndLocation(raceId, mode.name, location)
+            raceDao.updateModeAndLocation(raceId, mode.name, effectiveLocation)
         }
         // Keeps the device-wide SettingsRepository.appMode setting in sync with this race's own
         // mode — PeripheralSyncService's advertised mode byte and AppEntryViewModel's own
