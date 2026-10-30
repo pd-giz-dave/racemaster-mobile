@@ -143,7 +143,6 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                 composable(Routes.TIME_MODE) {
                     TimeModeScreen(
                         onChangeMode = { navController.navigateToModePicker() },
-                        onEditRace = { raceId -> navController.navigate(Routes.raceDetails(raceId)) },
                         onEditSplit = { splitId -> navController.navigate(Routes.editSplit(splitId)) },
                     )
                 }

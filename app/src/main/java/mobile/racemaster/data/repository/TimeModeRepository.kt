@@ -126,10 +126,8 @@ class TimeModeRepository(
 
     // Closes the current segment (see RaceRepository.closeCurrentSegment's own doc — one or more
     // RESET rows, walkable by pressing Reset again) and clears the display counter/started-at
-    // back to their pre-start defaults. True means this closed the race's own very first
-    // segment, reverting the device to "no race set up" — the caller announces this to the
-    // server right away (see TimeModeViewModel.resetStopwatch).
-    suspend fun resetStopwatch(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()): Boolean = engine.reset(raceId, resetAtMillis)
+    // back to their pre-start defaults.
+    suspend fun resetStopwatch(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()) = engine.reset(raceId, resetAtMillis)
 
     suspend fun undoMostRecent(raceId: Long) = engine.undoMostRecent(raceId)
 

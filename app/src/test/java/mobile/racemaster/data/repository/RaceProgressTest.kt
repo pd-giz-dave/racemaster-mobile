@@ -1,10 +1,6 @@
 package mobile.racemaster.data.repository
 
-import mobile.racemaster.data.db.entity.RaceEntity
-import mobile.racemaster.data.settings.AppMode
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RaceProgressTest {
@@ -57,32 +53,5 @@ class RaceProgressTest {
     @Test
     fun namesNothingWhenNoModeIsActive() {
         assertEquals(emptyList<String>(), activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null))
-    }
-
-    // isModeStarted — the per-mode mapping onto whichever of RaceEntity's own
-    // timeModeStartedAtMillis/bibsModeStartedAtMillis fields is right.
-
-    @Test
-    fun isModeStartedReadsEachModesOwnField() {
-        val race = RaceEntity(
-            label = "Test Race",
-            createdAtMillis = 0L,
-            timeModeStartedAtMillis = 1_000L,
-            bibsModeStartedAtMillis = 2_000L,
-        )
-        assertTrue(isModeStarted(AppMode.TIME, race))
-        assertTrue(isModeStarted(AppMode.BIBS, race))
-    }
-
-    @Test
-    fun isModeStartedIsFalseForAModeThatHasNotStartedEvenIfAnotherHas() {
-        val race = RaceEntity(label = "Test Race", createdAtMillis = 0L, bibsModeStartedAtMillis = 2_000L)
-        assertFalse(isModeStarted(AppMode.TIME, race))
-        assertTrue(isModeStarted(AppMode.BIBS, race))
-    }
-
-    @Test
-    fun isModeStartedIsFalseForANullRace() {
-        assertFalse(isModeStarted(AppMode.BIBS, null))
     }
 }

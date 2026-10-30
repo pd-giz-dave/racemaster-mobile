@@ -8,7 +8,6 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.BtPollingStatus
-import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.ServerStatus
 import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.mule.ServerStatusState
@@ -47,7 +46,10 @@ data class FinishSplitUi(
 data class TimeModeUiState(
     val raceId: Long? = null,
     val raceLabel: String = "",
-    val raceLocation: String = "",
+    // Whether Time Mode has been started for the CURRENT segment specifically — derived from
+    // whether `splits` (this segment's own rows) already contains a Start marker, NOT from
+    // RaceEntity.timeModeStartedAtMillis (see BibsModeUiState.started's own identical doc for why
+    // that race-wide field goes stale the moment more than one segment can be open at once).
     val stopwatchStarted: Boolean = false,
     val liveElapsedMillis: Long = 0L,
     val nextSplitNumber: Int = 1,
@@ -71,7 +73,6 @@ class TimeModeViewModel(
     private val raceRepository: RaceRepository,
     private val settingsRepository: SettingsRepository,
     private val serverStatusRepository: ServerStatusRepository,
-    private val muleRepository: MuleRepository,
     bluetoothStateRepository: BluetoothStateRepository,
     private val beeper: Beeper,
 ) : ViewModel() {
@@ -102,12 +103,21 @@ class TimeModeViewModel(
                     raceRepository.observeLineSyncs(raceId),
                 ) { race, splits, now, (unsyncedCount, lastSyncedAtMillis, serverStatus), lineSyncs ->
                     val linesWithAnySync = linesWithAnySync(lineSyncs)
-                    val startedAt = race?.timeModeStartedAtMillis
+                    // This segment's own EARLIEST Start row timestamp, not race.timeModeStartedAtMillis
+                    // — that race-wide field reflects whichever segment (possibly a DIFFERENT one)
+                    // most recently had Start pressed, which would otherwise anchor every split's
+                    // elapsedMillis below to the wrong t=0 once an older segment is resumed after a
+                    // newer one has overwritten it. Earliest rather than merely "the one present" —
+                    // `splits` is location-agnostic for Time now (TODO.md's "A rationalisation": it
+                    // records irrespective of where the device is, so relocating mid-race never
+                    // starts a new segment), so more than one Start row can legitimately sit in the
+                    // same current segment; t=0 is always the first one actually pressed, never a
+                    // later stray re-press.
+                    val startedAt = splits.filter { it.action == HistoryAction.START }.minOfOrNull { it.timestampMillis }
                     val liveElapsed = if (startedAt == null) 0L else now - startedAt
                     TimeModeUiState(
                         raceId = raceId,
                         raceLabel = race?.label.orEmpty(),
-                        raceLocation = race?.location.orEmpty(),
                         stopwatchStarted = startedAt != null,
                         liveElapsedMillis = liveElapsed,
                         nextSplitNumber = race?.timeModeNextSplit ?: 1,
@@ -130,7 +140,11 @@ class TimeModeViewModel(
                             )
                         },
                         canUndo = splits.hasRealEntries(),
-                        raceInProgress = isRaceActive(startedAt, race?.bibsModeStartedAtMillis),
+                        // Deliberately race.timeModeStartedAtMillis here, not the segment-scoped
+                        // `startedAt` above — isRaceActive asks "is this race active in ANY
+                        // segment of this mode", the same race-wide question it's already asking
+                        // of Bibs via race?.bibsModeStartedAtMillis, not "is THIS segment started".
+                        raceInProgress = isRaceActive(race?.timeModeStartedAtMillis, race?.bibsModeStartedAtMillis),
                         unsyncedCount = unsyncedCount,
                         lastSyncedAtMillis = lastSyncedAtMillis,
                         splitCount = splits.count { it.action == HistoryAction.SPLIT },
@@ -143,17 +157,17 @@ class TimeModeViewModel(
 
     // A device now records against exactly one race for its whole lifetime (see TODO.md's
     // phase 1 — the course concept is gone), so Start no longer needs to resolve WHICH row to
-    // record into — it's always this device's own active race. The already-started branch below
-    // is defensive/effectively unreachable through the main button now that there's no separate
-    // stopped state (once started, a mode screen always shows SPLIT, never START, until Reset —
-    // see HistoryAction's own doc) — kept as-is since Race History's own "Resume" action
-    // (RaceRepository.switchActiveRace) could in principle still land here on an already-started,
-    // not-yet-reset race before this screen's own reactive state has caught up.
+    // record into — it's always this device's own active race. Guarded against uiState's own
+    // derived `stopwatchStarted` (this current segment's own rows), not
+    // RaceEntity.timeModeStartedAtMillis — see TimeModeUiState.stopwatchStarted's own doc for why
+    // that race-wide field alone is unsafe here. Effectively unreachable through the main button
+    // in normal use (the button itself only shows SPLIT once uiState.stopwatchStarted is true) —
+    // kept as a backstop since Race History's own "Resume" action (RaceRepository.switchActiveRace)
+    // could in principle still land here before this screen's own reactive state has caught up.
     fun startStopwatch() {
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch {
-            val race = raceRepository.getRace(raceId) ?: return@launch
-            if (race.timeModeStartedAtMillis == null) {
+            if (!uiState.value.stopwatchStarted) {
                 timeModeRepository.startStopwatch(raceId)
             }
             beeper.beep()
@@ -171,16 +185,10 @@ class TimeModeViewModel(
     }
 
     // See RaceRepository.closeCurrentSegment's own doc for the walk-back-by-segment behavior a
-    // Reset press triggers. A true (abandoned) result means this closed the race's own very
-    // first segment, reverting this device to "no race set up" — announced to the server right
-    // away, mirroring Setup Race's own "push right away" pattern (SetupRaceViewModel.save),
-    // rather than waiting for the next background sync tick.
+    // Reset press triggers.
     fun resetStopwatch() {
         val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch {
-            val abandoned = timeModeRepository.resetStopwatch(raceId)
-            if (abandoned) muleRepository.announceRaceSetup()
-        }
+        viewModelScope.launch { timeModeRepository.resetStopwatch(raceId) }
     }
 
     fun undoLast() {
@@ -205,7 +213,6 @@ class TimeModeViewModel(
                     container.raceRepository,
                     container.settingsRepository,
                     container.serverStatusRepository,
-                    container.muleRepository,
                     container.bluetoothStateRepository,
                     Beeper(applicationContext()),
                 )

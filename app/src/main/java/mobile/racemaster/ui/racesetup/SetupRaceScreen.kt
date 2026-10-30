@@ -233,22 +233,29 @@ fun SetupRaceScreen(
                 ModeChoiceButton("Time", mode == AppMode.TIME, !hasActiveRace, Modifier.weight(1f)) { mode = AppMode.TIME }
                 ModeChoiceButton("Bibs", mode == AppMode.BIBS, !hasActiveRace, Modifier.weight(1f)) { mode = AppMode.BIBS }
             }
-            HistoryTextField(
-                value = location,
-                onValueChange = { location = it },
-                label = if (mode == AppMode.BIBS) "Location (e.g. Start, Finish, CP1, CP2-Bridge)" else "Location (e.g. Finish, CP1, CP2, et al)",
-                history = locationHistory,
-                enabled = !hasActiveRace,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            if (location.isNotBlank() && mode == AppMode.BIBS && !locationValid) {
-                Text(
-                    "Bibs Mode's location must be \"Start\", \"Finish\", or look like \"CP1\", \"CP2-Bridge\", etc.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
+            // Hidden for Time (TODO.md's "A rationalisation" — it records irrespective of where
+            // the device is, so there's nothing here worth prompting for). `location` itself stays
+            // whatever the draft last held (defaulting to "Finish" — see draftSeeded's own LaunchedEffect)
+            // so isValidLocationForMode's Time branch (non-blank) is always satisfied without the
+            // operator ever having to see or touch this field.
+            if (mode != AppMode.TIME) {
+                HistoryTextField(
+                    value = location,
+                    onValueChange = { location = it },
+                    label = if (mode == AppMode.BIBS) "Location (e.g. Start, Finish, CP1, CP2-Bridge)" else "Location (e.g. Finish, CP1, CP2, et al)",
+                    history = locationHistory,
+                    enabled = !hasActiveRace,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                    modifier = Modifier.fillMaxWidth(),
                 )
+                if (location.isNotBlank() && mode == AppMode.BIBS && !locationValid) {
+                    Text(
+                        "Bibs Mode's location must be \"Start\", \"Finish\", or look like \"CP1\", \"CP2-Bridge\", etc.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
             Button(
                 onClick = withClickSound {

@@ -14,7 +14,6 @@ import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
-import mobile.racemaster.data.repository.isModeStarted
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
@@ -72,22 +71,6 @@ class ModePickerViewModel(
     // button — see SettingsRepository.muleSyncEnabled's own doc for what this actually gates.
     val muleSyncEnabled: StateFlow<Boolean> = settingsRepository.muleSyncEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
-
-    // Which mode(s) still have this race active — not this device's own last-selected AppMode
-    // (that used to read "Mule Mode" whenever the operator had since switched screens away from
-    // whichever mode actually started this race, pointing them at a screen with no way to
-    // Stop/Reset it at all). Lets the picker mark the matching mode button "- active".
-    val activeModes: StateFlow<Set<AppMode>> = settingsRepository.activeRaceId
-        .flatMapLatest { raceId ->
-            if (raceId == null) {
-                flowOf(emptySet())
-            } else {
-                raceRepository.observeRace(raceId).map { race ->
-                    if (race == null) emptySet() else AppMode.entries.filterTo(mutableSetOf()) { isModeStarted(it, race) }
-                }
-            }
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
     // This race's own single, currently-chosen mode (RaceRepository.recordModeStart's own
     // write, at Setup Race or Relocate) — what the picker's one "Start <mode>" button both

@@ -85,5 +85,5 @@ class BibsModeRepository(
 
     suspend fun undoMostRecent(raceId: Long) = engine.undoMostRecent(raceId)
 
-    suspend fun resetBibsMode(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()): Boolean = engine.reset(raceId, resetAtMillis)
+    suspend fun resetBibsMode(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()) = engine.reset(raceId, resetAtMillis)
 }

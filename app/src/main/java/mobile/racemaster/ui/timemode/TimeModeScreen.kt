@@ -50,7 +50,6 @@ import mobile.racemaster.util.withClickSound
 @Composable
 fun TimeModeScreen(
     onChangeMode: () -> Unit,
-    onEditRace: (raceId: Long) -> Unit,
     onEditSplit: (splitId: Long) -> Unit,
     viewModel: TimeModeViewModel = viewModel(factory = TimeModeViewModel.Factory),
 ) {
@@ -78,8 +77,6 @@ fun TimeModeScreen(
         topBar = {
             ModeScreenTopBar(
                 title = "Time Mode",
-                thisRaceEnabled = uiState.raceId != null,
-                onThisRace = { uiState.raceId?.let(onEditRace) },
                 onChangeMode = onChangeMode,
             )
         },
@@ -158,7 +155,10 @@ private fun TimeModeContent(
                 RaceProgressSummary(
                     deviceName = deviceName,
                     raceLabel = uiState.raceLabel,
-                    raceLocation = uiState.raceLocation,
+                    // Time records irrespective of location (TODO.md's "A rationalisation") —
+                    // see showLocation's own doc.
+                    raceLocation = "",
+                    showLocation = false,
                     nextSplitNumber = uiState.nextSplitNumber,
                     unsyncedCount = uiState.unsyncedCount,
                     lastSyncedAtMillis = uiState.lastSyncedAtMillis,
@@ -176,7 +176,11 @@ private fun TimeModeContent(
                 // Plain single-tap Button — deliberately no combinedClickable/long-press/double-tap
                 // gesture handling here. Two finishers crossing close together means two fast taps
                 // must both register as splits; any gesture-disambiguation delay would risk
-                // swallowing or merging the second one.
+                // swallowing or merging the second one. Always enabled, not gated on
+                // uiState.raceId — reaching this screen at all already implies an active race
+                // (see ModePickerViewModel.handleStartTap), so a transiently-null uiState.raceId
+                // (this per-race flow catching up after a Reset/Relocate) must never flicker
+                // this disabled.
                 Button(
                     onClick = withClickSound {
                         if (uiState.stopwatchStarted) {
@@ -186,7 +190,6 @@ private fun TimeModeContent(
                             onStart()
                         }
                     },
-                    enabled = uiState.raceId != null,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(96.dp),

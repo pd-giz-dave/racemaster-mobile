@@ -43,6 +43,7 @@ import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.ResetButton
 import mobile.racemaster.ui.components.UndoLastButton
 import mobile.racemaster.ui.components.rememberListClickGuard
+import mobile.racemaster.ui.components.startButtonLabel
 import mobile.racemaster.util.formatBibsSoFarText
 import mobile.racemaster.util.withClickSound
 
@@ -139,6 +140,7 @@ fun BibsModeScreen(
             onReset = viewModel::resetBibsMode,
             onUndo = viewModel::undoLast,
             onEditEntry = onEditEntry,
+            onGoToLocation = viewModel::goToLocation,
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
@@ -162,6 +164,7 @@ private fun BibsModeContent(
     onReset: () -> Unit,
     onUndo: () -> Unit,
     onEditEntry: (entryId: Long) -> Unit,
+    onGoToLocation: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // BoxWithConstraints (not a fixed dp budget) is what makes the header/list split adapt
@@ -218,20 +221,26 @@ private fun BibsModeContent(
                     unexpectedBibNumbers = uiState.unexpectedBibNumbers,
                     serverStatus = uiState.serverStatus,
                     btPollingStatus = btPollingStatus,
+                    otherOpenLocations = uiState.otherOpenLocations,
+                    onGoToLocation = onGoToLocation,
                 )
                 if (!uiState.started) {
                     // Nothing recorded yet for this segment (a fresh race, a race switched
                     // into from a different mode, or one just Reset) — side-effect-free to
                     // just look at, exactly like Time Mode's own pre-Start state. Nothing
                     // below is written until this is pressed (see
-                    // BibsModeRepository.startBibsMode).
+                    // BibsModeRepository.startBibsMode). Always enabled, not gated on
+                    // uiState.raceId — reaching this screen at all already implies an active
+                    // race (see ModePickerViewModel.handleStartTap), so a transiently-null
+                    // uiState.raceId (this per-race flow catching up after a Reset/Relocate)
+                    // must never flicker this disabled; the label's own location suffix is
+                    // what tells the operator which location Start is about to record into.
                     Button(
                         onClick = withClickSound(onStart),
-                        enabled = uiState.raceId != null,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(96.dp),
-                    ) { Text("START", style = MaterialTheme.typography.displaySmall) }
+                    ) { Text(startButtonLabel("START", uiState.raceLocation), style = MaterialTheme.typography.displaySmall) }
                 } else {
                     Row(
                         modifier = Modifier.fillMaxWidth(),

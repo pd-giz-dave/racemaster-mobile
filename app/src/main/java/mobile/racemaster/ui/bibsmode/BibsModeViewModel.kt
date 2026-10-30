@@ -8,10 +8,10 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
+import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.BtPollingStatus
-import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.ProgressEntry
 import mobile.racemaster.data.mule.ProgressRepository
 import mobile.racemaster.data.mule.ServerStatus
@@ -31,6 +31,7 @@ import mobile.racemaster.data.repository.linesWithAnySync
 import mobile.racemaster.data.repository.outstandingAtLocation
 import mobile.racemaster.data.repository.unexpectedBibNumbers
 import mobile.racemaster.data.repository.unexpectedBibWarning
+import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.di.applicationContext
@@ -66,18 +67,25 @@ private data class RaceContext(
     // configured-range model. Empty (not null) when nothing's been received yet for this race,
     // so downstream expectation functions' own "nothing to judge by" defaults apply uniformly.
     val progressEntries: List<ProgressEntry>,
+    // See BibsModeUiState.otherOpenLocations' own doc.
+    val openLocations: List<String>,
 )
 
 data class BibsModeUiState(
     val raceId: Long? = null,
     val raceLabel: String = "",
     val raceLocation: String = "",
-    // Whether Bibs Mode has been started for this segment — false for a fresh race, a race
-    // just switched into from a different mode, or one just Reset, in which case the screen
-    // shows a Start button instead of the entry keypad/list (see BibsModeScreen). Sourced
-    // directly from RaceEntity.bibsModeStartedAtMillis — see that field's own doc for why its
-    // Clock marker's mere presence isn't what this is derived from, even though Start still
-    // writes one.
+    // Whether Bibs Mode has been started for the CURRENT segment specifically — false for a
+    // fresh race, a race just switched into from a different mode, or a segment just Reset, in
+    // which case the screen shows a Start button instead of the entry keypad/list (see
+    // BibsModeScreen). Derived from whether `entries` (this segment's own rows) already contains
+    // a Clock marker — NOT from RaceEntity.bibsModeStartedAtMillis, which is race-wide and so
+    // goes stale the moment more than one segment can be open at once (see
+    // RaceRepository.observeOpenLocations' own doc): resuming an already-started OTHER segment
+    // via "Also open" must show the keypad immediately, not a stale Start button that would
+    // insert a second, redundant Clock row into a segment that already has one; conversely
+    // Relocating to a genuinely new segment must never inherit "started" from whichever segment
+    // happened to set that race-wide field last.
     val started: Boolean = false,
     val currentDigits: String = "",
     // Which options the Event button's picker should offer — EVENT_PICKER_OPTIONS while there's
@@ -121,6 +129,12 @@ data class BibsModeUiState(
     // connectivity matters here just as much as in Mule Mode, since this device pushes its
     // own recorded data to the server on the same schedule regardless of mode.
     val serverStatus: ServerStatusState = ServerStatusState(ServerStatus.UNKNOWN, null),
+    // Every OTHER location Bibs Mode still has an un-Reset segment at (see
+    // RaceRepository.observeOpenLocations' own doc) — resetting only ever closes the CURRENT
+    // one, so this is what lets the operator see, and jump straight back to, one left behind by
+    // an earlier Relocate rather than hunting for its exact name via Relocate's own history
+    // dropdown.
+    val otherOpenLocations: List<String> = emptyList(),
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -130,7 +144,6 @@ class BibsModeViewModel(
     private val settingsRepository: SettingsRepository,
     private val serverStatusRepository: ServerStatusRepository,
     private val progressRepository: ProgressRepository,
-    private val muleRepository: MuleRepository,
     bluetoothStateRepository: BluetoothStateRepository,
     private val beeper: Beeper,
 ) : ViewModel() {
@@ -190,7 +203,7 @@ class BibsModeViewModel(
 
     private val raceAndEntriesFlow = raceIdFlow.flatMapLatest { raceId ->
         if (raceId == null) {
-            flowOf(RaceContext(null, emptyList(), 0, null, emptySet(), ServerStatusState(ServerStatus.UNKNOWN, null), emptyList()))
+            flowOf(RaceContext(null, emptyList(), 0, null, emptySet(), ServerStatusState(ServerStatus.UNKNOWN, null), emptyList(), emptyList()))
         } else {
             combine(
                 raceRepository.observeRace(raceId),
@@ -205,10 +218,13 @@ class BibsModeViewModel(
                     serverStatusRepository.state,
                     progressRepository.current,
                 ) { lastSyncedAtMillis, serverStatus, progress -> Triple(lastSyncedAtMillis, serverStatus, progress) },
-                raceRepository.observeLineSyncs(raceId),
-            ) { race, entries, unsyncedCount, (lastSyncedAtMillis, serverStatus, progress), lineSyncs ->
+                combine(
+                    raceRepository.observeLineSyncs(raceId),
+                    raceRepository.observeOpenLocations(raceId, HistoryMode.BIBS),
+                ) { lineSyncs, openLocations -> lineSyncs to openLocations },
+            ) { race, entries, unsyncedCount, (lastSyncedAtMillis, serverStatus, progress), (lineSyncs, openLocations) ->
                 val progressEntries = progress?.takeIf { it.raceId == raceId }?.entries.orEmpty()
-                RaceContext(race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync(lineSyncs), serverStatus, progressEntries)
+                RaceContext(race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync(lineSyncs), serverStatus, progressEntries, openLocations)
             }
         }
     }
@@ -219,7 +235,7 @@ class BibsModeViewModel(
         canRetagFlow,
         defaultBibsActionFlow,
     ) { context, digits, canRetag, defaultBibsAction ->
-        val (race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync, serverStatus, progressEntries) = context
+        val (race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync, serverStatus, progressEntries, openLocations) = context
         val dupRefs = findDuplicateSplitRefs(entries)
         val raceLocation = race?.location.orEmpty()
         val expectedBibs = expectedBibsAtLocation(progressEntries, raceLocation)
@@ -228,7 +244,7 @@ class BibsModeViewModel(
             raceId = race?.id,
             raceLabel = race?.label.orEmpty(),
             raceLocation = race?.location.orEmpty(),
-            started = race?.bibsModeStartedAtMillis != null,
+            started = entries.any { it.action == HistoryAction.CLOCK },
             currentDigits = digits,
             // Bib-required types (Finish/Start/Retire) only ever make sense against a real bib,
             // so they're withheld even while canRetag is otherwise true if the top entry itself
@@ -272,25 +288,34 @@ class BibsModeViewModel(
             duplicateBibNumbers = duplicateBibNumbers(entries),
             unexpectedBibNumbers = unexpectedBibNumbers(entries, progressEntries, raceLocation),
             serverStatus = serverStatus,
+            otherOpenLocations = openLocations.filterNot { it == raceLocation },
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BibsModeUiState())
 
     // A device now records against exactly one race for its whole lifetime (see TODO.md's
     // phase 1 — the course concept is gone), so Start no longer needs to resolve WHICH row to
-    // record into — it's always this device's own active race. The already-started branch below
-    // is defensive/effectively unreachable through the main button now that there's no separate
-    // stopped state (once started, this screen always shows the keypad, never Start, until Reset
-    // — see HistoryAction's own doc) — kept as-is since Race History's own "Resume" action
-    // (RaceRepository.switchActiveRace) could in principle still land here on an already-started,
-    // not-yet-reset race before this screen's own reactive state has caught up.
+    // record into — it's always this device's own active race. Guarded against uiState's own
+    // derived `started` (this current segment's own rows), not RaceEntity.bibsModeStartedAtMillis
+    // (see BibsModeUiState.started's own doc for why that field alone is unsafe here: it's
+    // race-wide, so a segment resumed via "Also open" while a DIFFERENT segment happens to still
+    // hold a truthy value there would otherwise skip writing this segment's own Clock row
+    // entirely). Effectively unreachable through the main button in normal use (the button itself
+    // only shows once uiState.started is false) — kept as a backstop since Race History's own
+    // "Resume" action (RaceRepository.switchActiveRace) could in principle still land here before
+    // this screen's own reactive state has caught up.
     fun startBibsMode() {
         val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch {
-            val race = raceRepository.getRace(raceId) ?: return@launch
-            if (race.bibsModeStartedAtMillis == null) {
-                bibsModeRepository.startBibsMode(raceId)
-            }
-        }
+        if (uiState.value.started) return
+        viewModelScope.launch { bibsModeRepository.startBibsMode(raceId) }
+    }
+
+    // Jumps directly to a DIFFERENT location this mode still has an un-Reset segment at (see
+    // RaceRepository.observeOpenLocations/BibsModeUiState.otherOpenLocations' own docs) — reuses
+    // recordModeStart's own resume-on-relocate-back behavior, exactly what Relocate's own
+    // location field already triggers for a same-mode move, rather than a second code path.
+    fun goToLocation(location: String) {
+        val raceId = raceIdFlow.value ?: return
+        viewModelScope.launch { raceRepository.recordModeStart(raceId, AppMode.BIBS, location) }
     }
 
     // A fresh digit always starts a new entry — if the digits on screen are a frozen (already
@@ -402,14 +427,10 @@ class BibsModeViewModel(
     }
 
     // See RaceRepository.closeCurrentSegment's own doc for the walk-back-by-segment behavior a
-    // Reset press triggers, and TimeModeViewModel.resetStopwatch's own doc for why an abandoned
-    // result announces this to the server right away.
+    // Reset press triggers.
     fun resetBibsMode() {
         val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch {
-            val abandoned = bibsModeRepository.resetBibsMode(raceId)
-            if (abandoned) muleRepository.announceRaceSetup()
-        }
+        viewModelScope.launch { bibsModeRepository.resetBibsMode(raceId) }
     }
 
     override fun onCleared() {
@@ -428,7 +449,6 @@ class BibsModeViewModel(
                     container.settingsRepository,
                     container.serverStatusRepository,
                     container.progressRepository,
-                    container.muleRepository,
                     container.bluetoothStateRepository,
                     Beeper(applicationContext()),
                 )

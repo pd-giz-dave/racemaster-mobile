@@ -2,7 +2,6 @@ package mobile.racemaster.data.repository
 
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.NON_ENTRY_ACTIONS
-import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.settings.AppMode
 
 /**
@@ -55,19 +54,6 @@ fun activeModeLabels(timeModeStartedAtMillis: Long?, bibsModeStartedAtMillis: Lo
 suspend fun isRaceCurrentlyActive(raceId: Long, raceRepository: RaceRepository): Boolean {
     val race = raceRepository.getRace(raceId) ?: return false
     return isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis)
-}
-
-/**
- * Whether [mode] has been started for [race]'s current segment — the per-mode mapping onto
- * whichever of RaceEntity's own timeModeStartedAtMillis/bibsModeStartedAtMillis fields is the
- * right one to read, pulled out as its own pure function so a caller never has to hand-roll that
- * mapping itself. [race] null (not yet loaded, or a dangling id) is never "started". Mule syncing
- * has no started concept of its own — it isn't a recording mode and never owns a race's fields
- * the way Time/Bibs each do (see SettingsRepository.muleSyncEnabled's own doc).
- */
-fun isModeStarted(mode: AppMode, race: RaceEntity?): Boolean = when (mode) {
-    AppMode.BIBS -> race?.bibsModeStartedAtMillis != null
-    AppMode.TIME -> race?.timeModeStartedAtMillis != null
 }
 
 // The one place an AppMode's recording-mode name is spelled out, so the wording can't drift

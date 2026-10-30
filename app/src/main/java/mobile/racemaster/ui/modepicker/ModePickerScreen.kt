@@ -32,6 +32,7 @@ import mobile.racemaster.data.mule.PeripheralSyncService
 import mobile.racemaster.data.repository.displayName
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.components.RaceProgressSummary
+import mobile.racemaster.ui.components.startButtonLabel
 import mobile.racemaster.util.withClickSound
 
 @Composable
@@ -46,7 +47,6 @@ fun ModePickerScreen(
     viewModel: ModePickerViewModel = viewModel(factory = ModePickerViewModel.Factory),
 ) {
     val hasActiveRace by viewModel.hasActiveRace.collectAsStateWithLifecycle()
-    val activeModes by viewModel.activeModes.collectAsStateWithLifecycle()
     val raceSummary by viewModel.raceSummary.collectAsStateWithLifecycle()
     val raceMode by viewModel.raceMode.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
@@ -108,13 +108,17 @@ fun ModePickerScreen(
             },
             style = MaterialTheme.typography.titleMedium,
         )
-        // "- active" — a race can still have un-reset activity sitting in a mode it's since been
-        // relocated away from (Relocate switches RaceEntity.mode but never resets the mode being
-        // left), so this is what tells the operator "yes, this mode you're about to open is the
-        // one that's actually live", reading "<mode> - active" instead of "Start <mode>" once it
-        // genuinely is.
+        // "<mode> @<location>" for Bibs (see startButtonLabel's own doc for the shared format) —
+        // this is what tells the operator exactly where tapping this button will resume
+        // recording, whether or not this mode has actually been Started yet this session: a race
+        // can still have un-reset activity sitting in a mode it's since been relocated away from
+        // (Relocate switches RaceEntity.mode but never resets the mode being left), and even a
+        // never-yet-started mode already has a real location waiting from Setup Race/Relocate.
+        // Time never gets the "@<location>" suffix (TODO.md's "A rationalisation" — it records
+        // irrespective of location) — just its bare mode name. Falls back to a bare "Start" only
+        // when there's no race (and so no mode) at all.
         val startLabel = raceMode?.let { mode ->
-            if (mode in activeModes) "${mode.displayName()} - active" else "Start ${mode.displayName()}"
+            if (mode == AppMode.TIME) mode.displayName() else startButtonLabel(mode.displayName(), raceSummary?.raceLocation.orEmpty())
         } ?: "Start"
         ModeButton(startLabel, enabled = hasActiveRace && raceMode != null) { handleStartTap() }
         // Mule syncing is its own independent on/off flag now (see
@@ -168,6 +172,7 @@ fun ModePickerScreen(
                         deviceName = deviceName,
                         raceLabel = summary.raceLabel,
                         raceLocation = summary.raceLocation,
+                        showLocation = raceMode != AppMode.TIME,
                         nextSplitNumber = summary.nextSplitNumber,
                         unsyncedCount = summary.unsyncedCount,
                         lastSyncedAtMillis = summary.lastSyncedAtMillis,

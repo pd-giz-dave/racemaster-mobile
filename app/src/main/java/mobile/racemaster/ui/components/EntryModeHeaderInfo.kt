@@ -37,6 +37,8 @@ fun EntryModeHeaderInfo(
     unexpectedBibNumbers: List<Int>,
     serverStatus: ServerStatusState,
     btPollingStatus: BtPollingStatus,
+    otherOpenLocations: List<String> = emptyList(),
+    onGoToLocation: ((String) -> Unit)? = null,
 ) {
     RaceProgressSummary(
         deviceName = deviceName,
@@ -48,6 +50,8 @@ fun EntryModeHeaderInfo(
         serverStatus = serverStatus,
         btPollingStatus = btPollingStatus,
         progressText = soFarText,
+        otherOpenLocations = otherOpenLocations,
+        onGoToLocation = onGoToLocation,
         nextRowTrailingContent = {
             if (dupCount > 0) {
                 Text(

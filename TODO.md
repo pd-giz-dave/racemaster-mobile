@@ -68,9 +68,14 @@ one.
 - [x] It means invalidate the current segment (location+mode).
       Do it again to walk up the history segment by segment.
       So add a refLineNumber for reset pointing at the Location record for the segment(s) being reset.
-      When the first segment is reset - the phone reverts to no race setup (clears the persisted
-      race setup fields) and it stops advertising itself and stops updating the web.
       This means an Undo across segment boundaries is not necessary, just reset the segment.
+- [x] Resetting the race's own very first-ever segment is no different from resetting any other —
+      it does NOT revert the phone to "no race setup" any more (that used to clear the persisted
+      race setup fields and go quiet, but confirmed in the field as confusing once a mode screen
+      can show multiple still-open locations: the operator just wants that segment re-startable,
+      not kicked back to Setup Race). race.location and activeRaceId both stay put; the mode
+      screen's own Start button keeps working (see RaceRepository.ensureOpenSegment), re-opening
+      a fresh segment at the same location with the counter back at 1.
 
 ## Tweaks from observations of using the app
 

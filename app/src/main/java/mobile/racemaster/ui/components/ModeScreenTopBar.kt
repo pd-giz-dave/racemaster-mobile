@@ -24,8 +24,12 @@ val CompactTopAppBarHeight: Dp = 48.dp
 @Composable
 fun ModeScreenTopBar(
     title: String,
-    thisRaceEnabled: Boolean,
-    onThisRace: () -> Unit,
+    thisRaceEnabled: Boolean = false,
+    // Null omits the "Relocate" action entirely — Time Mode's own call (TODO.md's "A
+    // rationalisation": it records irrespective of where the device is, so there's nothing for
+    // it to relocate) leaves this unset rather than wiring a button to a screen that would only
+    // ever edit a location it doesn't use. Bibs still wires it, unchanged.
+    onThisRace: (() -> Unit)? = null,
     onChangeMode: () -> Unit,
 ) {
     // The persistent AppBanner (above this bar) already reserves space for the status
@@ -42,7 +46,9 @@ fun ModeScreenTopBar(
             // "This Race") since that screen's own new capability — editing location mid-race,
             // which is what this button is mostly reached for now — is the more common reason to
             // tap it than a pre-race rename.
-            TextButton(onClick = withClickSound(onThisRace), enabled = thisRaceEnabled) { Text("Relocate") }
+            if (onThisRace != null) {
+                TextButton(onClick = withClickSound(onThisRace), enabled = thisRaceEnabled) { Text("Relocate") }
+            }
             TextButton(onClick = withClickSound(onChangeMode)) { Text("Back") }
         },
         expandedHeight = CompactTopAppBarHeight,

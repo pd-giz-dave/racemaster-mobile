@@ -94,13 +94,20 @@ fun <T> resetTargets(
  * view) rather than starting fresh: TODO.md's own "when returning to a previous location the
  * mode screen should look like it was when they left". Empty when there are no visits at all, or
  * when the most recent one has itself been reset (nothing current for this mode right now).
+ *
+ * [locationAware] is false for Time Mode (see TODO.md's "A rationalisation" — "bibs (location
+ * aware) and time (as now)"): Time records irrespective of where the device physically is, so
+ * its own current segment is every visit not individually reset, merged together regardless of
+ * note — relocating mid-race never splits or restarts it, only an actual Reset does.
  */
 fun <T> currentSegmentVisits(
     allVisits: List<LocationVisit<T>>,
     resetTargetLineNumbers: Set<Long>,
+    locationAware: Boolean = true,
 ): List<LocationVisit<T>> {
     val mostRecent = allVisits.lastOrNull() ?: return emptyList()
     if (mostRecent.locationLineNumber in resetTargetLineNumbers) return emptyList()
+    if (!locationAware) return allVisits.filterNot { it.locationLineNumber in resetTargetLineNumbers }
     return allVisits.filter { it.note == mostRecent.note && it.locationLineNumber !in resetTargetLineNumbers }
 }
 
@@ -122,12 +129,13 @@ fun <T> currentSegmentRows(
     isResetMarker: (T) -> Boolean,
     isUndoMarker: (T) -> Boolean,
     isDisplayExcluded: (T) -> Boolean,
+    locationAware: Boolean = true,
 ): List<T> {
     val targets = resetTargets(rawRows, refLineNumberOf, isResetMarker)
     val displayFiltered = rawRows.filterNot(isDisplayExcluded)
     val folded = foldLatestVisible(displayFiltered, lineNumberOf, refLineNumberOf, isUndoMarker)
     val ascending = folded.sortedBy { lineNumberOf(it) }
     val allVisits = visits(ascending, lineNumberOf, noteOf, isLocationMarker)
-    val current = currentSegmentVisits(allVisits, targets)
+    val current = currentSegmentVisits(allVisits, targets, locationAware)
     return current.flatMap { it.rows }.sortedByDescending { lineNumberOf(it) }
 }

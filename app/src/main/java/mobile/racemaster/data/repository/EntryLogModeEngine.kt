@@ -112,6 +112,10 @@ internal class EntryLogModeEngine(
             { it.action == HistoryAction.RESET },
             { it.action == HistoryAction.UNDO },
             { it.action == HistoryAction.MODE_START || it.action == HistoryAction.NEW_RACE || it.action == HistoryAction.RESET || it.action == HistoryAction.PING },
+            // Only Bibs is location-aware (TODO.md: "A rationalisation" — "bibs (location aware)
+            // and time (as now)") — Time's own current segment merges every not-yet-reset visit
+            // regardless of note, since it records irrespective of where the device is.
+            locationAware = mode == HistoryMode.BIBS,
         )
 
     fun observeUnsyncedCount(raceId: Long): Flow<Int> = historyLineDao.observeUnsyncedCountForRace(raceId, mode)
@@ -251,11 +255,10 @@ internal class EntryLogModeEngine(
 
     // Closes the current segment (see RaceRepository.closeCurrentSegment's own doc — one or more
     // RESET rows, walkable by pressing Reset again) and clears the display counter/started-at
-    // back to their pre-start defaults. True means this closed the race's own very first
-    // segment, reverting the device to "no race set up" — the caller announces this to the
-    // server right away (see BibsModeViewModel's own resetXMode wiring).
-    suspend fun reset(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()): Boolean =
+    // back to their pre-start defaults.
+    suspend fun reset(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()) {
         raceRepository.closeCurrentSegment(raceId, mode, resetAtMillis)
+    }
 
     // Exposed so Bibs' own thin start method (BibsModeRepository.startBibsMode) can call the
     // same defensive self-heal Time Mode's own startStopwatch does before writing its Clock row
