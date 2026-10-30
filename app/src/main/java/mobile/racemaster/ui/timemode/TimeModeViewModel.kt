@@ -22,6 +22,8 @@ import mobile.racemaster.data.repository.linesWithAnySync
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.di.applicationContext
+import mobile.racemaster.ui.btPollingStatusFlow
+import mobile.racemaster.ui.deviceNameFlow
 import mobile.racemaster.util.Beeper
 import mobile.racemaster.util.tickerFlow
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -77,16 +79,9 @@ class TimeModeViewModel(
     private val raceIdFlow: StateFlow<Long?> = settingsRepository.activeRaceId
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    val deviceName: StateFlow<String?> = settingsRepository.deviceName
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    val deviceName: StateFlow<String?> = deviceNameFlow(settingsRepository)
 
-    // Device-wide, not tied to whether a race is selected — same reasoning as deviceName above;
-    // whether this phone is actually being polled over BT has nothing to do with race state.
-    val btPollingStatus: StateFlow<BtPollingStatus> = combine(
-        bluetoothStateRepository.advertisingWarning,
-        bluetoothStateRepository.lastPolledAtMillis,
-        ::BtPollingStatus,
-    ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BtPollingStatus())
+    val btPollingStatus: StateFlow<BtPollingStatus> = btPollingStatusFlow(bluetoothStateRepository)
 
     val uiState: StateFlow<TimeModeUiState> = raceIdFlow
         .flatMapLatest { raceId ->
@@ -158,9 +153,7 @@ class TimeModeViewModel(
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch {
             val race = raceRepository.getRace(raceId) ?: return@launch
-            if (race.timeModeStartedAtMillis != null) {
-                timeModeRepository.resumeStopwatch(raceId)
-            } else {
+            if (race.timeModeStartedAtMillis == null) {
                 timeModeRepository.startStopwatch(raceId)
             }
             beeper.beep()

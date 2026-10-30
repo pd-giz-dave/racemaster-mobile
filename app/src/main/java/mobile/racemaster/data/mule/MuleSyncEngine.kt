@@ -722,7 +722,7 @@ class MuleSyncEngine(
                     progressToDeliver = heldProgress?.toPayload(), progressRaceLabel = heldProgress?.raceLabel,
                 )
             }
-                .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
+                .recordingAttempt(peerLabel)
                 .onFailure { Log.w(TAG, "first-sighting connect failed: key=$key", it) }
         }
         val info = result.getOrNull()
@@ -916,6 +916,22 @@ class MuleSyncEngine(
         autoWarningFlow.value = tickFailure
     }
 
+    // Shared by both the own-race leg and the relay leg below: a decrease here is impossible
+    // under normal monotonic operation — the only way a source's own reported lastLineNumber can
+    // be lower than what's already been pulled from it is if its race identity was reset out
+    // from under us (a local race deleted and recreated under the same label — see
+    // HistoryAction.NEW_RACE's own doc). Treat it as an unambiguous "pull from scratch" signal:
+    // continuing to request "since <our now-stale, too-high cursor>" would return nothing and
+    // silently miss the new race — including its own NewRace marker — forever.
+    private fun effectiveSince(lastLineNumber: Long, since: Long): Long = if (lastLineNumber < since) 0L else since
+
+    // Every BLE connect attempt in this file against a given peer (the own-race read/pull, a
+    // relayed origin's pull, a relay-manifest fetch — all against the same physical peer, even
+    // when the data fetched is attributed to a different origin) needs recording the same way —
+    // see BluetoothStateRepository.recordConnectAttempt's own doc for what this identifies.
+    private fun <T> Result<T>.recordingAttempt(peerLabel: String): Result<T> =
+        also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
+
     /** Pulls from every currently-visible BLE device — no attach step, no per-role limit, no
      *  race-label matching: anything Mule can see, it pulls from. This device's own data is
      *  never "pulled" at all (see [MuleRepository.pushToServer]'s own doc) — pushIfNeeded's own
@@ -1038,7 +1054,7 @@ class MuleSyncEngine(
                         onProgressDeliveryFailure = { reason -> tickFailure = "Progress relay to $peerLabel failed: $reason" },
                     )
                 }
-                    .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
+                    .recordingAttempt(peerLabel)
                     .onFailure { Log.w(TAG, "periodic connect failed: key=$key deviceId=${device.deviceId}", it) }
                 val freshInfo = periodicResult.getOrNull()
                 if (freshInfo == null) {
@@ -1046,15 +1062,11 @@ class MuleSyncEngine(
                     return@withPermit
                 }
                 val since = muleRepository.lastPulledLineNumber(freshInfo.deviceId, freshInfo.raceLabel)
-                // A decrease here is impossible under normal monotonic operation — the only way
-                // this source's own reported lastLineNumber can be LOWER than what we've already
-                // pulled from it is if its race identity was reset out from under us (a local
-                // race deleted and recreated under the same label — see HistoryAction.NEW_RACE's
-                // own doc). Treat it as an unambiguous "pull from scratch" signal: continuing to
-                // request "since <our now-stale, too-high cursor>" would return nothing and
-                // silently miss the new race — including its own NewRace marker — forever.
+                // See effectiveSince's own doc for what a reset here means and why. Computed
+                // again here (not just derived from effectiveSince's result) purely so the
+                // pull-decision log line below can report it.
                 val raceLikelyReset = freshInfo.lastLineNumber < since
-                val effectiveSince = if (raceLikelyReset) 0L else since
+                val effectiveSince = effectiveSince(freshInfo.lastLineNumber, since)
                 mergeDeviceInfo(key, device, freshInfo, effectiveSince)
                 deliverTargetedProgressIfPending(device.requiredAdvertisement, freshInfo.deviceId, peerLabel)
                 val hasNewData = freshInfo.lastLineNumber - effectiveSince > 0
@@ -1068,7 +1080,7 @@ class MuleSyncEngine(
                             freshInfo.deviceName,
                             effectiveSince,
                         )
-                    }.also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
+                    }.recordingAttempt(peerLabel)
                     result.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
                     result.onSuccess {
                         // Reflects the drop in outstanding lines immediately rather than waiting for
@@ -1079,7 +1091,7 @@ class MuleSyncEngine(
                                 progressToDeliver = heldProgress?.toPayload(), progressRaceLabel = heldProgress?.raceLabel,
                             )
                         }
-                            .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
+                            .recordingAttempt(peerLabel)
                             .getOrNull()?.let {
                                 val newSince = muleRepository.lastPulledLineNumber(it.deviceId, it.raceLabel)
                                 mergeDeviceInfo(key, device, it, newSince)
@@ -1093,7 +1105,7 @@ class MuleSyncEngine(
                 // Time/Bibs/CP phone (always relayCount == 0) never pays this extra round trip.
                 val relayEntries = if (freshInfo.relayCount > 0) {
                     runCatching { muleRepository.pullRelayManifest(device.requiredAdvertisement) }
-                        .also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
+                        .recordingAttempt(peerLabel)
                         .getOrElse { emptyList() }
                 } else {
                     emptyList()
@@ -1115,10 +1127,7 @@ class MuleSyncEngine(
                 for (entry in relevantRelayEntries(myDeviceId, relayEntries)) {
                     val relayKey = "relay:${entry.originDeviceId}:${entry.originRaceLabel}"
                     val relaySince = muleRepository.lastPulledLineNumber(entry.originDeviceId, entry.originRaceLabel)
-                    // See the same check above (own-race leg) — a decrease means the origin
-                    // device's race was reset out from under this whole relay chain.
-                    val relayLikelyReset = entry.lastLineNumber < relaySince
-                    val effectiveRelaySince = if (relayLikelyReset) 0L else relaySince
+                    val effectiveRelaySince = effectiveSince(entry.lastLineNumber, relaySince)
                     val outstanding = (entry.lastLineNumber - effectiveRelaySince).coerceAtLeast(0).toInt()
                     relayRows[relayKey] = DiscoveredDevice(
                         deviceKey = relayKey,
@@ -1142,7 +1151,7 @@ class MuleSyncEngine(
                             requestOriginDeviceId = entry.originDeviceId,
                             requestOriginRaceLabel = entry.originRaceLabel,
                         )
-                    }.also { bluetoothStateRepository.recordConnectAttempt(it.isSuccess, peerLabel) }
+                    }.recordingAttempt(peerLabel)
                     relayResult.onFailure { tickFailure = "Auto-pull failed: ${it.message}" }
                     relayResult.onSuccess {
                         val newSince = muleRepository.lastPulledLineNumber(entry.originDeviceId, entry.originRaceLabel)

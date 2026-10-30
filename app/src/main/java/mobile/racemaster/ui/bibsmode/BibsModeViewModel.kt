@@ -34,7 +34,9 @@ import mobile.racemaster.data.repository.unexpectedBibWarning
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.di.applicationContext
+import mobile.racemaster.ui.btPollingStatusFlow
 import mobile.racemaster.ui.components.EntryLogUi
+import mobile.racemaster.ui.deviceNameFlow
 import mobile.racemaster.util.Beeper
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -142,15 +144,9 @@ class BibsModeViewModel(
     private val defaultBibsActionFlow: StateFlow<HistoryAction> = settingsRepository.bibsAutoSaveAction
         .stateIn(viewModelScope, SharingStarted.Eagerly, HistoryAction.FINISH)
 
-    val deviceName: StateFlow<String?> = settingsRepository.deviceName
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    val deviceName: StateFlow<String?> = deviceNameFlow(settingsRepository)
 
-    // See TimeModeViewModel.btPollingStatus's own doc — device-wide, not tied to race selection.
-    val btPollingStatus: StateFlow<BtPollingStatus> = combine(
-        bluetoothStateRepository.advertisingWarning,
-        bluetoothStateRepository.lastPolledAtMillis,
-        ::BtPollingStatus,
-    ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BtPollingStatus())
+    val btPollingStatus: StateFlow<BtPollingStatus> = btPollingStatusFlow(bluetoothStateRepository)
 
     private val digitsFlow = MutableStateFlow("")
     // True whenever the digits currently on screen are already committed (either just
@@ -291,9 +287,7 @@ class BibsModeViewModel(
         val raceId = raceIdFlow.value ?: return
         viewModelScope.launch {
             val race = raceRepository.getRace(raceId) ?: return@launch
-            if (race.bibsModeStartedAtMillis != null) {
-                bibsModeRepository.resumeBibsMode(raceId)
-            } else {
+            if (race.bibsModeStartedAtMillis == null) {
                 bibsModeRepository.startBibsMode(raceId)
             }
         }

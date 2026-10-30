@@ -90,6 +90,11 @@ internal class EntryLogModeEngine(
     private val historyLineDao: HistoryLineDao,
     private val raceRepository: RaceRepository,
     private val columns: ModeProgressColumns,
+    // The mode's own fixed Start marker action — CLOCK for Bibs, START for Time — written
+    // directly by each mode's own thin start method (never through recordEntry), but still
+    // undoable through the generic path below, so undoMostRecent needs to know which action to
+    // treat as "this mode's own Start marker" rather than hardcoding one family's value.
+    private val startMarkerAction: HistoryAction,
 ) {
     // The live current-segment view — see HistoryFold.currentSegmentRows' own doc for exactly
     // what "current segment" now means (a LOCATION-anchored, walkable-by-Reset, resumable-by-
@@ -236,21 +241,12 @@ internal class EntryLogModeEngine(
                 // them consistent - make bibs/cp like time". Timestamp-only clear (see
                 // ModeProgressColumns.clearStartedAt's own doc) — the counter was never consumed
                 // by Clock in the first place (see NO_SPLIT_ACTIONS), so nothing to restore there.
-                root.action == HistoryAction.CLOCK -> columns.clearStartedAt(raceId)
+                root.action == startMarkerAction -> columns.clearStartedAt(raceId)
                 // RETIRE never consumed the counter in the first place (see recordEntry/
                 // NO_SPLIT_ACTIONS), so undoing one must not decrement it either.
                 root.action !in NO_SPLIT_ACTIONS -> columns.decrementCounter(raceId)
             }
         }
-    }
-
-    // Resumes logging in place after Start is pressed again on an already-started, not-yet-reset
-    // race — see each *ModeViewModel's own startXMode doc, and Race History's own "Resume" action
-    // (RaceRepository.switchActiveRace) for the case where that race wasn't even this device's
-    // active one any more. A no-op now that there's no separate stopped state left to clear (see
-    // HistoryAction's own doc) — kept as a function, rather than removed outright, since each
-    // *ModeViewModel's own already-started/not-yet-reset branch still calls it.
-    suspend fun resume(raceId: Long) {
     }
 
     // Closes the current segment (see RaceRepository.closeCurrentSegment's own doc — one or more

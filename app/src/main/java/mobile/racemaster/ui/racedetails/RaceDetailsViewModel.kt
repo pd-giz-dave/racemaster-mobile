@@ -11,6 +11,9 @@ import mobile.racemaster.data.repository.isRaceActive
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
+import mobile.racemaster.ui.deviceNameFlow
+import mobile.racemaster.ui.locationHistoryFlow
+import mobile.racemaster.ui.raceNameHistoryFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -41,16 +44,13 @@ class RaceDetailsViewModel(
         race != null && isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
-    val deviceName: StateFlow<String?> = settingsRepository.deviceName
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    val deviceName: StateFlow<String?> = deviceNameFlow(settingsRepository)
 
     // Every race name/location previously saved from this form (or Setup Race), so this form's
     // own fields can offer the same history dropdown.
-    val raceNameHistory: StateFlow<List<String>> = settingsRepository.raceNameHistory
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val raceNameHistory: StateFlow<List<String>> = raceNameHistoryFlow(settingsRepository)
 
-    val locationHistory: StateFlow<List<String>> = settingsRepository.locationHistory
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val locationHistory: StateFlow<List<String>> = locationHistoryFlow(settingsRepository)
 
     // One save path now covers both the pre-race case (nothing recorded yet — name, location and
     // mode are all still a plain field overwrite) and the mid-race "Relocate" case (name is

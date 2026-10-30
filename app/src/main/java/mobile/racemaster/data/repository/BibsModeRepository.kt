@@ -31,7 +31,10 @@ class BibsModeRepository(
     private val historyLineDao: HistoryLineDao,
     raceRepository: RaceRepository,
 ) {
-    private val engine = EntryLogModeEngine(HistoryMode.BIBS, AppMode.BIBS, db, raceDao, historyLineDao, raceRepository, BibsProgressColumns(raceDao))
+    private val engine = EntryLogModeEngine(
+        HistoryMode.BIBS, AppMode.BIBS, db, raceDao, historyLineDao, raceRepository,
+        BibsProgressColumns(raceDao), startMarkerAction = HistoryAction.CLOCK,
+    )
 
     fun observeCurrentSegmentEntries(raceId: Long): Flow<List<HistoryLineEntity>> = engine.observeCurrentSegmentEntries(raceId)
 
@@ -83,6 +86,4 @@ class BibsModeRepository(
     suspend fun undoMostRecent(raceId: Long) = engine.undoMostRecent(raceId)
 
     suspend fun resetBibsMode(raceId: Long, resetAtMillis: Long = System.currentTimeMillis()): Boolean = engine.reset(raceId, resetAtMillis)
-
-    suspend fun resumeBibsMode(raceId: Long) = engine.resume(raceId)
 }

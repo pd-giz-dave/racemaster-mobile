@@ -1,11 +1,9 @@
 package mobile.racemaster.ui.components
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -18,14 +16,9 @@ import androidx.compose.ui.unit.dp
 import mobile.racemaster.data.db.entity.formatLineColumn
 import mobile.racemaster.data.db.entity.formatLineRef
 import mobile.racemaster.data.db.entity.formatSplitColumn
-import mobile.racemaster.data.db.entity.formatSplitRef
 import mobile.racemaster.data.repository.LineSyncState
-import mobile.racemaster.ui.theme.RelayedOrange
-import mobile.racemaster.ui.theme.SyncedGreen
-import mobile.racemaster.ui.theme.UnsyncedRed
 import mobile.racemaster.util.formatElapsedSplitTime
 import mobile.racemaster.util.formatTimeOfDay
-import mobile.racemaster.util.withClickSound
 
 /**
  * One rationalized row format for every history line, Bibs or Time, in every screen that
@@ -67,17 +60,8 @@ fun HistoryLineRow(
     // split slot names which mode started rather than showing a split number it never had.
     splitLabelOverride: String? = null,
 ) {
-    val rowColor = when (syncState) {
-        LineSyncState.SYNCED -> SyncedGreen
-        LineSyncState.RELAYED -> RelayedOrange
-        LineSyncState.NOT_SYNCED -> UnsyncedRed
-    }
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .let { if (onClick != null) it.clickable(onClick = withClickSound(onClick)) else it }
-            .padding(vertical = 2.dp),
-    ) {
+    val rowColor = rowColorFor(syncState)
+    Column(modifier = historyRowModifier(modifier, onClick)) {
         // Read via LocalConfiguration rather than Locale.getDefault() directly — the latter
         // isn't observable by Compose, so this row wouldn't recompose if the user changes their
         // system locale mid-session (same pattern as ServerStatusLine/SyncStatusLine).
@@ -136,19 +120,15 @@ fun HistoryLineRow(
         if (!noteText.isNullOrBlank()) {
             Text(noteText, style = MaterialTheme.typography.bodySmall, color = rowColor)
         }
-        if (dupSplitRefs.isNotEmpty()) {
-            Text(
-                "dup of ${dupSplitRefs.joinToString(", ") { formatSplitRef(it) }}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-        if (!isUndoMarker && editedFromLineNumber != null) {
-            Text("Edited from ${formatLineRef(editedFromLineNumber)}", style = MaterialTheme.typography.bodySmall, color = rowColor)
-        }
-        if (!syncedToLabel.isNullOrBlank()) {
-            Text("Synced to: $syncedToLabel", style = MaterialTheme.typography.bodySmall, color = rowColor)
-        }
+        HistoryRowTrailingLines(
+            rowColor,
+            dupSplitRefs = dupSplitRefs,
+            // An undo marker's own "Undo L{n}" above already points at what it hid — showing
+            // "Edited from" too (editedFromLineNumber is reused as that same pointer, see its
+            // call site) would say the same thing twice.
+            editedFromLineNumber = editedFromLineNumber.takeIf { !isUndoMarker },
+            syncedToLabel = syncedToLabel,
+        )
     }
 }
 

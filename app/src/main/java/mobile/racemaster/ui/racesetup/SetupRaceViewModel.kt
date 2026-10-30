@@ -26,6 +26,8 @@ import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.data.settings.SetupRaceDraft
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.di.applicationContext
+import mobile.racemaster.ui.locationHistoryFlow
+import mobile.racemaster.ui.raceNameHistoryFlow
 import mobile.racemaster.util.hasInternetConnectivity
 
 /** Setup Race's online branch — see [SetupRaceViewModel.scanServer]/[SetupRaceViewModel.availableRaces]. */
@@ -81,11 +83,9 @@ class SetupRaceViewModel(
     // Every race name/location previously saved from this form, most-recent-first — lets each
     // field offer a history dropdown, same independent-field behavior as RaceDetailsScreen's
     // own fields used to have (picking one only ever fills that one field).
-    val raceNameHistory: StateFlow<List<String>> = settingsRepository.raceNameHistory
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val raceNameHistory: StateFlow<List<String>> = raceNameHistoryFlow(settingsRepository)
 
-    val locationHistory: StateFlow<List<String>> = settingsRepository.locationHistory
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val locationHistory: StateFlow<List<String>> = locationHistoryFlow(settingsRepository)
 
     // What the operator has typed/picked so far, surviving a navigate-away-and-back before Save
     // (e.g. via Setup Device) — see SetupRaceDraft's own doc. Nullable, not a plain

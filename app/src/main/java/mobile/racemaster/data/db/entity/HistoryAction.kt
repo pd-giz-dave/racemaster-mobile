@@ -31,9 +31,9 @@ enum class HistoryAction {
     // carry no semantic weight nothing else already provided (Undo's own root-action branch for
     // it, and every RaceEntity.*StoppedAtMillis-driven UI read, were removed in the same change):
     // pressing Start again on an already-started race already resumes in place with zero rows
-    // written (see TimeModeRepository.resumeStopwatch/EntryLogModeEngine.resume), so a Stop
-    // marker's only remaining value was "a polite goodbye" — real liveness is now covered
-    // instead by a periodic PING (see that action's own doc).
+    // written (see TimeModeViewModel.startStopwatch/BibsModeViewModel.startBibsMode's own
+    // already-started guard), so a Stop marker's only remaining value was "a polite goodbye" —
+    // real liveness is now covered instead by a periodic PING (see that action's own doc).
     START, RESET, UNDO,
 
     // Shared — written once by RaceRepository.recordModeStart (Setup Race / Relocate), the
