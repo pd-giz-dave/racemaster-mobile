@@ -70,7 +70,7 @@ class RaceRepository(
             val open = snapshot.openVisits
             if (open.isEmpty()) return@withTransaction false
             for (visit in open) {
-                val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+                val race = raceDao.getById(raceId) ?: return@withTransaction false
                 historyLineDao.insert(
                     HistoryLineEntity(
                         raceId = raceId,
@@ -234,7 +234,7 @@ class RaceRepository(
     suspend fun recordModeStart(raceId: Long, mode: AppMode, location: String, timestampMillis: Long = System.currentTimeMillis()) {
         db.withTransaction {
             val historyMode = mode.toHistoryMode()
-            var race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            var race = raceDao.getById(raceId) ?: return@withTransaction
             val resumeCounter = if (race.mode == null) {
                 null
             } else {
@@ -563,7 +563,7 @@ class RaceRepository(
     // filter).
     suspend fun recordPing(raceId: Long, mode: HistoryMode, timestampMillis: Long = System.currentTimeMillis()) {
         db.withTransaction {
-            val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            val race = raceDao.getById(raceId) ?: return@withTransaction
             historyLineDao.insert(
                 HistoryLineEntity(
                     raceId = raceId,

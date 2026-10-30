@@ -127,7 +127,7 @@ internal class EntryLogModeEngine(
         timestampMillis: Long = System.currentTimeMillis(),
     ) {
         db.withTransaction {
-            val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            val race = raceDao.getById(raceId) ?: return@withTransaction
             val splitNumber = if (action in NO_SPLIT_ACTIONS) {
                 null
             } else {
@@ -168,7 +168,7 @@ internal class EntryLogModeEngine(
             val root = historyLineDao.getByLineNumber(existing.raceId, rootLineNumber) ?: return@withTransaction
             if (root.action in NON_EDITABLE_ROOT_ACTIONS) return@withTransaction
             val effectiveAction = if (root.action == HistoryAction.CLOCK) HistoryAction.CLOCK else action
-            val race = requireNotNull(raceDao.getById(existing.raceId)) { "Race ${existing.raceId} not found" }
+            val race = raceDao.getById(existing.raceId) ?: return@withTransaction
             historyLineDao.insert(
                 existing.copy(
                     id = 0,
@@ -211,7 +211,7 @@ internal class EntryLogModeEngine(
             val target = current.firstOrNull { it.action != HistoryAction.LOCATION } ?: return@withTransaction
             val rootLineNumber = target.refLineNumber ?: target.lineNumber
             val root = raw.first { it.lineNumber == rootLineNumber }
-            val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            val race = raceDao.getById(raceId) ?: return@withTransaction
             historyLineDao.insert(
                 HistoryLineEntity(
                     raceId = raceId,

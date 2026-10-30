@@ -55,7 +55,7 @@ class BibsModeRepository(
     suspend fun startBibsMode(raceId: Long, startedAtMillis: Long = System.currentTimeMillis()) {
         engine.ensureOpenSegment(raceId)
         db.withTransaction {
-            val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            val race = raceDao.getById(raceId) ?: return@withTransaction
             raceDao.setBibsModeStartedAt(raceId, startedAtMillis)
             historyLineDao.insert(
                 HistoryLineEntity(

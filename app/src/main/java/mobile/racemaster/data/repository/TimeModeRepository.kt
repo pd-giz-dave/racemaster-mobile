@@ -67,7 +67,7 @@ class TimeModeRepository(
     suspend fun startStopwatch(raceId: Long, startedAtMillis: Long = System.currentTimeMillis()) {
         raceRepository.ensureOpenSegment(raceId, AppMode.TIME)
         db.withTransaction {
-            val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            val race = raceDao.getById(raceId) ?: return@withTransaction
             raceDao.setTimeModeStartedAt(raceId, startedAtMillis)
             historyLineDao.insert(
                 HistoryLineEntity(
@@ -85,7 +85,7 @@ class TimeModeRepository(
 
     suspend fun recordSplit(raceId: Long, timestampMillis: Long = System.currentTimeMillis()) {
         db.withTransaction {
-            val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            val race = raceDao.getById(raceId) ?: return@withTransaction
             val splitNumber = race.timeModeNextSplit
             raceDao.incrementTimeCounter(raceId)
             historyLineDao.insert(
@@ -119,7 +119,7 @@ class TimeModeRepository(
             val rootLineNumber = existing.refLineNumber ?: existing.lineNumber
             val root = historyLineDao.getByLineNumber(existing.raceId, rootLineNumber) ?: return@withTransaction
             if (root.action in NON_EDITABLE_ROOT_ACTIONS) return@withTransaction
-            val race = requireNotNull(raceDao.getById(existing.raceId)) { "Race ${existing.raceId} not found" }
+            val race = raceDao.getById(existing.raceId) ?: return@withTransaction
             historyLineDao.insert(
                 existing.copy(
                     id = 0,
@@ -180,7 +180,7 @@ class TimeModeRepository(
             val target = current.firstOrNull { it.action != HistoryAction.LOCATION } ?: return@withTransaction
             val rootLineNumber = target.refLineNumber ?: target.lineNumber
             val root = raw.first { it.lineNumber == rootLineNumber }
-            val race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
+            val race = raceDao.getById(raceId) ?: return@withTransaction
             historyLineDao.insert(
                 HistoryLineEntity(
                     raceId = raceId,
