@@ -11,6 +11,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -23,6 +24,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -30,8 +34,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.ui.components.CompactTopAppBarHeight
+import mobile.racemaster.ui.components.HelpTopicDialog
 import mobile.racemaster.ui.components.ServerStatusLine
 import mobile.racemaster.ui.components.SyncStatusLine
+import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.ui.theme.SyncedGreen
 import mobile.racemaster.ui.theme.UnsyncedRed
 import mobile.racemaster.util.formatTimeOfDay
@@ -51,6 +57,7 @@ fun MuleModeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
+    var showHelp by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -62,6 +69,9 @@ fun MuleModeScreen(
                 // vertical space this screen's own status dashboard needs more (see the
                 // three "is everything working" lines just below in the body).
                 actions = {
+                    IconButton(onClick = withClickSound { showHelp = true }) {
+                        Icon(Icons.Filled.HelpOutline, contentDescription = "Help")
+                    }
                     TextButton(onClick = withClickSound(onOptions)) { Text("Options") }
                     IconButton(onClick = withClickSound(onHome)) {
                         Icon(Icons.Filled.Home, contentDescription = "Home")
@@ -121,6 +131,10 @@ fun MuleModeScreen(
 
             NearbyDevicesSection(uiState, onForget = viewModel::forgetDevice)
         }
+    }
+
+    if (showHelp) {
+        HelpTopicDialog(topic = HelpTopics.MuleMode, onDismiss = { showHelp = false })
     }
 }
 

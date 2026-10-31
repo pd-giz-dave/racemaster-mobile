@@ -47,6 +47,7 @@ import mobile.racemaster.ui.components.DiscardChangesDialog
 import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.ui.components.HistoryTextField
 import mobile.racemaster.ui.components.ScreenTopBar
+import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.util.formatShortDate
 import mobile.racemaster.util.withClickSound
 
@@ -157,6 +158,7 @@ fun SetupRaceScreen(
                 title = { Text("Setup Race") },
                 onBack = { attemptExit(onDone) },
                 onHome = { attemptExit(onHome) },
+                helpTopic = HelpTopics.SetupRace,
                 extraActions = { HideKeyboardButton() },
             )
         },

@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -153,37 +155,39 @@ data class HistoryLineDisplay(
     val splitLabelOverride: String? = null,
 )
 
-/** Renders [lines] via [HistoryLineRow], or [emptyMessage] if there are none — the one shared
- *  list-rendering function both Race History and Mule source detail use, so a pulled race's
- *  history looks exactly like a local race's own (no per-line device name; the source's
- *  device is already named once, in that screen's own header — see MuleSourceDetailScreen). */
-@Composable
-fun HistoryLinesList(
-    lines: List<HistoryLineDisplay>,
-    emptyMessage: String,
-    modifier: Modifier = Modifier,
-) {
+/** Adds [lines] to the enclosing LazyColumn, one [HistoryLineRow] per entry (or [emptyMessage]
+ *  if there are none) — the one shared list-rendering function both Race History and Mule
+ *  source detail use, so a pulled race's history looks exactly like a local race's own (no
+ *  per-line device name; the source's device is already named once, in that screen's own
+ *  header — see MuleSourceDetailScreen).
+ *
+ *  A LazyColumn item range, not a plain eagerly-composed Column, because a still-recording
+ *  race can run into the thousands of rows and keeps growing live via sync — composing and
+ *  laying out every row regardless of whether it's actually on screen made this screen
+ *  progressively slower to open the longer a race ran, re-doing that full pass on every new
+ *  synced row's recomposition; confirmed in the field as a 15+ second open on an actively
+ *  syncing 1000+-row race, with the same live growth risking a genuine OOM/ANR crash on a
+ *  long enough race. */
+fun LazyListScope.historyLines(lines: List<HistoryLineDisplay>, emptyMessage: String) {
     if (lines.isEmpty()) {
-        Text(emptyMessage, style = MaterialTheme.typography.bodyMedium, modifier = modifier)
+        item { Text(emptyMessage, style = MaterialTheme.typography.bodyMedium) }
     } else {
-        Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            lines.forEach { line ->
-                HistoryLineRow(
-                    lineNumber = line.lineNumber,
-                    splitNumber = line.splitNumber,
-                    actionLabel = line.actionLabel,
-                    bibNumber = line.bibNumber,
-                    elapsedMillis = line.elapsedMillis,
-                    timestampMillis = line.timestampMillis,
-                    note = line.note,
-                    syncState = line.syncState,
-                    syncedToLabel = line.syncedToLabel,
-                    dupSplitRefs = line.dupSplitRefs,
-                    editedFromLineNumber = line.editedFromLineNumber,
-                    isUndoMarker = line.isUndoMarker,
-                    splitLabelOverride = line.splitLabelOverride,
-                )
-            }
+        items(lines, key = { it.lineNumber }) { line ->
+            HistoryLineRow(
+                lineNumber = line.lineNumber,
+                splitNumber = line.splitNumber,
+                actionLabel = line.actionLabel,
+                bibNumber = line.bibNumber,
+                elapsedMillis = line.elapsedMillis,
+                timestampMillis = line.timestampMillis,
+                note = line.note,
+                syncState = line.syncState,
+                syncedToLabel = line.syncedToLabel,
+                dupSplitRefs = line.dupSplitRefs,
+                editedFromLineNumber = line.editedFromLineNumber,
+                isUndoMarker = line.isUndoMarker,
+                splitLabelOverride = line.splitLabelOverride,
+            )
         }
     }
 }

@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.ui.components.ScreenTopBar
+import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.util.withClickSound
 
 /** The actual Bluetooth on/off, server-sync on/off, and auto-sync controls — split out from
@@ -67,7 +68,12 @@ fun SetupOptionsScreen(
 
     Scaffold(
         topBar = {
-            ScreenTopBar(title = { Text("Options") }, onBack = onDone, onHome = onHome)
+            ScreenTopBar(
+                title = { Text("Options") },
+                onBack = onDone,
+                onHome = onHome,
+                helpTopic = HelpTopics.Options,
+            )
         },
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->

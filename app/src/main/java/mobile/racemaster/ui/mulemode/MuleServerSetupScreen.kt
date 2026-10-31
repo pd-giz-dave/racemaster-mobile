@@ -48,6 +48,7 @@ import mobile.racemaster.ui.components.DiscardChangesDialog
 import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.ui.components.HistoryTextField
 import mobile.racemaster.ui.components.ScreenTopBar
+import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.ui.theme.ServerOfflineRed
 import mobile.racemaster.ui.theme.SyncedGreen
 import mobile.racemaster.util.withClickSound
@@ -168,6 +169,7 @@ fun MuleServerSetupScreen(
                 title = { Text("Setup Server") },
                 onBack = { attemptExit(onDone) },
                 onHome = { attemptExit(onHome) },
+                helpTopic = HelpTopics.SetupServer,
                 extraActions = { HideKeyboardButton() },
             )
         },

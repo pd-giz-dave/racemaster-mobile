@@ -40,6 +40,7 @@ import mobile.racemaster.ui.components.DiscardChangesDialog
 import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.ui.components.HistoryTextField
 import mobile.racemaster.ui.components.ScreenTopBar
+import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.util.withClickSound
 
 /** "Relocate" (formerly "This Race") — name/location/mode editor for the device's
@@ -132,6 +133,7 @@ fun RaceDetailsScreen(
                 title = { Text("Relocate") },
                 onBack = { attemptExit(onCancel) },
                 onHome = { attemptExit(onHome) },
+                helpTopic = HelpTopics.SetupRace,
                 extraActions = { HideKeyboardButton() },
             )
         },

@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.ui.components.ScreenTopBar
+import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.util.formatWallClock
 import mobile.racemaster.util.withClickSound
 
@@ -67,6 +68,7 @@ fun RaceHistoryScreen(
                 title = { Text("Races") },
                 onBack = onBack,
                 onHome = onHome,
+                helpTopic = HelpTopics.RaceHistory,
                 extraActions = {
                     // Hidden entirely rather than disabled when there's nothing to sweep — this
                     // is an occasional maintenance action, not a primary control, and most

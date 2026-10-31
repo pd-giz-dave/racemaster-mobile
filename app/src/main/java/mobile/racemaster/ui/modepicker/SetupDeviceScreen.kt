@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.ui.components.ScreenTopBar
+import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.ui.mulemode.ConnectivityStatusText
 import mobile.racemaster.ui.mulemode.MuleModeViewModel
 import mobile.racemaster.util.withClickSound
@@ -49,7 +50,12 @@ fun SetupDeviceScreen(
 
     Scaffold(
         topBar = {
-            ScreenTopBar(title = { Text("Setup Device") }, onBack = onDone, onHome = onHome)
+            ScreenTopBar(
+                title = { Text("Setup Device") },
+                onBack = onDone,
+                onHome = onHome,
+                helpTopic = HelpTopics.SetupDevice,
+            )
         },
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->

@@ -3,6 +3,7 @@ package mobile.racemaster.ui.components
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -10,8 +11,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import mobile.racemaster.ui.help.HelpTopic
 import mobile.racemaster.util.withClickSound
 
 // Material3's default TopAppBar height (64.dp) leaves generous padding above/below a single
@@ -39,7 +45,11 @@ fun ModeScreenTopBar(
     // RacemasterNavHost), so a separate single-pop Back button here would always be 100% redundant
     // with this one; an icon rather than a "Back"-labelled TextButton reflects that honestly.
     onHome: () -> Unit,
+    // Non-null adds a leading "?" icon opening a HelpTopicDialog for it — see
+    // mobile.racemaster.ui.help.HelpTopics's own doc.
+    helpTopic: HelpTopic? = null,
 ) {
+    var showHelp by remember { mutableStateOf(false) }
     // The persistent AppBanner (above this bar) already reserves space for the status
     // bar, so this bar must not also apply it — otherwise the two stack and leave a gap.
     // No "New Race" button any more — a device now records against exactly one race for its
@@ -49,6 +59,11 @@ fun ModeScreenTopBar(
     TopAppBar(
         title = { Text(title) },
         actions = {
+            if (helpTopic != null) {
+                IconButton(onClick = withClickSound { showHelp = true }) {
+                    Icon(Icons.Filled.HelpOutline, contentDescription = "Help")
+                }
+            }
             // Relocate stays enabled even once the race has stopped — editing a typo in the
             // name/location shouldn't require never having finished logging. "Relocate" (not
             // "This Race") since that screen's own new capability — editing location mid-race,
@@ -64,4 +79,7 @@ fun ModeScreenTopBar(
         expandedHeight = CompactTopAppBarHeight,
         windowInsets = WindowInsets(0, 0, 0, 0),
     )
+    if (showHelp && helpTopic != null) {
+        HelpTopicDialog(topic = helpTopic, onDismiss = { showHelp = false })
+    }
 }

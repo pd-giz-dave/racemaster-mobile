@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -41,7 +42,13 @@ fun ProgressDetailScreen(
     Scaffold(
         topBar = {
             ScreenTopBar(
-                title = { Text(uiState.raceName.ifBlank { uiState.raceLabel }.ifBlank { "Progress" }) },
+                title = {
+                    Text(
+                        uiState.raceName.ifBlank { uiState.raceLabel }.ifBlank { "Progress" },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
                 onBack = onBack,
                 onHome = onHome,
             )

@@ -40,6 +40,7 @@ import mobile.racemaster.ui.components.DigitKeypad
 import mobile.racemaster.ui.components.EntryLogList
 import mobile.racemaster.ui.components.EntryModeHeaderInfo
 import mobile.racemaster.ui.components.ModeScreenTopBar
+import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.ui.components.ResetButton
 import mobile.racemaster.ui.components.UndoLastButton
 import mobile.racemaster.ui.components.rememberListClickGuard
@@ -119,6 +120,7 @@ fun BibsModeScreen(
                 thisRaceEnabled = uiState.raceId != null,
                 onThisRace = { uiState.raceId?.let(onEditRace) },
                 onHome = onHome,
+                helpTopic = HelpTopics.BibsMode,
             )
         },
         // MainActivity's outer Scaffold (no bottomBar) already reserves the navigation

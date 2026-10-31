@@ -38,6 +38,7 @@ import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.ui.components.ModeScreenTopBar
+import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.ui.components.RaceProgressSummary
 import mobile.racemaster.ui.components.ResetButton
 import mobile.racemaster.ui.components.SplitRow
@@ -78,6 +79,7 @@ fun TimeModeScreen(
             ModeScreenTopBar(
                 title = "Time Mode",
                 onHome = onHome,
+                helpTopic = HelpTopics.TimeMode,
             )
         },
         // MainActivity's outer Scaffold (no bottomBar) already reserves the navigation
