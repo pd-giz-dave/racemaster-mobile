@@ -17,6 +17,7 @@ import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.settings.SettingsRepository
+import mobile.racemaster.util.BibSpeaker
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "app_settings")
 
@@ -30,6 +31,7 @@ interface AppContainer {
     val serverStatusRepository: ServerStatusRepository
     val bluetoothStateRepository: BluetoothStateRepository
     val progressRepository: ProgressRepository
+    val bibSpeaker: BibSpeaker
 }
 
 class DefaultAppContainer(context: Context) : AppContainer {
@@ -82,4 +84,6 @@ class DefaultAppContainer(context: Context) : AppContainer {
     override val progressRepository: ProgressRepository by lazy {
         ProgressRepository(muleSyncClient, database.progressDao(), database.targetedProgressDao())
     }
+
+    override val bibSpeaker: BibSpeaker by lazy { BibSpeaker(context) }
 }

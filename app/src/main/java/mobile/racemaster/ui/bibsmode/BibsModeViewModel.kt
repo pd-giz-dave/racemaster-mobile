@@ -32,12 +32,15 @@ import mobile.racemaster.data.repository.outstandingAtLocation
 import mobile.racemaster.data.repository.unexpectedBibNumbers
 import mobile.racemaster.data.repository.unexpectedBibWarning
 import mobile.racemaster.data.settings.AppMode
+import mobile.racemaster.data.settings.BibVoice
+import mobile.racemaster.data.settings.DEFAULT_BIB_SPEECH_VOICE
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.di.applicationContext
 import mobile.racemaster.ui.btPollingStatusFlow
 import mobile.racemaster.ui.components.EntryLogUi
 import mobile.racemaster.ui.deviceNameFlow
+import mobile.racemaster.util.BibSpeaker
 import mobile.racemaster.util.Beeper
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -146,6 +149,7 @@ class BibsModeViewModel(
     private val progressRepository: ProgressRepository,
     bluetoothStateRepository: BluetoothStateRepository,
     private val beeper: Beeper,
+    private val bibSpeaker: BibSpeaker,
 ) : ViewModel() {
 
     private val raceIdFlow: StateFlow<Long?> = settingsRepository.activeRaceId
@@ -156,6 +160,14 @@ class BibsModeViewModel(
     // a screen-driven WhileSubscribed collector would have started.
     private val defaultBibsActionFlow: StateFlow<HistoryAction> = settingsRepository.bibsAutoSaveAction
         .stateIn(viewModelScope, SharingStarted.Eagerly, HistoryAction.FINISH)
+
+    // Same eager reasoning as defaultBibsActionFlow above — onDigit needs both synchronously via
+    // .value the instant a 3rd digit commits.
+    private val speakBibsAloudFlow: StateFlow<Boolean> = settingsRepository.speakBibsAloud
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    private val bibSpeechVoiceFlow: StateFlow<BibVoice> = settingsRepository.bibSpeechVoice
+        .stateIn(viewModelScope, SharingStarted.Eagerly, DEFAULT_BIB_SPEECH_VOICE)
 
     val deviceName: StateFlow<String?> = deviceNameFlow(settingsRepository)
 
@@ -336,12 +348,21 @@ class BibsModeViewModel(
         digitsFlow.value += digit.toString()
         if (digitsFlow.value.length == MAX_BIB_DIGITS) {
             val raceId = raceIdFlow.value ?: return
-            val bib = digitsFlow.value.toIntOrNull() ?: return
+            val typedDigits = digitsFlow.value
+            val bib = typedDigits.toIntOrNull() ?: return
             viewModelScope.launch {
                 bibsModeRepository.recordEntry(raceId, defaultBibsActionFlow.value, bib, note = null)
                 digitsFrozenFlow.value = true
                 canRetagFlow.value = true
-                beeper.beep()
+                // Spoken digits (preserving any leading zeros exactly as typed, unlike bib
+                // above) serve as the richer confirmation when the operator's opted in — see
+                // SettingsRepository.speakBibsAloud's own doc — so this replaces, rather than
+                // adds to, the plain beep rather than overlapping both sounds.
+                if (speakBibsAloudFlow.value) {
+                    bibSpeaker.speak(typedDigits, bibSpeechVoiceFlow.value)
+                } else {
+                    beeper.beep()
+                }
             }
         }
     }
@@ -451,6 +472,7 @@ class BibsModeViewModel(
                     container.progressRepository,
                     container.bluetoothStateRepository,
                     Beeper(applicationContext()),
+                    container.bibSpeaker,
                 )
             }
         }

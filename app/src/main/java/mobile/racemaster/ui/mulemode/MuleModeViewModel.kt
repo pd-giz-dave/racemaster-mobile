@@ -21,8 +21,12 @@ import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.data.mule.previouslySeenDevices
 import mobile.racemaster.data.mule.withLastPulledAtMillis
+import mobile.racemaster.data.settings.BibVoice
+import mobile.racemaster.data.settings.DEFAULT_BIB_SPEECH_VOICE
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
+import mobile.racemaster.util.BibSpeaker
+import mobile.racemaster.util.BibSpeakerStatus
 
 data class MuleModeUiState(
     // Live BLE-discovered/relayed devices, self, and stale entries from the persisted
@@ -85,6 +89,7 @@ class MuleModeViewModel(
     private val muleSyncEngine: MuleSyncEngine,
     private val settingsRepository: SettingsRepository,
     private val serverStatusRepository: ServerStatusRepository,
+    private val bibSpeaker: BibSpeaker,
 ) : ViewModel() {
 
     val deviceName: StateFlow<String?> = muleRepository.deviceName
@@ -113,6 +118,35 @@ class MuleModeViewModel(
     fun setPingIntervalSeconds(seconds: Int) {
         viewModelScope.launch { settingsRepository.setPingIntervalSeconds(seconds) }
     }
+
+    // See SettingsRepository.speakBibsAloud's own doc — same direct pass-through pattern as
+    // raceStaleAfterDays/pingIntervalSeconds above: a general operator setting unrelated to
+    // Mule syncing itself, surfaced on this same Options screen. Unlike those two, this renders
+    // as an immediate-effect toggle (no text field to prefill), so it defaults to false/the real
+    // default rather than null — same reasoning as bluetoothOff/muleSyncEnabled below.
+    val speakBibsAloud: StateFlow<Boolean> = settingsRepository.speakBibsAloud
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setSpeakBibsAloud(enabled: Boolean) {
+        viewModelScope.launch { settingsRepository.setSpeakBibsAloud(enabled) }
+    }
+
+    val bibSpeechVoice: StateFlow<BibVoice> = settingsRepository.bibSpeechVoice
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DEFAULT_BIB_SPEECH_VOICE)
+
+    fun setBibSpeechVoice(voice: BibVoice) {
+        viewModelScope.launch { settingsRepository.setBibSpeechVoice(voice) }
+    }
+
+    // See BibSpeaker's own class doc for why UNAVAILABLE can't just be fixed with a single
+    // in-app tap — SpeakBibsAloudControl uses this (and bibSpeakerEnginePackage below) to tell
+    // the operator why nothing's being spoken instead of leaving the feature silently inert.
+    val bibSpeakerStatus: StateFlow<BibSpeakerStatus> = bibSpeaker.status
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BibSpeakerStatus.UNKNOWN)
+
+    fun bibSpeakerEnginePackage(): String? = bibSpeaker.enginePackageName()
+
+    fun retryBibSpeakerIfUnavailable() = bibSpeaker.retryIfUnavailable()
 
     // See SettingsRepository.muleSyncEnabled's own doc — the explicit "Enable/Disable Mule
     // syncing" control on SetupOptionsScreen, independent of whichever recording mode (if any)
@@ -258,6 +292,7 @@ class MuleModeViewModel(
                     container.muleSyncEngine,
                     container.settingsRepository,
                     container.serverStatusRepository,
+                    container.bibSpeaker,
                 )
             }
         }

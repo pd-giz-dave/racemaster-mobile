@@ -81,7 +81,7 @@ one.
 
 - [x] races history is showing multiple (self) lists for the same race
 - [x] races history is showing multiple progress lists for the same race
-     (maybe due to coming via different sources?)
+      (maybe due to coming via different sources?)
 - [x] if a self history file is deleted, delete it on the web too and tell any connected mules
       to dump it as well (ie. ensure it gets flushed from everywhere, mule should also tell the
       web-app its gone and remove it from the server, else it keeps coming back,
@@ -130,7 +130,7 @@ one.
 - [x] NewRace marker is being processed on every push to the server, resulting in the file
       being dumped and fully re-loaded on every push
 - [x] progress files should be labelled "race-name" on line 1 (same as history files) then on
-  line 2 "progress as at <time>, # entries", remove the icon
+      line 2 "progress as at <time>, # entries", remove the icon
 - [x] races history line 2 should read "# entries from ..." not just "from..."
 - [x] show last sync'd on line 3 for a history file (echoing what is shown in the file)
 
@@ -240,17 +240,17 @@ risk is that `minSdk`/Android version doesn't guarantee BLE *peripheral* (advert
 server) support, which Mule Mode's hosting role (`PeripheralSyncService.kt`) needs - that's a
 chipset capability, not an OS one.
 
-- [ ] confirm BLE peripheral/advertising hardware support (quick, no app needed):
+- [x] confirm BLE peripheral/advertising hardware support (quick, no app needed):
   `adb shell dumpsys bluetooth_manager | grep -iE "state|address|le_audio|advertis|multiple"`
   and look for any "LE Advertising not supported" line (not fully reliable on its own, see next)
 - [ ] confirm with nRF Connect (free Play Store app): install on the XCover 4 and on a known-good
       second phone; on the XCover 4 open Advertiser tab and start an advertisement; on the second
       phone's Scanner tab confirm it's seen. If the Advertiser tab is missing/greyed out/errors,
       the hardware doesn't support peripheral mode - hard blocker for using it as a Mule host
-- [ ] battery health: `adb shell dumpsys battery`, check `level`/`temperature`/`health` (want
+- [x] battery health: `adb shell dumpsys battery`, check `level`/`temperature`/`health` (want
       `GOOD`); also do a real check - charge to 100%, screen off, see how much it drops in an
       hour (check every unit received, not just this one - used 2017 batteries vary)
-- [ ] real end-to-end test with the actual app: `./gradlew installDebug` on the XCover 4 and a
+- [x] real end-to-end test with the actual app: `./gradlew installDebug` on the XCover 4 and a
       second device, then run one real Mule sync in each direction - XCover 4 as host/peripheral
       vs puller/central, and swap. Watch with:
       `adb logcat | grep -iE "mule|peripheral|gatt|advertis"`
@@ -260,13 +260,13 @@ chipset capability, not an OS one.
 ## More tweaks
 
 - [x] the 'back' mechanism is awkward, implement a means to directly move between screens
-- [ ] do the XCover 4 checks mentioned in lines 243-256 above
-- [ ] the XCover 4 is not keeping the screen on while the app is running
+- [x] do the XCover 4 checks mentioned in lines 243-256 above
+- [x] the XCover 4 is not keeping the screen on while the app is running
       and battery optimisation is staying on
 - [x] the help system needs re-doing, nobody will read the current help essays,
       a more discoverable, hand-holding system is required
 - [x] add a what's new section for every version to the mode picker help, outer heading is
       "What's New", that opens a list with a heading per version, newest first
-- [ ] when a bib number is recorded can the speak the number as 3 separate digits,
+- [x] when a bib number is recorded, the speak the number as 3 separate digits in a loud male or female voice,
       eg. for "123" speak: one two three, this needs to be a persistent option (it may not be
-      practical on the finish line but will be at an on course checkpoint)
+      practical on the finish line but will be at an on-course checkpoint)

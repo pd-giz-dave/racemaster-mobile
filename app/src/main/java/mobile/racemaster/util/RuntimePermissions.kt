@@ -57,7 +57,16 @@ fun Context.isPermissionRequestDialogSuppressed(permissions: Array<String>): Boo
  *  this screen, where the operator flips Bluetooth/Notifications off themselves in a couple of
  *  taps — mainly useful for re-testing the recovery path (Setup Device's own status rows)
  *  without needing adb. */
-fun Context.openAppPermissionSettings() {
-    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null))
+fun Context.openAppPermissionSettings() = openAppInfo(packageName)
+
+/** Same App Info screen as [openAppPermissionSettings], for an arbitrary OTHER app rather than
+ *  this one — e.g. BibSpeaker's own "fix it" action, which needs to point at whichever
+ *  text-to-speech engine package the device actually uses (varies by OEM), not this app's own.
+ *  No normal app can flip another app's enabled/disabled state itself
+ *  (PackageManager.setApplicationEnabledSetting on someone else's package needs a
+ *  signature/system permission this app will never hold) — landing an operator here, where an
+ *  Enable button appears for a disabled package, is the closest a one-more-tap fix gets. */
+fun Context.openAppInfo(targetPackageName: String) {
+    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", targetPackageName, null))
     runCatching { startActivity(intent) }
 }

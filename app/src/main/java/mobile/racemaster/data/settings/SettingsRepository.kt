@@ -42,6 +42,10 @@ const val DEFAULT_PING_INTERVAL_SECONDS = 60
 // Kotlin compile-time constant the way the Int defaults above are.
 val DEFAULT_BIBS_AUTO_SAVE_ACTION: HistoryAction = HistoryAction.FINISH
 
+// See SettingsRepository.bibSpeechVoice's own doc. No inherent reason to prefer one — picked
+// FEMALE only so the setting has *some* deterministic value before an operator ever touches it.
+val DEFAULT_BIB_SPEECH_VOICE: BibVoice = BibVoice.FEMALE
+
 class SettingsRepository(
     private val dataStore: DataStore<Preferences>,
 ) {
@@ -71,6 +75,8 @@ class SettingsRepository(
         val RACE_STALE_AFTER_DAYS = intPreferencesKey("server_sync_max_age_days")
         val PING_INTERVAL_SECONDS = intPreferencesKey("ping_interval_seconds")
         val BIBS_AUTO_SAVE_ACTION = stringPreferencesKey("bibs_auto_save_action")
+        val SPEAK_BIBS_ALOUD = booleanPreferencesKey("speak_bibs_aloud")
+        val BIB_SPEECH_VOICE = stringPreferencesKey("bib_speech_voice")
     }
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -410,5 +416,29 @@ class SettingsRepository(
 
     suspend fun setBibsAutoSaveAction(action: HistoryAction) {
         dataStore.edit { prefs -> prefs[Keys.BIBS_AUTO_SAVE_ACTION] = action.name }
+    }
+
+    // Whether BibsModeViewModel.onDigit speaks a bib aloud, digit-by-digit, instead of just
+    // beeping, once a 3rd digit commits it (see that function's own doc and BibSpeaker's own
+    // doc for how). Off by default — TODO.md: not practical at a busy/noisy finish line, only
+    // switched on deliberately for a quieter on-course checkpoint where audio confirmation is
+    // actually useful.
+    val speakBibsAloud: Flow<Boolean> = dataStore.data.map { prefs -> prefs[Keys.SPEAK_BIBS_ALOUD] ?: false }
+
+    suspend fun setSpeakBibsAloud(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.SPEAK_BIBS_ALOUD] = enabled }
+    }
+
+    // Which gendered voice speakBibsAloud above uses — see BibVoice's own doc. runCatching +
+    // fallback to DEFAULT_BIB_SPEECH_VOICE, same reasoning as appMode/bibsAutoSaveAction above:
+    // a value held under a BibVoice that's since been renamed/removed must degrade to the
+    // default, never crash the app on launch.
+    val bibSpeechVoice: Flow<BibVoice> = dataStore.data.map { prefs ->
+        prefs[Keys.BIB_SPEECH_VOICE]?.let { raw -> runCatching { BibVoice.valueOf(raw) }.getOrNull() }
+            ?: DEFAULT_BIB_SPEECH_VOICE
+    }
+
+    suspend fun setBibSpeechVoice(voice: BibVoice) {
+        dataStore.edit { prefs -> prefs[Keys.BIB_SPEECH_VOICE] = voice.name }
     }
 }

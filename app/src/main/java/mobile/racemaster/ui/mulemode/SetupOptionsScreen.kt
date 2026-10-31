@@ -93,6 +93,8 @@ fun SetupOptionsScreen(
             HorizontalDivider()
             BluetoothAndServerSyncToggles(uiState = uiState, viewModel = viewModel)
             HorizontalDivider()
+            SpeakBibsAloudControl(viewModel = viewModel)
+            HorizontalDivider()
             AutoSyncControls(uiState = uiState, viewModel = viewModel)
             HorizontalDivider()
             RaceStalenessControl(viewModel = viewModel)

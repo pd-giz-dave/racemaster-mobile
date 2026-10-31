@@ -1,5 +1,6 @@
 package mobile.racemaster.ui.mulemode
 
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -30,9 +31,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.data.settings.BibVoice
 import mobile.racemaster.ui.components.CompactTopAppBarHeight
 import mobile.racemaster.ui.components.HelpTopicDialog
 import mobile.racemaster.ui.components.ServerStatusLine
@@ -40,8 +44,10 @@ import mobile.racemaster.ui.components.SyncStatusLine
 import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.ui.theme.SyncedGreen
 import mobile.racemaster.ui.theme.UnsyncedRed
+import mobile.racemaster.util.BibSpeakerStatus
 import mobile.racemaster.util.formatTimeOfDay
 import mobile.racemaster.util.formatWallClock
+import mobile.racemaster.util.openAppInfo
 import mobile.racemaster.util.withClickSound
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -260,6 +266,76 @@ internal fun BluetoothAndServerSyncToggles(
                 Button(onClick = withClickSound(viewModel::turnServerSyncOn)) { Text("Server sync off") }
             } else {
                 OutlinedButton(onClick = withClickSound(viewModel::turnServerSyncOff)) { Text("Server sync on") }
+            }
+        }
+    }
+}
+
+// See SettingsRepository.speakBibsAloud/bibSpeechVoice's own docs — TODO.md: useful at a quiet
+// on-course checkpoint, not practical at a noisy finish line, hence a persistent, explicit
+// operator opt-in here rather than always-on. The voice choice is only shown while the toggle
+// itself is on, to avoid cluttering this screen with a control that does nothing when off.
+@Composable
+internal fun SpeakBibsAloudControl(viewModel: MuleModeViewModel) {
+    val speakBibsAloud by viewModel.speakBibsAloud.collectAsStateWithLifecycle()
+    val voice by viewModel.bibSpeechVoice.collectAsStateWithLifecycle()
+    val speakerStatus by viewModel.bibSpeakerStatus.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    // Catches an operator enabling the engine via "Fix text-to-speech" below and coming back —
+    // see BibSpeaker.retryIfUnavailable's own doc for why that wouldn't otherwise self-correct.
+    LifecycleResumeEffect(Unit) {
+        viewModel.retryBibSpeakerIfUnavailable()
+        onPauseOrDispose {}
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            "Speak bib numbers aloud — reads each digit out when a bib is recorded, instead of " +
+                "just beeping. Useful at a quiet checkpoint; not recommended at a busy finish line.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (speakBibsAloud) {
+            Button(onClick = withClickSound { viewModel.setSpeakBibsAloud(false) }) {
+                Text("Speak bibs aloud: ON")
+            }
+        } else {
+            OutlinedButton(onClick = withClickSound { viewModel.setSpeakBibsAloud(true) }) {
+                Text("Speak bibs aloud: OFF")
+            }
+        }
+        if (speakBibsAloud) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BibVoice.entries.forEach { option ->
+                    val label = if (option == BibVoice.MALE) "Male voice" else "Female voice"
+                    if (option == voice) {
+                        Button(onClick = withClickSound { viewModel.setBibSpeechVoice(option) }) { Text(label) }
+                    } else {
+                        OutlinedButton(onClick = withClickSound { viewModel.setBibSpeechVoice(option) }) { Text(label) }
+                    }
+                }
+            }
+            // See BibSpeaker's own class doc — this device's text-to-speech engine is present
+            // but unusable (confirmed live: an OEM can ship it pre-disabled), and no normal app
+            // can flip that back on by itself. "Fix" is the closest one-tap gets: the operator
+            // still has to tap Enable themselves on the screen this opens.
+            if (speakerStatus == BibSpeakerStatus.UNAVAILABLE) {
+                Text(
+                    "Text-to-speech isn't available on this device — it may be disabled in system settings.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                OutlinedButton(
+                    onClick = withClickSound {
+                        val enginePackage = viewModel.bibSpeakerEnginePackage()
+                        if (enginePackage != null) {
+                            Toast.makeText(context, "On the next screen, tap Enable", Toast.LENGTH_LONG).show()
+                            context.openAppInfo(enginePackage)
+                        } else {
+                            Toast.makeText(context, "No text-to-speech engine found on this device", Toast.LENGTH_LONG).show()
+                        }
+                    },
+                ) {
+                    Text("Fix text-to-speech")
+                }
             }
         }
     }
