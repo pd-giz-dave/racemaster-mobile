@@ -256,3 +256,17 @@ chipset capability, not an OS one.
       `adb logcat | grep -iE "mule|peripheral|gatt|advertis"`
 - [ ] if peripheral mode or the host-role test fails, don't buy the batch (or only use these
       units in the scanning/puller role with a different device acting as host)
+
+## More tweaks
+
+- [x] the 'back' mechanism is awkward, implement a means to directly move between screens
+- [ ] do the XCover 4 checks mentioned in lines 243-256 above
+- [ ] the XCover 4 is not keeping the screen on while the app is running
+      and battery optimisation is staying on
+- [x] the help system needs re-doing, nobody will read the current help essays,
+      a more discoverable, hand-holding system is required
+- [x] add a what's new section for every version to the mode picker help, outer heading is
+      "What's New", that opens a list with a heading per version, newest first
+- [ ] when a bib number is recorded can the speak the number as 3 separate digits,
+      eg. for "123" speak: one two three, this needs to be a persistent option (it may not be
+      practical on the finish line but will be at an on course checkpoint)

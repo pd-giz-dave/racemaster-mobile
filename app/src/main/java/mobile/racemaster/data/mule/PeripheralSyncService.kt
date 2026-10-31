@@ -252,6 +252,21 @@ class PeripheralSyncService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        // Normally unreachable — startIfPermitted's own gate gives every call site that starts
+        // this service a permission check first. But this is a START_STICKY service, and the
+        // OS restarts one itself after its process dies, calling onCreate() directly with no
+        // gate in front of it at all. Confirmed in the field: revoking the Bluetooth
+        // permissions (e.g. via system Settings) while this service is running kills the
+        // process, the OS immediately restarts the sticky service, and startForeground()'s own
+        // FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE check throws an uncaught SecurityException
+        // when none of them are held anymore — an unrecoverable crash loop until something
+        // re-grants one. Stopping cleanly here instead is the only alternative; Setup Device's
+        // own Bluetooth status row (see SetupDeviceScreen's BluetoothPermissionStatus) is what
+        // lets the operator notice and re-grant it, which restarts this normally.
+        if (!hasConnectPermission() || !hasAdvertisePermission() || !hasScanPermission()) {
+            stopSelf()
+            return
+        }
         startForegroundWithNotification()
         observeServingState()
         observeDeviceName()
@@ -1459,6 +1474,10 @@ class PeripheralSyncService : Service() {
     private fun hasAdvertisePermission(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
             ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
+
+    private fun hasScanPermission(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
 
     // Only startForeground()'s own initial post is exempt from this runtime permission — every
     // later NotificationManager.notify() update against the same ID (updateNotification) still

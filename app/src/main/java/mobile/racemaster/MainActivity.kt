@@ -1,13 +1,6 @@
 package mobile.racemaster
 
-import android.Manifest
-import android.annotation.SuppressLint
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
-import android.os.PowerManager
-import android.provider.Settings
 import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -18,12 +11,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.ui.Modifier
-import androidx.core.content.ContextCompat
-import androidx.core.net.toUri
 import mobile.racemaster.data.mule.PeripheralSyncService
 import mobile.racemaster.navigation.RacemasterNavHost
 import mobile.racemaster.ui.components.AppBanner
 import mobile.racemaster.ui.theme.RacemasterMobileTheme
+import mobile.racemaster.util.bluetoothPermissions
+import mobile.racemaster.util.hasAllPermissions
+import mobile.racemaster.util.isIgnoringBatteryOptimizations
+import mobile.racemaster.util.notificationPermissions
+import mobile.racemaster.util.requestIgnoreBatteryOptimizations
 
 class MainActivity : ComponentActivity() {
 
@@ -103,42 +99,17 @@ class MainActivity : ComponentActivity() {
     // decided is "inactive" regardless of that flag. Excluding the app from battery
     // optimization is the standard fix — this shows the system's one-tap permission dialog
     // for it, once; if the operator declines, this just no-ops on every later launch rather
-    // than nagging (checked fresh each time in case they grant it later via system Settings
-    // instead).
-    //
-    // Play Store Content Policy justification (lint's BatteryLife check flags this API by
-    // default, since it's commonly abused): this app's core function is continuous
-    // phone-to-phone BLE mesh sync (see PeripheralSyncService/STRUCTURE.md's Mule BLE protocol
-    // doc) plus staying on as a race-timing clicker during an event — Doze suspending that
-    // background BLE radio/GATT server activity would silently break race data sync for
-    // however long the device sleeps, which is exactly the "app's core functionality is
-    // negatively impacted" carve-out the policy allows.
-    @SuppressLint("BatteryLife")
+    // than nagging here (Setup Device's own status row — see KeepScreenOnStatus — is where
+    // they can retry later instead, since this silent one-shot gives no other way back in).
     private fun requestIgnoreBatteryOptimizationsIfNeeded() {
-        val powerManager = getSystemService(PowerManager::class.java) ?: return
-        if (powerManager.isIgnoringBatteryOptimizations(packageName)) return
-        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:$packageName".toUri())
-        runCatching { startActivity(intent) }
+        if (isIgnoringBatteryOptimizations()) return
+        requestIgnoreBatteryOptimizations()
     }
 
     private fun requestBluetoothPermissionsIfNeeded() {
-        val required = buildList {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                addAll(listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE))
-            } else {
-                add(Manifest.permission.ACCESS_FINE_LOCATION)
-            }
-            // Needed for PeripheralSyncService.updateNotification's ongoing-notification
-            // updates, not the initial startForeground() post (exempt on every API level).
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                add(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }
-        val missing = required.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-        if (missing.isNotEmpty()) {
-            requestBluetoothPermissions.launch(missing.toTypedArray())
+        val required = bluetoothPermissions() + notificationPermissions()
+        if (!hasAllPermissions(required)) {
+            requestBluetoothPermissions.launch(required)
         }
     }
 
