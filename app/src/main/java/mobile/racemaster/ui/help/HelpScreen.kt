@@ -95,9 +95,50 @@ fun HelpScreen(onBack: () -> Unit, onHome: () -> Unit) {
                 },
                 style = MaterialTheme.typography.bodySmall,
             )
+            WhatsNewCard(WhatsNew.versions)
             HelpTopics.all.forEach { topic -> HelpTopicCard(topic) }
         }
     }
+}
+
+@Composable
+private fun WhatsNewCard(versions: List<VersionNotes>) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded },
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("What's New", style = MaterialTheme.typography.titleMedium)
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+            )
+        }
+        if (expanded) {
+            Column(
+                modifier = Modifier.padding(top = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                versions.forEach { version ->
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            "v${version.version}",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        version.highlights.forEach { tip ->
+                            Text("•  $tip", style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    HorizontalDivider(modifier = Modifier.padding(top = 12.dp))
 }
 
 @Composable
