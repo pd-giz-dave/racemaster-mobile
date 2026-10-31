@@ -24,7 +24,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -47,6 +46,7 @@ import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.components.DiscardChangesDialog
 import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.ui.components.HistoryTextField
+import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.util.formatShortDate
 import mobile.racemaster.util.withClickSound
 
@@ -62,6 +62,7 @@ import mobile.racemaster.util.withClickSound
 @Composable
 fun SetupRaceScreen(
     onDone: () -> Unit,
+    onHome: () -> Unit,
     viewModel: SetupRaceViewModel = viewModel(factory = SetupRaceViewModel.Factory),
 ) {
     val hasActiveRace by viewModel.hasActiveRace.collectAsStateWithLifecycle()
@@ -141,23 +142,22 @@ fun SetupRaceScreen(
     // must revert to what it held on entry (see SetupRaceViewModel.revertDraft's own doc),
     // not just pop the screen: otherwise this visit's abandoned edits stay sitting in the
     // draft, indistinguishable from an already-saved baseline, and Save comes back permanently
-    // disabled on the next visit — a real, confirmed bug. Wired to both the top bar's own Back
-    // button and the system back gesture/button, so neither one bypasses this.
-    var showDiscardConfirm by remember { mutableStateOf(false) }
-    val attemptExit = {
-        if (hasChanges) showDiscardConfirm = true else onDone()
+    // disabled on the next visit — a real, confirmed bug. Wired to both the top bar's own
+    // Back/Home buttons and the system back gesture/button, so none of them bypasses this.
+    // [pendingExit] carries which of the two (onDone or onHome) to actually run once confirmed.
+    var pendingExit by remember { mutableStateOf<(() -> Unit)?>(null) }
+    fun attemptExit(exit: () -> Unit) {
+        if (hasChanges) pendingExit = exit else exit()
     }
-    BackHandler(onBack = attemptExit)
+    BackHandler(onBack = { attemptExit(onDone) })
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            ScreenTopBar(
                 title = { Text("Setup Race") },
-                actions = {
-                    HideKeyboardButton()
-                    TextButton(onClick = withClickSound(attemptExit)) { Text("Back") }
-                },
-                windowInsets = WindowInsets(0, 0, 0, 0),
+                onBack = { attemptExit(onDone) },
+                onHome = { attemptExit(onHome) },
+                extraActions = { HideKeyboardButton() },
             )
         },
         // MainActivity's outer Scaffold already reserves the nav bar's bottom inset for
@@ -276,16 +276,16 @@ fun SetupRaceScreen(
         }
     }
 
-    if (showDiscardConfirm) {
+    pendingExit?.let { exit ->
         DiscardChangesDialog(
             onConfirm = {
-                showDiscardConfirm = false
+                pendingExit = null
                 scope.launch {
                     viewModel.revertDraft(initialName, initialLocation, initialMode)
-                    onDone()
+                    exit()
                 }
             },
-            onDismiss = { showDiscardConfirm = false },
+            onDismiss = { pendingExit = null },
         )
     }
 }

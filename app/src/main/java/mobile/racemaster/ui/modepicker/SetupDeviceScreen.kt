@@ -11,14 +11,13 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.ui.mulemode.ConnectivityStatusText
 import mobile.racemaster.ui.mulemode.MuleModeViewModel
 import mobile.racemaster.util.withClickSound
@@ -38,6 +37,7 @@ import mobile.racemaster.util.withClickSound
 @Composable
 fun SetupDeviceScreen(
     onDone: () -> Unit,
+    onHome: () -> Unit,
     onSetupName: () -> Unit,
     onSetupServer: () -> Unit,
     onOptions: () -> Unit,
@@ -49,11 +49,7 @@ fun SetupDeviceScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Setup Device") },
-                actions = { TextButton(onClick = withClickSound(onDone)) { Text("Back") } },
-                windowInsets = WindowInsets(0, 0, 0, 0),
-            )
+            ScreenTopBar(title = { Text("Setup Device") }, onBack = onDone, onHome = onHome)
         },
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->

@@ -16,8 +16,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -30,6 +28,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.ui.components.DiscardChangesDialog
 import mobile.racemaster.ui.components.HideKeyboardButton
+import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.util.withClickSound
 
 /** Lets the operator see and rename this phone's memorable identity — the name every split
@@ -39,6 +38,7 @@ import mobile.racemaster.util.withClickSound
 @Composable
 fun NameDeviceScreen(
     onDone: () -> Unit,
+    onHome: () -> Unit,
     viewModel: NameDeviceViewModel = viewModel(factory = NameDeviceViewModel.Factory),
 ) {
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
@@ -50,7 +50,7 @@ fun NameDeviceScreen(
     // operator is already typing.
     var prefilled by remember { mutableStateOf(false) }
     // The exact value this screen was seeded with, so leaving via Back can tell whether the
-    // operator actually changed anything this visit — see showDiscardConfirm's own doc below.
+    // operator actually changed anything this visit — see pendingExit's own doc below.
     var initialName by remember { mutableStateOf("") }
 
     LaunchedEffect(deviceName) {
@@ -64,23 +64,22 @@ fun NameDeviceScreen(
     val hasChanges = nameText != initialName
     // Leaving with an unsaved rename (typed or via Suggest Name) still on screen needs a
     // confirm — no separate draft to revert here, the field is only ever committed via Save, so
-    // discarding just means leaving without calling it. Wired to both the top bar's own Back
-    // button and the system back gesture/button.
-    var showDiscardConfirm by remember { mutableStateOf(false) }
-    val attemptExit = {
-        if (hasChanges) showDiscardConfirm = true else onDone()
+    // discarding just means leaving without calling it. Wired to both the top bar's own Back/Home
+    // buttons and the system back gesture/button, so none of them bypasses this. [pendingExit]
+    // carries which of the two (onDone or onHome) to actually run once confirmed.
+    var pendingExit by remember { mutableStateOf<(() -> Unit)?>(null) }
+    fun attemptExit(exit: () -> Unit) {
+        if (hasChanges) pendingExit = exit else exit()
     }
-    BackHandler(onBack = attemptExit)
+    BackHandler(onBack = { attemptExit(onDone) })
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            ScreenTopBar(
                 title = { Text("Name Device") },
-                actions = {
-                    HideKeyboardButton()
-                    TextButton(onClick = withClickSound(attemptExit)) { Text("Back") }
-                },
-                windowInsets = WindowInsets(0, 0, 0, 0),
+                onBack = { attemptExit(onDone) },
+                onHome = { attemptExit(onHome) },
+                extraActions = { HideKeyboardButton() },
             )
         },
         // MainActivity's outer Scaffold already reserves the nav bar's bottom inset for
@@ -134,13 +133,13 @@ fun NameDeviceScreen(
         }
     }
 
-    if (showDiscardConfirm) {
+    pendingExit?.let { exit ->
         DiscardChangesDialog(
             onConfirm = {
-                showDiscardConfirm = false
-                onDone()
+                pendingExit = null
+                exit()
             },
-            onDismiss = { showDiscardConfirm = false },
+            onDismiss = { pendingExit = null },
         )
     }
 }

@@ -18,7 +18,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,6 +31,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.util.withClickSound
 
 /** The actual Bluetooth on/off, server-sync on/off, and auto-sync controls — split out from
@@ -44,6 +44,7 @@ import mobile.racemaster.util.withClickSound
 @Composable
 fun SetupOptionsScreen(
     onDone: () -> Unit,
+    onHome: () -> Unit,
     // Fires right after a successful Enable (not Disable) — see ModePickerScreen's own
     // onMuleSetupNeeded/onMuleModeSelected doc for why: tapping "Mule Mode" on the picker while
     // it's off routes here first (there's nothing to show on Mule Mode's own dashboard until
@@ -66,11 +67,7 @@ fun SetupOptionsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Options") },
-                actions = { TextButton(onClick = withClickSound(onDone)) { Text("Back") } },
-                windowInsets = WindowInsets(0, 0, 0, 0),
-            )
+            ScreenTopBar(title = { Text("Options") }, onBack = onDone, onHome = onHome)
         },
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { padding ->

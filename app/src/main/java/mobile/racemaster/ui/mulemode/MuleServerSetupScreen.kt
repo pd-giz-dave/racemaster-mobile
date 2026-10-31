@@ -23,8 +23,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -49,6 +47,7 @@ import mobile.racemaster.data.settings.ServerSetupDraft
 import mobile.racemaster.ui.components.DiscardChangesDialog
 import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.ui.components.HistoryTextField
+import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.ui.theme.ServerOfflineRed
 import mobile.racemaster.ui.theme.SyncedGreen
 import mobile.racemaster.util.withClickSound
@@ -59,6 +58,7 @@ import mobile.racemaster.util.withClickSound
 @Composable
 fun MuleServerSetupScreen(
     onDone: () -> Unit,
+    onHome: () -> Unit,
     viewModel: MuleServerSetupViewModel = viewModel(factory = MuleServerSetupViewModel.Factory),
 ) {
     val draft by viewModel.draft.collectAsStateWithLifecycle()
@@ -99,7 +99,7 @@ fun MuleServerSetupScreen(
     var lastKnownGoodDraft by remember { mutableStateOf<ServerSetupDraft?>(null) }
     // The exact values this screen was seeded with (post dev-default fallback), so leaving via
     // Back can tell whether the operator actually changed anything this visit — see
-    // showDiscardConfirm's own doc below.
+    // pendingExit's own doc below.
     var initialUrl by remember { mutableStateOf("") }
     var initialUsername by remember { mutableStateOf("") }
     var initialPassword by remember { mutableStateOf("") }
@@ -139,37 +139,36 @@ fun MuleServerSetupScreen(
     // MuleServerSetupViewModel.save's own doc — deliberate, for a quick in-place retry) while
     // leaving the actually-active session untouched. Leaving instead of retrying must not leave
     // that bad/half-edited draft behind masking the credentials sync is still really using —
-    // revert it back to what it held on entry first.
-    val discardAndExit: () -> Unit = {
+    // revert it back to what it held on entry first, then run whichever exit ([onDone] or
+    // [onHome]) got us here.
+    val discardAndExit: (() -> Unit) -> Unit = { exit ->
         val snapshot = lastKnownGoodDraft
         if (snapshot == null) {
-            onDone()
+            exit()
         } else {
             scope.launch {
                 viewModel.revertDraft(snapshot)
-                onDone()
+                exit()
             }
         }
     }
     // Leaving with unsaved edits still on screen needs a confirm first — wired to both the top
-    // bar's own Back button and the system back gesture/button (see DiscardChangesDialog's own
-    // doc for why silently discarding, or letting the gesture bypass this, is the wrong default
-    // here).
-    var showDiscardConfirm by remember { mutableStateOf(false) }
-    val attemptExit: () -> Unit = {
-        if (hasChanges) showDiscardConfirm = true else discardAndExit()
+    // bar's own Back/Home buttons and the system back gesture/button (see DiscardChangesDialog's
+    // own doc for why silently discarding, or letting the gesture bypass this, is the wrong
+    // default here). [pendingExit] carries which of the two to actually run once confirmed.
+    var pendingExit by remember { mutableStateOf<(() -> Unit)?>(null) }
+    fun attemptExit(exit: () -> Unit) {
+        if (hasChanges) pendingExit = exit else discardAndExit(exit)
     }
-    BackHandler(onBack = attemptExit)
+    BackHandler(onBack = { attemptExit(onDone) })
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            ScreenTopBar(
                 title = { Text("Setup Server") },
-                actions = {
-                    HideKeyboardButton()
-                    TextButton(onClick = withClickSound(attemptExit)) { Text("Back") }
-                },
-                windowInsets = WindowInsets(0, 0, 0, 0),
+                onBack = { attemptExit(onDone) },
+                onHome = { attemptExit(onHome) },
+                extraActions = { HideKeyboardButton() },
             )
         },
         // MainActivity's outer Scaffold already reserves the nav bar's bottom inset for
@@ -289,13 +288,13 @@ fun MuleServerSetupScreen(
         }
     }
 
-    if (showDiscardConfirm) {
+    pendingExit?.let { exit ->
         DiscardChangesDialog(
             onConfirm = {
-                showDiscardConfirm = false
-                discardAndExit()
+                pendingExit = null
+                discardAndExit(exit)
             },
-            onDismiss = { showDiscardConfirm = false },
+            onDismiss = { pendingExit = null },
         )
     }
 }

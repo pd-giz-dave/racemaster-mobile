@@ -100,7 +100,7 @@ private fun DefaultBibsActionSelector(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BibsModeScreen(
-    onChangeMode: () -> Unit,
+    onHome: () -> Unit,
     onEditRace: (raceId: Long) -> Unit,
     onEditEntry: (entryId: Long) -> Unit,
     viewModel: BibsModeViewModel = viewModel(factory = BibsModeViewModel.Factory),
@@ -118,7 +118,7 @@ fun BibsModeScreen(
                 title = "Bibs Mode",
                 thisRaceEnabled = uiState.raceId != null,
                 onThisRace = { uiState.raceId?.let(onEditRace) },
-                onChangeMode = onChangeMode,
+                onHome = onHome,
             )
         },
         // MainActivity's outer Scaffold (no bottomBar) already reserves the navigation

@@ -1,7 +1,11 @@
 package mobile.racemaster.ui.components
 
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -30,7 +34,11 @@ fun ModeScreenTopBar(
     // it to relocate) leaves this unset rather than wiring a button to a screen that would only
     // ever edit a location it doesn't use. Bibs still wires it, unchanged.
     onThisRace: (() -> Unit)? = null,
-    onChangeMode: () -> Unit,
+    // Always jumps straight to Mode Picker (see RacemasterNavHost.navigateHome) rather than a
+    // single pop — a dashboard's own back stack is always exactly [ModePicker, this screen] (see
+    // RacemasterNavHost), so a separate single-pop Back button here would always be 100% redundant
+    // with this one; an icon rather than a "Back"-labelled TextButton reflects that honestly.
+    onHome: () -> Unit,
 ) {
     // The persistent AppBanner (above this bar) already reserves space for the status
     // bar, so this bar must not also apply it — otherwise the two stack and leave a gap.
@@ -49,7 +57,9 @@ fun ModeScreenTopBar(
             if (onThisRace != null) {
                 TextButton(onClick = withClickSound(onThisRace), enabled = thisRaceEnabled) { Text("Relocate") }
             }
-            TextButton(onClick = withClickSound(onChangeMode)) { Text("Back") }
+            IconButton(onClick = withClickSound(onHome)) {
+                Icon(Icons.Filled.Home, contentDescription = "Home")
+            }
         },
         expandedHeight = CompactTopAppBarHeight,
         windowInsets = WindowInsets(0, 0, 0, 0),

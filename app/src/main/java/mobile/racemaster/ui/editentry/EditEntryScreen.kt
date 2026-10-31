@@ -19,8 +19,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -45,6 +43,7 @@ import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.ui.components.ActionPickerDialog
 import mobile.racemaster.ui.components.DiscardChangesDialog
 import mobile.racemaster.ui.components.HideKeyboardButton
+import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.util.withClickSound
 
 /**
@@ -63,6 +62,7 @@ fun EditEntryScreen(
     entryId: Long,
     onSaved: () -> Unit,
     onCancel: () -> Unit,
+    onHome: () -> Unit,
     viewModel: EditEntryViewModel = viewModel(factory = EditEntryViewModel.factory(entryId)),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -81,7 +81,7 @@ fun EditEntryScreen(
     // operator's already typing.
     var prefilled by remember { mutableStateOf(false) }
     // The exact values this screen was seeded with, so leaving can tell whether the operator
-    // actually changed anything this visit — see showDiscardConfirm's own doc below. Covers
+    // actually changed anything this visit — see pendingExit's own doc below. Covers
     // both this screen's sub-forms (a plain Clock-row time edit only ever touches noteText; the
     // full type/bib/note edit can touch all three).
     var initialEditType by remember { mutableStateOf<HistoryAction?>(null) }
@@ -101,23 +101,22 @@ fun EditEntryScreen(
 
     val hasChanges = editType != initialEditType || bibText != initialBibText || noteText != initialNoteText
     // Leaving with an unsaved entry edit still on screen needs a confirm — wired to the top
-    // bar's own Back button, both sub-forms' own in-body Cancel button, and the system back
-    // gesture/button, so none of them bypasses this.
-    var showDiscardConfirm by remember { mutableStateOf(false) }
-    val attemptExit = {
-        if (hasChanges) showDiscardConfirm = true else onCancel()
+    // bar's own Back/Home buttons, both sub-forms' own in-body Cancel button, and the system
+    // back gesture/button, so none of them bypasses this. [pendingExit] carries which of
+    // onCancel/onHome to actually run once confirmed.
+    var pendingExit by remember { mutableStateOf<(() -> Unit)?>(null) }
+    fun attemptExit(exit: () -> Unit) {
+        if (hasChanges) pendingExit = exit else exit()
     }
-    BackHandler(onBack = attemptExit)
+    BackHandler(onBack = { attemptExit(onCancel) })
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            ScreenTopBar(
                 title = { Text(entry?.let { "Editing ${formatSplitRef(it.splitNumber)}" } ?: "Editing entry") },
-                actions = {
-                    HideKeyboardButton()
-                    TextButton(onClick = withClickSound(attemptExit)) { Text("Back") }
-                },
-                windowInsets = WindowInsets(0, 0, 0, 0),
+                onBack = { attemptExit(onCancel) },
+                onHome = { attemptExit(onHome) },
+                extraActions = { HideKeyboardButton() },
             )
         },
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -160,7 +159,7 @@ fun EditEntryScreen(
                         },
                         modifier = Modifier.weight(1f),
                     ) { Text("Save") }
-                    OutlinedButton(onClick = withClickSound(attemptExit), modifier = Modifier.weight(1f)) { Text("Cancel") }
+                    OutlinedButton(onClick = withClickSound { attemptExit(onCancel) }, modifier = Modifier.weight(1f)) { Text("Cancel") }
                 }
                 return@Column
             }
@@ -214,7 +213,7 @@ fun EditEntryScreen(
                     },
                     modifier = Modifier.weight(1f),
                 ) { Text("Save") }
-                OutlinedButton(onClick = withClickSound(attemptExit), modifier = Modifier.weight(1f)) { Text("Cancel") }
+                OutlinedButton(onClick = withClickSound { attemptExit(onCancel) }, modifier = Modifier.weight(1f)) { Text("Cancel") }
             }
 
             if (showActionPicker) {
@@ -231,13 +230,13 @@ fun EditEntryScreen(
         }
     }
 
-    if (showDiscardConfirm) {
+    pendingExit?.let { exit ->
         DiscardChangesDialog(
             onConfirm = {
-                showDiscardConfirm = false
-                onCancel()
+                pendingExit = null
+                exit()
             },
-            onDismiss = { showDiscardConfirm = false },
+            onDismiss = { pendingExit = null },
         )
     }
 }

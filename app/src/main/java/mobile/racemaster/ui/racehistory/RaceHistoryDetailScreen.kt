@@ -11,8 +11,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -24,25 +22,22 @@ import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.data.db.entity.displayName as modeDisplayName
 import mobile.racemaster.ui.components.HistoryLineDisplay
 import mobile.racemaster.ui.components.HistoryLinesList
+import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.util.formatWallClock
-import mobile.racemaster.util.withClickSound
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RaceHistoryDetailScreen(
     raceId: Long,
     onBack: () -> Unit,
+    onHome: () -> Unit,
 ) {
     val viewModel: RaceHistoryDetailViewModel = viewModel(factory = RaceHistoryDetailViewModel.factory(raceId))
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(uiState.raceLabel) },
-                actions = { TextButton(onClick = withClickSound(onBack)) { Text("Back") } },
-                windowInsets = WindowInsets(0, 0, 0, 0),
-            )
+            ScreenTopBar(title = { Text(uiState.raceLabel) }, onBack = onBack, onHome = onHome)
         },
         // MainActivity's outer Scaffold already reserves the nav bar's bottom inset for
         // every screen — without this, this inner Scaffold reserves it a second time.

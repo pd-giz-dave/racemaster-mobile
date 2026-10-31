@@ -21,7 +21,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.util.formatWallClock
 import mobile.racemaster.util.withClickSound
 
@@ -45,6 +45,7 @@ fun RaceHistoryScreen(
     // RaceHistoryViewModel.resumeRace's own doc. The caller decides where that lands (the Mode
     // Picker, so the operator picks whichever mode it was recording in).
     onRaceResumed: () -> Unit,
+    onHome: () -> Unit,
     viewModel: RaceHistoryViewModel = viewModel(factory = RaceHistoryViewModel.Factory),
 ) {
     val items by viewModel.historyItems.collectAsStateWithLifecycle()
@@ -62,18 +63,18 @@ fun RaceHistoryScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            ScreenTopBar(
                 title = { Text("Races") },
-                actions = {
+                onBack = onBack,
+                onHome = onHome,
+                extraActions = {
                     // Hidden entirely rather than disabled when there's nothing to sweep — this
                     // is an occasional maintenance action, not a primary control, and most
                     // visits to this screen have zero stale items to offer.
                     if (staleSummary.total > 0) {
                         TextButton(onClick = withClickSound { pendingDeleteAllStale = true }) { Text("Delete stale") }
                     }
-                    TextButton(onClick = withClickSound(onBack)) { Text("Back") }
                 },
-                windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },
         // MainActivity's outer Scaffold already reserves the nav bar's bottom inset for

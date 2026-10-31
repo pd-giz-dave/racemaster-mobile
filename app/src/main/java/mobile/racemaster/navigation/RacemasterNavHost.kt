@@ -98,11 +98,12 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                     )
                 }
                 composable(Routes.HELP) {
-                    HelpScreen(onBack = { navController.popBackStack() })
+                    HelpScreen(onBack = { navController.popBackStack() }, onHome = { navController.navigateHome() })
                 }
                 composable(Routes.SETUP_DEVICE) {
                     SetupDeviceScreen(
                         onDone = { navController.popBackStack() },
+                        onHome = { navController.navigateHome() },
                         onSetupName = { navController.navigate(Routes.NAME_DEVICE) },
                         onSetupServer = { navController.navigate(Routes.MULE_SERVER_SETUP) },
                         onOptions = { navController.navigate(Routes.SETUP_OPTIONS) },
@@ -110,10 +111,16 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                     )
                 }
                 composable(Routes.NAME_DEVICE) {
-                    NameDeviceScreen(onDone = { navController.popBackStack() })
+                    NameDeviceScreen(
+                        onDone = { navController.popBackStack() },
+                        onHome = { navController.navigateHome() },
+                    )
                 }
                 composable(Routes.SETUP_RACE) {
-                    SetupRaceScreen(onDone = { navController.popBackStack() })
+                    SetupRaceScreen(
+                        onDone = { navController.popBackStack() },
+                        onHome = { navController.navigateHome() },
+                    )
                 }
                 composable(
                     route = Routes.SETUP_OPTIONS_PATTERN,
@@ -122,6 +129,7 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                     val fromMule = backStackEntry.arguments?.getBoolean("fromMule") ?: false
                     SetupOptionsScreen(
                         onDone = { navController.popBackStack() },
+                        onHome = { navController.navigateHome() },
                         // See SetupOptionsScreen's own onMuleModeEnabled doc — pops Options off
                         // the back stack (same as Cancel/onDone would) on the way to the
                         // dashboard, rather than leaving it sitting underneath, so Back from
@@ -142,13 +150,13 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                 }
                 composable(Routes.TIME_MODE) {
                     TimeModeScreen(
-                        onChangeMode = { navController.navigateToModePicker() },
+                        onHome = { navController.navigateHome() },
                         onEditSplit = { splitId -> navController.navigate(Routes.editSplit(splitId)) },
                     )
                 }
                 composable(Routes.BIBS_MODE) {
                     BibsModeScreen(
-                        onChangeMode = { navController.navigateToModePicker() },
+                        onHome = { navController.navigateHome() },
                         onEditRace = { raceId -> navController.navigate(Routes.raceDetails(raceId)) },
                         onEditEntry = { entryId -> navController.navigate(Routes.editEntry(entryId)) },
                     )
@@ -162,6 +170,7 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                         splitId = splitId,
                         onSaved = { navController.popBackStack() },
                         onCancel = { navController.popBackStack() },
+                        onHome = { navController.navigateHome() },
                     )
                 }
                 composable(
@@ -173,18 +182,22 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                         entryId = entryId,
                         onSaved = { navController.popBackStack() },
                         onCancel = { navController.popBackStack() },
+                        onHome = { navController.navigateHome() },
                     )
                 }
                 composable(Routes.MULE_MODE) {
                     MuleModeScreen(
-                        onChangeMode = { navController.navigateToModePicker() },
+                        onHome = { navController.navigateHome() },
                         // fromMule=true — see Routes.setupOptions/SetupOptionsScreen's own
                         // onMuleModeDisabled doc for what this enables once there.
                         onOptions = { navController.navigate(Routes.setupOptions(fromMule = true)) },
                     )
                 }
                 composable(Routes.MULE_SERVER_SETUP) {
-                    MuleServerSetupScreen(onDone = { navController.popBackStack() })
+                    MuleServerSetupScreen(
+                        onDone = { navController.popBackStack() },
+                        onHome = { navController.navigateHome() },
+                    )
                 }
                 composable(
                     route = Routes.RACE_DETAILS,
@@ -206,6 +219,7 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                             else navController.popBackStack()
                         },
                         onCancel = { navController.popBackStack() },
+                        onHome = { navController.navigateHome() },
                     )
                 }
                 composable(Routes.RACE_HISTORY) {
@@ -221,6 +235,7 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                         // in, same as landing there for any other already-active race; see
                         // RaceHistoryViewModel.resumeRace's own doc.
                         onRaceResumed = { navController.popBackStack(Routes.MODE_PICKER, false) },
+                        onHome = { navController.navigateHome() },
                     )
                 }
                 composable(
@@ -228,14 +243,22 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                     arguments = listOf(navArgument("raceId") { type = NavType.LongType }),
                 ) { backStackEntry ->
                     val raceId = backStackEntry.arguments?.getLong("raceId") ?: return@composable
-                    RaceHistoryDetailScreen(raceId = raceId, onBack = { navController.popBackStack() })
+                    RaceHistoryDetailScreen(
+                        raceId = raceId,
+                        onBack = { navController.popBackStack() },
+                        onHome = { navController.navigateHome() },
+                    )
                 }
                 composable(
                     route = Routes.PROGRESS_DETAIL,
                     arguments = listOf(navArgument("raceId") { type = NavType.LongType }),
                 ) { backStackEntry ->
                     val raceId = backStackEntry.arguments?.getLong("raceId") ?: return@composable
-                    ProgressDetailScreen(raceId = raceId, onBack = { navController.popBackStack() })
+                    ProgressDetailScreen(
+                        raceId = raceId,
+                        onBack = { navController.popBackStack() },
+                        onHome = { navController.navigateHome() },
+                    )
                 }
                 composable(
                     route = Routes.MULE_SOURCE_DETAIL,
@@ -250,6 +273,7 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                         raceLabel = URLDecoder.decode(encodedRaceLabel, "UTF-8"),
                         sourceDeviceId = URLDecoder.decode(encodedSourceDeviceId, "UTF-8"),
                         onBack = { navController.popBackStack() },
+                        onHome = { navController.navigateHome() },
                     )
                 }
             }
@@ -266,8 +290,14 @@ private fun AppMode?.toRoute(): String = when (this) {
     null -> Routes.MODE_PICKER
 }
 
-private fun NavHostController.navigateToModePicker() {
-    navigate(Routes.MODE_PICKER) {
-        popUpTo(0) { inclusive = true }
-    }
+// The one general-purpose "jump straight to Mode Picker, skipping whatever's in between"
+// helper — generalizes the popBackStack(MODE_PICKER, inclusive=false) idiom already used a few
+// places below (onMuleModeDisabled, onRaceResumed, onSaved's mode-changed branch) into something
+// every screen's own Home action can call. Mode Picker is always already on the stack under
+// every other screen (it's the sole start destination), so this is always a plain pop, never a
+// fresh navigate — unlike the old navigateToModePicker() this replaces, which used to wipe the
+// entire stack via popUpTo(0), destroying and recreating Mode Picker itself even though it was
+// already sitting right there.
+private fun NavHostController.navigateHome() {
+    popBackStack(Routes.MODE_PICKER, false)
 }

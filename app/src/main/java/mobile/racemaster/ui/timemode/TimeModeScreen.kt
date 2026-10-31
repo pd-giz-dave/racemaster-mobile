@@ -49,7 +49,7 @@ import mobile.racemaster.util.withClickSound
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TimeModeScreen(
-    onChangeMode: () -> Unit,
+    onHome: () -> Unit,
     onEditSplit: (splitId: Long) -> Unit,
     viewModel: TimeModeViewModel = viewModel(factory = TimeModeViewModel.Factory),
 ) {
@@ -77,7 +77,7 @@ fun TimeModeScreen(
         topBar = {
             ModeScreenTopBar(
                 title = "Time Mode",
-                onChangeMode = onChangeMode,
+                onHome = onHome,
             )
         },
         // MainActivity's outer Scaffold (no bottomBar) already reserves the navigation

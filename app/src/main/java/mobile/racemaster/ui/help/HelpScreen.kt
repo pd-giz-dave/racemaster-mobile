@@ -13,8 +13,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.LinkAnnotation
@@ -28,14 +26,14 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import mobile.racemaster.BuildConfig
-import mobile.racemaster.util.withClickSound
+import mobile.racemaster.ui.components.ScreenTopBar
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HelpScreen(onBack: () -> Unit) {
+fun HelpScreen(onBack: () -> Unit, onHome: () -> Unit) {
     Scaffold(
         topBar = {
-            TopAppBar(
+            ScreenTopBar(
                 title = {
                     Text(
                         buildAnnotatedString {
@@ -46,8 +44,8 @@ fun HelpScreen(onBack: () -> Unit) {
                         },
                     )
                 },
-                actions = { TextButton(onClick = withClickSound(onBack)) { Text("Back") } },
-                windowInsets = WindowInsets(0, 0, 0, 0),
+                onBack = onBack,
+                onHome = onHome,
             )
         },
         // MainActivity's outer Scaffold already reserves the nav bar's bottom inset for

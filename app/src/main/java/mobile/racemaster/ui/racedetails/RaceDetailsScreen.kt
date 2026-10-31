@@ -18,8 +18,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,6 +39,7 @@ import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.components.DiscardChangesDialog
 import mobile.racemaster.ui.components.HideKeyboardButton
 import mobile.racemaster.ui.components.HistoryTextField
+import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.util.withClickSound
 
 /** "Relocate" (formerly "This Race") — name/location/mode editor for the device's
@@ -62,6 +61,7 @@ fun RaceDetailsScreen(
     // instead of the relocate itself (confirmed in the field).
     onSaved: (modeChanged: Boolean) -> Unit,
     onCancel: () -> Unit,
+    onHome: () -> Unit,
     viewModel: RaceDetailsViewModel = viewModel(factory = RaceDetailsViewModel.factory(existingRaceId)),
 ) {
     val existingRace by viewModel.existingRace.collectAsStateWithLifecycle()
@@ -80,7 +80,7 @@ fun RaceDetailsScreen(
     var prefilled by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
     // The exact values this screen was seeded with, so leaving via Back can tell whether the
-    // operator actually changed anything this visit — see showDiscardConfirm's own doc below.
+    // operator actually changed anything this visit — see pendingExit's own doc below.
     var initialName by remember { mutableStateOf("") }
     var initialLocation by remember { mutableStateOf("") }
     var initialMode by remember { mutableStateOf<AppMode?>(null) }
@@ -117,23 +117,22 @@ fun RaceDetailsScreen(
     // here (unlike Setup Race/Setup Server), since this screen's own state is only ever seeded
     // from the race's own current values and never persisted anywhere until Save — but silently
     // discarding a typed relocate/mode-switch is still a real "lost my edit" trap worth
-    // guarding against. Wired to both the top bar's own Back button and the system back
-    // gesture/button.
-    var showDiscardConfirm by remember { mutableStateOf(false) }
-    val attemptExit = {
-        if (hasChanges) showDiscardConfirm = true else onCancel()
+    // guarding against. Wired to both the top bar's own Back/Home buttons and the system back
+    // gesture/button. [pendingExit] carries which of onCancel/onHome to actually run once
+    // confirmed.
+    var pendingExit by remember { mutableStateOf<(() -> Unit)?>(null) }
+    fun attemptExit(exit: () -> Unit) {
+        if (hasChanges) pendingExit = exit else exit()
     }
-    BackHandler(onBack = attemptExit)
+    BackHandler(onBack = { attemptExit(onCancel) })
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            ScreenTopBar(
                 title = { Text("Relocate") },
-                actions = {
-                    HideKeyboardButton()
-                    TextButton(onClick = withClickSound(attemptExit)) { Text("Back") }
-                },
-                windowInsets = WindowInsets(0, 0, 0, 0),
+                onBack = { attemptExit(onCancel) },
+                onHome = { attemptExit(onHome) },
+                extraActions = { HideKeyboardButton() },
             )
         },
         // MainActivity's outer Scaffold already reserves the nav bar's bottom inset for
@@ -222,13 +221,13 @@ fun RaceDetailsScreen(
         }
     }
 
-    if (showDiscardConfirm) {
+    pendingExit?.let { exit ->
         DiscardChangesDialog(
             onConfirm = {
-                showDiscardConfirm = false
-                onCancel()
+                pendingExit = null
+                exit()
             },
-            onDismiss = { showDiscardConfirm = false },
+            onDismiss = { pendingExit = null },
         )
     }
 }

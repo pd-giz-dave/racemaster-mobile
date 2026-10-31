@@ -17,8 +17,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -35,6 +33,7 @@ import kotlinx.coroutines.launch
 import mobile.racemaster.data.db.entity.formatSplitRef
 import mobile.racemaster.ui.components.DiscardChangesDialog
 import mobile.racemaster.ui.components.HideKeyboardButton
+import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.util.formatElapsedSplitTime
 import mobile.racemaster.util.withClickSound
 
@@ -46,7 +45,7 @@ import mobile.racemaster.util.withClickSound
  * don't reliably report the keyboard's real height there, leaving Save/Cancel genuinely
  * unreachable with no way to scroll to them. A full screen of its own gets the same simple,
  * already-working Scaffold/imePadding/verticalScroll layout RaceDetailsScreen uses, with its
- * own always-visible TopAppBar (title — [HideKeyboardButton] — Back) immune to body scroll
+ * own always-visible TopAppBar (title — [HideKeyboardButton] — Back — Home) immune to body scroll
  * entirely — dismissing the keyboard from there reveals Save without needing to scroll at all,
  * since this form is short enough to fit on screen on its own.
  */
@@ -56,6 +55,7 @@ fun EditSplitScreen(
     splitId: Long,
     onSaved: () -> Unit,
     onCancel: () -> Unit,
+    onHome: () -> Unit,
     viewModel: EditSplitViewModel = viewModel(factory = EditSplitViewModel.factory(splitId)),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -67,7 +67,7 @@ fun EditSplitScreen(
     // already typing.
     var prefilled by remember { mutableStateOf(false) }
     // The exact value this screen was seeded with, so leaving can tell whether the operator
-    // actually changed anything this visit — see showDiscardConfirm's own doc below.
+    // actually changed anything this visit — see pendingExit's own doc below.
     var initialNote by remember { mutableStateOf("") }
     LaunchedEffect(uiState.loaded) {
         if (uiState.loaded && !prefilled) {
@@ -79,17 +79,18 @@ fun EditSplitScreen(
 
     val hasChanges = noteText != initialNote
     // Leaving with an unsaved note edit still on screen needs a confirm — wired to the top
-    // bar's own Back button, the in-body Cancel button, and the system back gesture/button, so
-    // none of the three bypasses this.
-    var showDiscardConfirm by remember { mutableStateOf(false) }
-    val attemptExit = {
-        if (hasChanges) showDiscardConfirm = true else onCancel()
+    // bar's own Back/Home buttons, the in-body Cancel button, and the system back gesture/
+    // button, so none of them bypasses this. [pendingExit] carries which of onCancel/onHome to
+    // actually run once confirmed.
+    var pendingExit by remember { mutableStateOf<(() -> Unit)?>(null) }
+    fun attemptExit(exit: () -> Unit) {
+        if (hasChanges) pendingExit = exit else exit()
     }
-    BackHandler(onBack = attemptExit)
+    BackHandler(onBack = { attemptExit(onCancel) })
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            ScreenTopBar(
                 title = {
                     Text(
                         if (uiState.loaded) {
@@ -99,11 +100,9 @@ fun EditSplitScreen(
                         },
                     )
                 },
-                actions = {
-                    HideKeyboardButton()
-                    TextButton(onClick = withClickSound(attemptExit)) { Text("Back") }
-                },
-                windowInsets = WindowInsets(0, 0, 0, 0),
+                onBack = { attemptExit(onCancel) },
+                onHome = { attemptExit(onHome) },
+                extraActions = { HideKeyboardButton() },
             )
         },
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -136,18 +135,18 @@ fun EditSplitScreen(
                     enabled = uiState.loaded,
                     modifier = Modifier.weight(1f),
                 ) { Text("Save") }
-                OutlinedButton(onClick = withClickSound(attemptExit), modifier = Modifier.weight(1f)) { Text("Cancel") }
+                OutlinedButton(onClick = withClickSound { attemptExit(onCancel) }, modifier = Modifier.weight(1f)) { Text("Cancel") }
             }
         }
     }
 
-    if (showDiscardConfirm) {
+    pendingExit?.let { exit ->
         DiscardChangesDialog(
             onConfirm = {
-                showDiscardConfirm = false
-                onCancel()
+                pendingExit = null
+                exit()
             },
-            onDismiss = { showDiscardConfirm = false },
+            onDismiss = { pendingExit = null },
         )
     }
 }

@@ -14,8 +14,6 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -24,7 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.data.mule.ProgressEntry
-import mobile.racemaster.util.withClickSound
+import mobile.racemaster.ui.components.ScreenTopBar
 
 /** "View" for a Races-page progress file — read-only, one-shot loaded snapshot of a single
  *  race's progress.json (see ProgressDetailViewModel's own doc). Mirrors MuleSourceDetailScreen's
@@ -35,16 +33,17 @@ import mobile.racemaster.util.withClickSound
 fun ProgressDetailScreen(
     raceId: Long,
     onBack: () -> Unit,
+    onHome: () -> Unit,
     viewModel: ProgressDetailViewModel = viewModel(factory = ProgressDetailViewModel.factory(raceId)),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            ScreenTopBar(
                 title = { Text(uiState.raceName.ifBlank { uiState.raceLabel }.ifBlank { "Progress" }) },
-                actions = { TextButton(onClick = withClickSound(onBack)) { Text("Back") } },
-                windowInsets = WindowInsets(0, 0, 0, 0),
+                onBack = onBack,
+                onHome = onHome,
             )
         },
         // MainActivity's outer Scaffold already reserves the nav bar's bottom inset for every

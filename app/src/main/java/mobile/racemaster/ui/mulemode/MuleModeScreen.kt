@@ -9,8 +9,12 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -37,7 +41,11 @@ import mobile.racemaster.util.withClickSound
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MuleModeScreen(
-    onChangeMode: () -> Unit,
+    // Always jumps straight to Mode Picker (see RacemasterNavHost.navigateHome) — this
+    // dashboard's own back stack is always exactly [ModePicker, Mule Mode] (see
+    // RacemasterNavHost), so a separate single-pop Back button here would always be 100%
+    // redundant with this one.
+    onHome: () -> Unit,
     onOptions: () -> Unit,
     viewModel: MuleModeViewModel = viewModel(factory = MuleModeViewModel.Factory),
 ) {
@@ -55,7 +63,9 @@ fun MuleModeScreen(
                 // three "is everything working" lines just below in the body).
                 actions = {
                     TextButton(onClick = withClickSound(onOptions)) { Text("Options") }
-                    TextButton(onClick = withClickSound(onChangeMode)) { Text("Back") }
+                    IconButton(onClick = withClickSound(onHome)) {
+                        Icon(Icons.Filled.Home, contentDescription = "Home")
+                    }
                 },
                 expandedHeight = CompactTopAppBarHeight,
                 windowInsets = WindowInsets(0, 0, 0, 0),
