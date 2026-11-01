@@ -243,10 +243,6 @@ chipset capability, not an OS one.
 - [x] confirm BLE peripheral/advertising hardware support (quick, no app needed):
   `adb shell dumpsys bluetooth_manager | grep -iE "state|address|le_audio|advertis|multiple"`
   and look for any "LE Advertising not supported" line (not fully reliable on its own, see next)
-- [ ] confirm with nRF Connect (free Play Store app): install on the XCover 4 and on a known-good
-      second phone; on the XCover 4 open Advertiser tab and start an advertisement; on the second
-      phone's Scanner tab confirm it's seen. If the Advertiser tab is missing/greyed out/errors,
-      the hardware doesn't support peripheral mode - hard blocker for using it as a Mule host
 - [x] battery health: `adb shell dumpsys battery`, check `level`/`temperature`/`health` (want
       `GOOD`); also do a real check - charge to 100%, screen off, see how much it drops in an
       hour (check every unit received, not just this one - used 2017 batteries vary)
@@ -254,8 +250,6 @@ chipset capability, not an OS one.
       second device, then run one real Mule sync in each direction - XCover 4 as host/peripheral
       vs puller/central, and swap. Watch with:
       `adb logcat | grep -iE "mule|peripheral|gatt|advertis"`
-- [ ] if peripheral mode or the host-role test fails, don't buy the batch (or only use these
-      units in the scanning/puller role with a different device acting as host)
 
 ## More tweaks
 
@@ -270,3 +264,19 @@ chipset capability, not an OS one.
 - [x] when a bib number is recorded, the speak the number as 3 separate digits in a loud male or female voice,
       eg. for "123" speak: one two three, this needs to be a persistent option (it may not be
       practical on the finish line but will be at an on-course checkpoint)
+
+## Programming the DX-CP27 bluetooth beacon
+
+- [ ] is the service uuid: 0000ffe0-0000-1000-8000-00805f9b34fb
+- [ ] is thw write/notify uuid: 0000ffe1-0000-1000-8000-00805f9b34fb
+- [ ] the default password is "dx1234"
+- [ ] does it respond to text 'AT' commands
+- [ ] are these commands correct:
+  - [ ] AT+AUTHdx1234\r\n to authenticate, when is it required
+  - [ ] AT+MARJnnnn\r\n to set major id to nnnn, 4 hex digits
+  - [ ] AT+MINRnnnn\r\n to set minor id to nnnn, 4 hex digits
+  - [ ] AT+UUID[32 hex digits] to set the UUID
+  - [ ] AT+POWEn to set transmit power to n (0..7)
+  - [ ] AT+RESET to apply settings and re-boot
+- [ ] what other AT commands are there, specifically to disable all frames except iBeacon and power off
+  

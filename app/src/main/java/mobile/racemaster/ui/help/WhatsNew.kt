@@ -19,6 +19,9 @@ object WhatsNew {
                     "risks crashing the app.",
                 "Top bars are tighter — Back is now an icon like Home — and long race names " +
                     "no longer wrap onto two lines.",
+                "Added an option to speak bib numbers as they are entered, this is intended " +
+                    "to allow marshalls at checkpoints to put the phone in their pocket when " +
+                    "the race is using bluetooth beacons",
             ),
         ),
     )
