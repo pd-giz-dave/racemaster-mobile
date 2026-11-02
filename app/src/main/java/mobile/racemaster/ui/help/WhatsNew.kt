@@ -10,6 +10,19 @@ data class VersionNotes(val version: String, val highlights: List<String>)
 object WhatsNew {
     val versions: List<VersionNotes> = listOf(
         VersionNotes(
+            version = "0.0.23",
+            highlights = listOf(
+                "Added a \"Setup Beacons\" screen, next to Setup Device, to scan, connect to, " +
+                    "and program DX-CP27 Bluetooth beacons directly from the phone — no more " +
+                    "separate vendor app.",
+                "Programming sets this app's own beacon ID, lets you calibrate signal " +
+                    "strength by holding the beacon 1 metre away, and shows the beacon's " +
+                    "current battery as both a voltage and an approximate percentage.",
+                "Power Off and Factory Reset actions were added for beacons too, each behind " +
+                    "a confirmation.",
+            ),
+        ),
+        VersionNotes(
             version = "0.0.22",
             highlights = listOf(
                 "Every screen now has a one-tap Home button, alongside Back.",

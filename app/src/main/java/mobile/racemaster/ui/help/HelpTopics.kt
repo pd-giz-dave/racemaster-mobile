@@ -164,8 +164,29 @@ object HelpTopics {
         ),
     )
 
+    val ProgramBeacons = HelpTopic(
+        title = "Setup Beacons",
+        tips = listOf(
+            "Scan, then tap a beacon to connect — it authenticates automatically with the " +
+                "known passwords and shows its real current configuration, including battery.",
+            "Programming rewrites the password away from the default, leaves slot 1 (the " +
+                "beacon's device name) alone, clears every slot after the iBeacon one, and " +
+                "writes an iBeacon frame into slot 2: this app's own UUID, major 1, the minor " +
+                "you enter, a 300ms interval, and TX power -7dBm.",
+            "Measured power needs calibrating per TX-power setting, not guessed — hold the " +
+                "beacon exactly 1 metre from the phone and tap Calibrate; it stays filled in " +
+                "for the next beacon too, so you only need to do this once per session.",
+            "Power Off and Factory Reset sit next to Program Beacon, each behind its own " +
+                "confirmation — Power Off needs the beacon's own button pressed to bring it " +
+                "back on, Factory Reset wipes the password and every slot back to firmware " +
+                "defaults.",
+            "Watch the log at the bottom — Program Beacon re-reads the beacon afterward and " +
+                "only reports success once the written values are confirmed, not just acked.",
+        ),
+    )
+
     val all: List<HelpTopic> = listOf(
         Overview, SetupDevice, SetupServer, Options, SetupRace, TimeMode, BibsMode, MuleMode,
-        RaceHistory, HistoryLineFormat,
+        RaceHistory, HistoryLineFormat, ProgramBeacons,
     )
 }

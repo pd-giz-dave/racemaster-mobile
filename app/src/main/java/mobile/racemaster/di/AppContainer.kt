@@ -5,6 +5,8 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.room.Room
+import mobile.racemaster.data.beacon.BeaconRepository
+import mobile.racemaster.data.beacon.DxCp27Client
 import mobile.racemaster.data.db.RacemasterDatabase
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.MulePullClient
@@ -32,6 +34,7 @@ interface AppContainer {
     val bluetoothStateRepository: BluetoothStateRepository
     val progressRepository: ProgressRepository
     val bibSpeaker: BibSpeaker
+    val beaconRepository: BeaconRepository
 }
 
 class DefaultAppContainer(context: Context) : AppContainer {
@@ -86,4 +89,6 @@ class DefaultAppContainer(context: Context) : AppContainer {
     }
 
     override val bibSpeaker: BibSpeaker by lazy { BibSpeaker(context) }
+
+    override val beaconRepository: BeaconRepository by lazy { BeaconRepository(DxCp27Client()) }
 }

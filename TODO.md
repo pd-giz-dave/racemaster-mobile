@@ -265,18 +265,60 @@ chipset capability, not an OS one.
       eg. for "123" speak: one two three, this needs to be a persistent option (it may not be
       practical on the finish line but will be at an on-course checkpoint)
 
-## Programming the DX-CP27 bluetooth beacon
+## Programming the DX-CP27 Bluetooth Beacon
 
-- [ ] is the service uuid: 0000ffe0-0000-1000-8000-00805f9b34fb
-- [ ] is thw write/notify uuid: 0000ffe1-0000-1000-8000-00805f9b34fb
-- [ ] the default password is "dx1234"
-- [ ] does it respond to text 'AT' commands
-- [ ] are these commands correct:
-  - [ ] AT+AUTHdx1234\r\n to authenticate, when is it required
-  - [ ] AT+MARJnnnn\r\n to set major id to nnnn, 4 hex digits
-  - [ ] AT+MINRnnnn\r\n to set minor id to nnnn, 4 hex digits
-  - [ ] AT+UUID[32 hex digits] to set the UUID
-  - [ ] AT+POWEn to set transmit power to n (0..7)
-  - [ ] AT+RESET to apply settings and re-boot
-- [ ] what other AT commands are there, specifically to disable all frames except iBeacon and power off
-  
+See the Python script and the research leading up to it in ~/dx-cp27-probing.
+
+The real protocol is now confirmed (reverse-engineered from the DX-SMART app's own BLE traffic,
+then validated against real hardware via `~/dx-cp27-probing/dxbeacon.py`) — service `0xffe0`,
+a framed `"NO"+cmd+len+data+checksum` command protocol over `0xffe2`, notified replies on
+`0xffe1`, password auth on `0xffe3`. Ported into the app at
+`app/src/main/java/mobile/racemaster/data/beacon/DxCp27Protocol.kt`/`DxCp27Client.kt`, with
+`DxCp27ProtocolTest.kt` asserting the port against the actual captured bytes. Options > Program
+Beacons implements the list below; checkboxes get ticked once each is verified against real
+hardware through that screen, not just implemented.
+
+### The programming script in this app needs to be able setup the devices such that:
+
+- [x] the operator needs to be shown a list of visible beacons and be able to select one
+- [x] the password needs to be changed away from the default 'dx1234' if a probe discovers it's
+      still set — to 'racer1', not 'racemaster' as originally written here: the beacon's
+      change-password command rejected a 10-character password on real hardware (confirmed via
+      a 0x00 failure ack), matching `dxbeacon.py`'s own warning that passwords must stay
+      6 characters, same length as the factory default (the app's own constant ended up
+      `"mercia"`, also 6 characters)
+- [x] the current configuration of the selected one needs to be shown, including its battery status
+- [x] slot 1 (the beacon's own device-name frame, used to identify the physical unit e.g. during
+      a scan) is left alone; the iBeacon frame goes in slot 2; slots 3-7 are set to no-data
+- [x] the UUID in that needs to be set to something unique to this app
+- [x] the major id needs to be set to 1
+- [x] the minor id needs to be set to a sequence number (operator entered)
+- [x] the advertising interval needs to be set to 3 (300mS) — DX-SMART's own interval field is
+      100-1500ms in 100ms steps (raw = ms / 100)
+- [x] the tx-power needs to be set to -7dBm (raw index 2) — DX-SMART's own TX-power field is 8
+      fixed, unevenly-spaced values (raw index -> dBm): 0=-19.5, 1=-13.5, 2=-7, 3=-3.5, 4=-1,
+      5=+1, 6=+1.5, 7=+2.5
+- [x] the reserved bytes need to be set to 0 (satisfied by construction and checked on read-back,
+      not independently settable — see this section's own intro)
+
+### Race-day usage
+
+- [ ] during registration this app needs to be set in a 'check' mode that can verify that a
+      beacon is switched on and that its major/minor id are that expected and its battery
+      level is acceptable, when multiple devices are visible a list should be shown in the
+      order of highest power first (i.e. closest first)
+      (the operator needs to check the major id is 1 and the minor id matches the label
+      on the beacon)
+- [ ] after the race is over this app needs to be in a 'finish' mode that shows the battery
+      status and powers off the beacon and also logs what has been returned so we know who to
+      chase that have not given their beacon back
+- [ ] during the race when the app is in bibs mode it needs to detect a passing beacon as
+      described elsewhere
+- [ ] a beacon with minor id of 0 is not allowed for a runner, its reserved for the sweep
+
+## Location Maps
+
+Modify all modes to relay their physical location, via GPS, back to the server/racemaster app.
+Modify the racemaster web-app to show mobile locations on a map tagging the location with the
+location code reported by the phone. The best place for the map is another tab on the Mobile
+Files page. Ideally an OS map if available for free, else the best OpenStreetMap variant.

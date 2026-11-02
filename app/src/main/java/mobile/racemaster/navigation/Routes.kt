@@ -19,6 +19,7 @@ object Routes {
     // now gets created, independent of mode selection.
     const val SETUP_RACE = "setup_race"
     const val MULE_SERVER_SETUP = "mule_server_setup"
+    const val PROGRAM_BEACONS = "program_beacons"
 
     // Bare path — every existing caller that just wants plain Options (Setup Device's own
     // Options button, the Mode Picker's Mule-off-routes-here flow) keeps navigating here

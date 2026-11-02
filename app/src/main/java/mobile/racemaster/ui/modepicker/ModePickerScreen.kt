@@ -44,6 +44,7 @@ fun ModePickerScreen(
     onReviewPastRaces: () -> Unit,
     onHelp: () -> Unit,
     onSetupDevice: () -> Unit,
+    onSetupBeacons: () -> Unit,
     viewModel: ModePickerViewModel = viewModel(factory = ModePickerViewModel.Factory),
 ) {
     val hasActiveRace by viewModel.hasActiveRace.collectAsStateWithLifecycle()
@@ -82,18 +83,30 @@ fun ModePickerScreen(
         // inside Mule Mode's own screen. That stopped making sense once Time/Bibs/CP phones
         // became a distinct, separate role from Mule (see MuleSyncEngine's own doc): an
         // operator on a Time-mode phone shouldn't have to detour through a role they never
-        // actually use just to reach setup. "Setup: <name>" rather than a bare echoed name (the
-        // previous wording) — a lone device name with no other label read as if the button just
-        // *displayed* the name rather than led anywhere.
-        Button(
-            onClick = withClickSound(onSetupDevice),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.secondary,
-                contentColor = MaterialTheme.colorScheme.onSecondary,
-            ),
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-        ) {
-            Text(deviceName?.let { "Setup: $it" } ?: "Setup Device", style = MaterialTheme.typography.titleMedium)
+        // actually use just to reach setup. Always just "Setup Device" now that this button
+        // shares its row with Setup Beacons — echoing the device name here as well as in
+        // RaceProgressSummary below wrapped onto two lines at this narrower, half-width size.
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = withClickSound(onSetupDevice),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondary,
+                    contentColor = MaterialTheme.colorScheme.onSecondary,
+                ),
+                modifier = Modifier.weight(1f).height(48.dp),
+            ) {
+                Text("Setup Device", style = MaterialTheme.typography.titleMedium)
+            }
+            Button(
+                onClick = withClickSound(onSetupBeacons),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondary,
+                    contentColor = MaterialTheme.colorScheme.onSecondary,
+                ),
+                modifier = Modifier.weight(1f).height(48.dp),
+            ) {
+                Text("Setup Beacons", style = MaterialTheme.typography.titleMedium)
+            }
         }
         // Replaces the old static "Select device mode" text — a mode is now chosen once, at
         // Setup Race (or changed later via Relocate), not picked here every time, so this is a
