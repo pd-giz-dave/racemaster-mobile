@@ -332,6 +332,12 @@ class BeaconRepository(private val client: DxCp27Client) {
                 measuredPowerDbm = measuredPowerDbm,
                 intervalRaw = DxCp27Protocol.RACEMASTER_ADV_INTERVAL_RAW,
                 txPowerRaw = DxCp27Protocol.RACEMASTER_TX_POWER_RAW,
+                // A race beacon must advertise continuously, never just on a click/motion
+                // trigger — DxCp27Client.setIBeacon always saves via CMD_SAVE (trigger off, never
+                // CMD_SAVE_WITH_TRIGGER), so the read-back must show it off too, not just assume it.
+                triggerEnabled = false,
+                triggerMode = DxCp27Protocol.TRIGGER_OFF,
+                triggerSeconds = 0,
             )
             val current = configFlow.value
             val alreadyCorrect = current != null && current.iBeaconFrame == expected &&

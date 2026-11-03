@@ -56,6 +56,25 @@ class DxCp27ProtocolTest {
         assertEquals(-57, frame.measuredPowerDbm)
         assertEquals(3, frame.intervalRaw)
         assertEquals(0, frame.txPowerRaw)
+        assertEquals(false, frame.triggerEnabled)
+        assertEquals("Off", frame.triggerDescription)
+    }
+
+    @Test
+    fun parseIBeaconFrameDecodesTriggerTrailer() {
+        // README's own documented examples from the capture that stepped DX-SMART's "Trigger"
+        // option through all four values: "...03 02 00 00 00" is off, "...03 02 01 01 1e" is
+        // on/double-click/30s.
+        val off = DxCp27Protocol.parseIBeaconFrame("62e2c56db5dffb48d2b060d0f5a71096e000050006c70300000000".fromHex())
+        assertEquals(false, off.triggerEnabled)
+
+        val doubleClick = DxCp27Protocol.parseIBeaconFrame(
+            "62e2c56db5dffb48d2b060d0f5a71096e000050006c7030201011e".fromHex(),
+        )
+        assertEquals(true, doubleClick.triggerEnabled)
+        assertEquals(DxCp27Protocol.TRIGGER_DOUBLE_CLICK, doubleClick.triggerMode)
+        assertEquals(30, doubleClick.triggerSeconds)
+        assertEquals("double-click, 30s", doubleClick.triggerDescription)
     }
 
     @Test
@@ -81,6 +100,40 @@ class DxCp27ProtocolTest {
         assertEquals("CP27", info.model)
         assertEquals("V2.4.01", info.firmware)
         assertEquals("V2.4.0", info.software)
+    }
+    @Test
+    fun parseIBeaconAdvertisementDecodesAppleManufacturerDataLayout() {
+        // Same UUID/major/minor/measured-power as parseIBeaconFrameMatchesTheValidatedPythonReference's
+        // GATT-read example, re-encoded as the standard Apple iBeacon advertisement layout (type
+        // 0x02, length 0x15) — this is a scan-time decode of a different wire format entirely,
+        // not a re-test of the GATT parser.
+        val beacon = DxCp27Protocol.parseIBeaconAdvertisement(
+            "0215e2c56db5dffb48d2b060d0f5a71096e000050006c7".fromHex(),
+        )
+        assertEquals("E2C56DB5-DFFB-48D2-B060-D0F5A71096E0", beacon?.uuidString)
+        assertEquals(5, beacon?.major)
+        assertEquals(6, beacon?.minor)
+        assertEquals(-57, beacon?.measuredPowerDbm)
+    }
+
+    @Test
+    fun advertisedIBeaconDistinguishesThisAppsOwnUuidFromAnyOther() {
+        val own = DxCp27Protocol.parseIBeaconAdvertisement(
+            ("0215" + DxCp27Protocol.RACEMASTER_IBEACON_UUID.joinToString("") { "%02x".format(it) } + "00010002c7").fromHex(),
+        )
+        assertEquals(true, own?.isProgrammedByThisApp)
+
+        val other = DxCp27Protocol.parseIBeaconAdvertisement(
+            "0215e2c56db5dffb48d2b060d0f5a71096e000050006c7".fromHex(),
+        )
+        assertEquals(false, other?.isProgrammedByThisApp)
+    }
+
+    @Test
+    fun parseIBeaconAdvertisementRejectsNonIBeaconOrMissingData() {
+        assertEquals(null, DxCp27Protocol.parseIBeaconAdvertisement(null))
+        assertEquals(null, DxCp27Protocol.parseIBeaconAdvertisement("0215".fromHex())) // too short
+        assertEquals(null, DxCp27Protocol.parseIBeaconAdvertisement("0315e2c56db5dffb48d2b060d0f5a71096e000050006c7".fromHex())) // wrong type
     }
 }
 

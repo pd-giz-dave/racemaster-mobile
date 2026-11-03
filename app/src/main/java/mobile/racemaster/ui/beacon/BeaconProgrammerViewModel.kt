@@ -18,10 +18,20 @@ import mobile.racemaster.data.beacon.BeaconConfig
 import mobile.racemaster.data.beacon.BeaconConnectionPhase
 import mobile.racemaster.data.beacon.BeaconLogEntry
 import mobile.racemaster.data.beacon.BeaconRepository
+import mobile.racemaster.data.beacon.DxCp27Protocol
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.di.appContainer
 
-data class ScannedBeaconUi(val advertisement: Advertisement, val address: String, val name: String?, val rssi: Int)
+/** [decodedIBeacon] is decoded straight off this scan's own advertisement packet, no connection
+ *  needed — null if this beacon isn't currently advertising an iBeacon frame (e.g. a fresh/
+ *  factory-reset unit advertising its device-name frame instead). */
+data class ScannedBeaconUi(
+    val advertisement: Advertisement,
+    val address: String,
+    val name: String?,
+    val rssi: Int,
+    val decodedIBeacon: DxCp27Protocol.AdvertisedIBeacon?,
+)
 
 enum class ProgramOutcome { SUCCESS, FAILURE }
 
@@ -147,6 +157,9 @@ class BeaconProgrammerViewModel(
                         address = advertisement.identifier,
                         name = advertisement.name,
                         rssi = advertisement.rssi,
+                        decodedIBeacon = DxCp27Protocol.parseIBeaconAdvertisement(
+                            advertisement.manufacturerData(DxCp27Protocol.APPLE_COMPANY_ID),
+                        ),
                     )
                     scanResultsFlow.value = seenAddresses.values.sortedByDescending { it.rssi }
                     if (isNewBeacon) repository.logBeaconFound(advertisement.name, advertisement.identifier, advertisement.rssi)

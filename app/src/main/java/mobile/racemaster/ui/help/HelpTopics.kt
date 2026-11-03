@@ -169,10 +169,15 @@ object HelpTopics {
         tips = listOf(
             "Scan, then tap a beacon to connect — it authenticates automatically with the " +
                 "known passwords and shows its real current configuration, including battery.",
+            "An info icon next to every beacon in the scan list decodes its advertisement " +
+                "straight from the scan packet, with no need to connect — UUID/major/minor/ " +
+                "measured power once it's an iBeacon, and whether that's this app's own UUID " +
+                "or something else, or a plain \"still factory default\" before it is one.",
             "Programming rewrites the password away from the default, leaves slot 1 (the " +
                 "beacon's device name) alone, clears every slot after the iBeacon one, and " +
                 "writes an iBeacon frame into slot 2: this app's own UUID, major 1, the minor " +
-                "you enter, a 300ms interval, and TX power -7dBm.",
+                "you enter, a 300ms interval, TX power -7dBm, and its trigger explicitly off — " +
+                "it advertises continuously, not just on a button click or being picked up.",
             "Measured power needs calibrating per TX-power setting, not guessed — hold the " +
                 "beacon exactly 1 metre from the phone and tap Calibrate; it stays filled in " +
                 "for the next beacon too, so you only need to do this once per session.",

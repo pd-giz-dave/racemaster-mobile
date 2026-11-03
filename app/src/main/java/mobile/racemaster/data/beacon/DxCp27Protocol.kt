@@ -104,7 +104,55 @@ object DxCp27Protocol {
     const val CMD_PRE_AUTH_CHECK = 0x25
     const val CMD_DEVICE_INFO = 0x30
     const val CMD_APPLY = 0x60
+
+    /** Save, with the iBeacon slot's trigger left off/cleared — the two forms of the edit
+     *  sequence's save step (the other is [CMD_SAVE_WITH_TRIGGER]) are mutually exclusive, not a
+     *  save plus a separate trigger toggle. This is the one this app always uses: a race beacon
+     *  must advertise continuously, not just on a button click or being picked up, so every
+     *  [DxCp27Client.setIBeacon] call ends here, never on [CMD_SAVE_WITH_TRIGGER]. Confirmed via a
+     *  fresh capture stepping DX-SMART's own per-slot "Trigger" option through all four of its
+     *  values (double-click, triple-click, device-move, then off) — see [CMD_SAVE_WITH_TRIGGER]'s
+     *  own doc for the full writeup. */
     const val CMD_SAVE = 0xA0
+
+    /** Save, with the iBeacon slot's trigger set to one of [TRIGGER_DOUBLE_CLICK]/
+     *  [TRIGGER_TRIPLE_CLICK]/[TRIGGER_DEVICE_MOVE] — takes the place of the plain [CMD_SAVE] in
+     *  the edit sequence (select slot, resend fields 0x74-0x79, then this instead of 0xA0, then
+     *  [CMD_APPLY]) and carries 2 data bytes: the trigger mode, then how many seconds the beacon
+     *  advertises once the trigger fires (1-100; [DEFAULT_TRIGGER_SECONDS] if never otherwise set
+     *  by the operator). Must be followed by [CMD_READ_TRIGGER] before apply or the trigger
+     *  doesn't actually commit — confirmed on real hardware; the reply to that read is itself
+     *  unreliable junk and gets ignored, it's the call itself that's load-bearing. This app never
+     *  calls this — a race beacon needs continuous advertising, not a one-shot burst on a click or
+     *  motion — but the command is real and documented here for completeness/future use, not
+     *  guessed. */
+    const val CMD_SAVE_WITH_TRIGGER = 0xA2
+
+    /** Reads the trigger config outside of an edit session (`4e4f a1 00`), reply 2 raw bytes
+     *  (mode, seconds) — confirmed unreliable in testing (doesn't always reflect the
+     *  just-written value after a reconnect), so [parseIBeaconFrame]'s own trailer fields are the
+     *  one reliable way to read a slot's current trigger state back; this command exists only as
+     *  the mandatory (if ignored) call [CMD_SAVE_WITH_TRIGGER] needs before apply. */
+    const val CMD_READ_TRIGGER = 0xA1
+
+    const val TRIGGER_OFF = 0x00
+    const val TRIGGER_DOUBLE_CLICK = 0x01
+    const val TRIGGER_TRIPLE_CLICK = 0x02
+    const val TRIGGER_DEVICE_MOVE = 0x03
+
+    /** How many seconds a triggered one-shot advertisement runs for, 1-100 — unused by this app
+     *  (which never enables a trigger) but kept alongside the other trigger constants for
+     *  completeness; matches the one value ever seen entered via the DX-SMART UI in the capture
+     *  this was reverse-engineered from. */
+    const val DEFAULT_TRIGGER_SECONDS = 0x1E
+
+    fun triggerModeLabel(mode: Int): String = when (mode) {
+        TRIGGER_OFF -> "off"
+        TRIGGER_DOUBLE_CLICK -> "double-click"
+        TRIGGER_TRIPLE_CLICK -> "triple-click"
+        TRIGGER_DEVICE_MOVE -> "device-move"
+        else -> "unknown (0x%02x)".format(mode)
+    }
 
     /** After a slot-select, writing this as the frame-type byte deletes that slot (no ack
      *  expected) — same byte value doubles as "pre-edit query" when sent with no preceding
@@ -153,16 +201,30 @@ object DxCp27Protocol {
         val measuredPowerDbm: Int,
         val intervalRaw: Int,
         val txPowerRaw: Int,
+        // Defaulted to "off" rather than required — every caller that actually cares (this app
+        // only ever programs with the trigger off; see CMD_SAVE's own doc) just wants that
+        // default, and parseIBeaconFrame below fills in the real read-back values regardless.
+        val triggerEnabled: Boolean = false,
+        val triggerMode: Int = TRIGGER_OFF,
+        val triggerSeconds: Int = 0,
     ) {
         val uuidString: String get() = formatUuidBytes(uuid)
+
+        /** "Off", or "double-click, 30s" etc. — for display; see [CMD_SAVE]/[CMD_SAVE_WITH_TRIGGER]'s
+         *  own docs for why this app always programs "Off". */
+        val triggerDescription: String
+            get() = if (!triggerEnabled) "Off" else "${triggerModeLabel(triggerMode)}, ${triggerSeconds}s"
 
         // ByteArray breaks data-class-generated equals/hashCode (Kotlin's `==` on arrays is
         // referential) — overridden explicitly so two frames read back with identical bytes
         // actually compare equal, which BeaconRepository's post-program verification relies on.
+        // Trigger fields are included deliberately: that verification must catch the trigger
+        // silently staying on just as much as a wrong UUID/major/minor would be caught.
         override fun equals(other: Any?): Boolean = other is IBeaconFrame &&
             uuid.contentEquals(other.uuid) && major == other.major && minor == other.minor &&
             measuredPowerDbm == other.measuredPowerDbm && intervalRaw == other.intervalRaw &&
-            txPowerRaw == other.txPowerRaw
+            txPowerRaw == other.txPowerRaw && triggerEnabled == other.triggerEnabled &&
+            triggerMode == other.triggerMode && triggerSeconds == other.triggerSeconds
 
         override fun hashCode(): Int =
             ((uuid.contentHashCode() * 31 + major) * 31 + minor) * 31 + measuredPowerDbm
@@ -199,8 +261,10 @@ object DxCp27Protocol {
     fun parseSlotTable(data: ByteArray): List<Int> = data.map { it.toInt() and 0xff }
 
     /** [FRAME_IBEACON]'s 27-byte reply: echoed type byte + 16-byte UUID + major (BE) + minor (BE)
-     *  + signed measured-power + interval + TX power + 3 reserved bytes (always zero in
-     *  practice — there's no separate command to set them). */
+     *  + signed measured-power + interval + TX power + trigger state (enabled flag, mode,
+     *  seconds) — what used to be documented as "3 reserved bytes, always zero in practice" is
+     *  actually this slot's trigger config, discovered from a capture that stepped DX-SMART's own
+     *  "Trigger" option through all four of its values; see [CMD_SAVE_WITH_TRIGGER]'s own doc. */
     fun parseIBeaconFrame(data: ByteArray): IBeaconFrame {
         require(data.size >= 27) { "iBeacon frame reply too short: ${data.size} bytes" }
         return IBeaconFrame(
@@ -210,6 +274,9 @@ object DxCp27Protocol {
             measuredPowerDbm = data[21].toInt(),
             intervalRaw = data[22].toInt() and 0xff,
             txPowerRaw = data[23].toInt() and 0xff,
+            triggerEnabled = (data[24].toInt() and 0xff) != 0,
+            triggerMode = data[25].toInt() and 0xff,
+            triggerSeconds = data[26].toInt() and 0xff,
         )
     }
 
@@ -250,6 +317,55 @@ object DxCp27Protocol {
         FRAME_EDDYSTONE_TLM -> "Eddystone-TLM"
         FRAME_EMPTY -> "Empty"
         else -> "Unknown (0x%02x)".format(frameType)
+    }
+
+    /** Apple's company identifier code, used to look up iBeacon manufacturer-specific data in a
+     *  raw scan advertisement (see [parseIBeaconAdvertisement]) — this is a *scan-time* decode,
+     *  entirely separate from [parseIBeaconFrame]'s GATT read-back, and works on any beacon in
+     *  range without connecting to it. */
+    const val APPLE_COMPANY_ID = 0x004C
+
+    private const val IBEACON_AD_TYPE = 0x02
+    private const val IBEACON_AD_LENGTH = 0x15
+
+    /** Decoded straight off the advertisement packet, not read over GATT — see
+     *  [parseIBeaconAdvertisement]. */
+    data class AdvertisedIBeacon(
+        val uuid: ByteArray,
+        val major: Int,
+        val minor: Int,
+        val measuredPowerDbm: Int,
+    ) {
+        val uuidString: String get() = formatUuidBytes(uuid)
+
+        override fun equals(other: Any?): Boolean = other is AdvertisedIBeacon &&
+            uuid.contentEquals(other.uuid) && major == other.major && minor == other.minor &&
+            measuredPowerDbm == other.measuredPowerDbm
+
+        override fun hashCode(): Int = ((uuid.contentHashCode() * 31 + major) * 31 + minor) * 31 + measuredPowerDbm
+
+        /** True once this frame's UUID matches [RACEMASTER_IBEACON_UUID] — the only thing that
+         *  distinguishes "this app already programmed this beacon" from "still factory default,
+         *  or programmed by DX-SMART/something else", since major/minor/power all vary freely
+         *  either way. */
+        val isProgrammedByThisApp: Boolean get() = uuid.contentEquals(RACEMASTER_IBEACON_UUID)
+    }
+
+    /** Decodes Apple's standard iBeacon layout (type 0x02, length 0x15, 16-byte UUID, major/minor
+     *  big-endian, 1-byte signed measured power) out of the [APPLE_COMPANY_ID] manufacturer data
+     *  Kable hands back from a scan advertisement — `null` if this advert has no such data, or it
+     *  doesn't look like an iBeacon frame (e.g. the beacon is currently advertising its
+     *  device-name frame instead). */
+    fun parseIBeaconAdvertisement(manufacturerData: ByteArray?): AdvertisedIBeacon? {
+        if (manufacturerData == null || manufacturerData.size < 23) return null
+        if ((manufacturerData[0].toInt() and 0xff) != IBEACON_AD_TYPE) return null
+        if ((manufacturerData[1].toInt() and 0xff) != IBEACON_AD_LENGTH) return null
+        return AdvertisedIBeacon(
+            uuid = manufacturerData.copyOfRange(2, 18),
+            major = beU16(manufacturerData, 18),
+            minor = beU16(manufacturerData, 20),
+            measuredPowerDbm = manufacturerData[22].toInt(),
+        )
     }
 
     fun formatUuidBytes(bytes: ByteArray): String {

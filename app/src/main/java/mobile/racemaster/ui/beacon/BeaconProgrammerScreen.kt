@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -30,6 +31,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -185,6 +187,42 @@ fun BeaconProgrammerScreen(
 
 @Composable
 private fun ScanSection(uiState: BeaconUiState, viewModel: BeaconProgrammerViewModel) {
+    // Shows the decoded-advert dialog for whichever scan row's info icon was last tapped — see
+    // the Info IconButton below. Null means no dialog is showing.
+    var decodedAdvertFor by remember { mutableStateOf<ScannedBeaconUi?>(null) }
+    decodedAdvertFor?.let { beacon ->
+        val decoded = beacon.decodedIBeacon
+        AlertDialog(
+            onDismissRequest = { decodedAdvertFor = null },
+            title = { Text(beacon.name ?: "(unnamed)") },
+            text = {
+                if (decoded != null) {
+                    val statusLine = if (decoded.isProgrammedByThisApp) {
+                        "Programmed by this app."
+                    } else {
+                        "Advertising an iBeacon frame, but not this app's UUID — factory " +
+                            "default, or programmed by DX-SMART or something else."
+                    }
+                    Text(
+                        "$statusLine Decoded from the scan packet itself — no connection " +
+                            "needed:\n\n" +
+                            "UUID: ${decoded.uuidString}\n" +
+                            "Major: ${decoded.major}\n" +
+                            "Minor: ${decoded.minor}\n" +
+                            "Measured power: ${decoded.measuredPowerDbm} dBm",
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    )
+                } else {
+                    Text(
+                        "Not currently advertising an iBeacon frame — factory default, " +
+                            "before this app has programmed it. Connect to see its real " +
+                            "configuration.",
+                    )
+                }
+            },
+            confirmButton = { Button(onClick = withClickSound { decodedAdvertFor = null }) { Text("Close") } },
+        )
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Button(onClick = withClickSound(viewModel::startScan), enabled = !uiState.isBusy && !uiState.isScanning) { Text("Scan") }
@@ -215,6 +253,12 @@ private fun ScanSection(uiState: BeaconUiState, viewModel: BeaconProgrammerViewM
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.weight(1f),
                         )
+                        // Always shown — tapping it is informative either way: a decoded iBeacon
+                        // frame if the beacon is already advertising one (whether this app's own
+                        // UUID or someone else's), or a clear "still factory default" if not.
+                        IconButton(onClick = withClickSound { decodedAdvertFor = beacon }) {
+                            Icon(Icons.Filled.Info, contentDescription = "Show decoded advertisement")
+                        }
                         Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Connect")
                     }
                 }
@@ -373,7 +417,8 @@ private fun CurrentConfigSection(config: mobile.racemaster.data.beacon.BeaconCon
         config.iBeaconFrame?.let { frame ->
             Text(
                 "iBeacon: UUID ${frame.uuidString}, major ${frame.major}, minor ${frame.minor}, " +
-                    "measured power ${frame.measuredPowerDbm} dBm, interval ${frame.intervalRaw}, TX power ${frame.txPowerRaw}",
+                    "measured power ${frame.measuredPowerDbm} dBm, interval ${frame.intervalRaw}, " +
+                    "TX power ${frame.txPowerRaw}, trigger ${frame.triggerDescription}",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
