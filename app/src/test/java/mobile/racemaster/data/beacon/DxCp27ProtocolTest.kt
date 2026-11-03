@@ -130,6 +130,34 @@ class DxCp27ProtocolTest {
     }
 
     @Test
+    fun parseIBeaconAdvertisementWorksRegardlessOfWhichCompanyIdCarriedIt() {
+        // Captured live from a real beacon this app had just programmed: the exact same 0215-shaped
+        // payload the device actually broadcasts, over and over, tagged with VENDOR_COMPANY_ID
+        // (0x4458 = ASCII "DX") rather than Apple's real APPLE_COMPANY_ID — a firmware quirk
+        // confirmed against ~/dx-cp27-probing/btsnoop_hci.log (roughly half of every iBeacon-shaped
+        // advert in that capture carries 0x4458 instead of 0x004c). parseIBeaconAdvertisement
+        // itself is company-id-agnostic — the caller is what's responsible for trying both — so
+        // this just confirms the payload decodes the same either way.
+        val beacon = DxCp27Protocol.parseIBeaconAdvertisement(
+            "0215b9a7ce7f5d624f85b34cb8d5bcb23b9900010001b9".fromHex(),
+        )
+        assertEquals(DxCp27Protocol.RACEMASTER_IBEACON_UUID.toList(), beacon?.uuid?.toList())
+        assertEquals(true, beacon?.isProgrammedByThisApp)
+        assertEquals(1, beacon?.major)
+        assertEquals(1, beacon?.minor)
+        assertEquals(-71, beacon?.measuredPowerDbm)
+    }
+
+    @Test
+    fun eddystoneFrameLabelDecodesTheOpenSpecsOwnFrameTypeByte() {
+        assertEquals("Eddystone-UID", DxCp27Protocol.eddystoneFrameLabel(byteArrayOf(0x00, 0x01, 0x02)))
+        assertEquals("Eddystone-URL", DxCp27Protocol.eddystoneFrameLabel(byteArrayOf(0x10)))
+        assertEquals("Eddystone-TLM", DxCp27Protocol.eddystoneFrameLabel(byteArrayOf(0x20)))
+        assertEquals("Eddystone (empty service data)", DxCp27Protocol.eddystoneFrameLabel(byteArrayOf()))
+        assertEquals("Eddystone (unknown frame type 0x30)", DxCp27Protocol.eddystoneFrameLabel(byteArrayOf(0x30)))
+    }
+
+    @Test
     fun parseIBeaconAdvertisementRejectsNonIBeaconOrMissingData() {
         assertEquals(null, DxCp27Protocol.parseIBeaconAdvertisement(null))
         assertEquals(null, DxCp27Protocol.parseIBeaconAdvertisement("0215".fromHex())) // too short

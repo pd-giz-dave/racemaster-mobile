@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.juul.kable.Advertisement
+import com.juul.kable.PlatformAdvertisement
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,17 +22,52 @@ import mobile.racemaster.data.beacon.BeaconRepository
 import mobile.racemaster.data.beacon.DxCp27Protocol
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.di.appContainer
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.toKotlinUuid
 
-/** [decodedIBeacon] is decoded straight off this scan's own advertisement packet, no connection
- *  needed — null if this beacon isn't currently advertising an iBeacon frame (e.g. a fresh/
- *  factory-reset unit advertising its device-name frame instead). */
+/** This beacon advertises each of its configured slots as its own, separate advertisement packet
+ *  (confirmed on real hardware: a device-name-slot packet with no manufacturer data interleaved
+ *  with an iBeacon-slot packet that has no name — never both in the same packet) — so a single
+ *  "latest advertisement" snapshot per beacon oscillates between the two rather than ever showing
+ *  a complete picture. [frames] fixes that: one entry per distinct kind of advertisement seen
+ *  from this beacon so far this scan, each refreshed in place as it re-appears, never dropped
+ *  when a *different* kind arrives in between. Can legitimately be empty — e.g. every slot
+ *  deleted/disabled, or this beacon's own identity frame hasn't arrived yet. */
 data class ScannedBeaconUi(
     val advertisement: Advertisement,
     val address: String,
-    val name: String?,
     val rssi: Int,
-    val decodedIBeacon: DxCp27Protocol.AdvertisedIBeacon?,
-)
+    val frames: List<ObservedAdvertFrame>,
+) {
+    /** Sticky once seen — the device-name frame, if any of [frames] is one, regardless of
+     *  whether the *latest* packet received was that one or the iBeacon one instead. */
+    val displayName: String?
+        get() = frames.filterIsInstance<ObservedAdvertFrame.DeviceName>().firstOrNull()?.name
+}
+
+/** One distinct kind of advertisement this beacon has broadcast — see [ScannedBeaconUi.frames].
+ *  [Unrecognized] exists so that verifying "this beacon is only transmitting iBeacon" is actually
+ *  trustworthy: without it, any advertisement that's neither a name nor a decodable iBeacon frame
+ *  (an Eddystone slot, say) would be silently dropped instead of showing up as a third line —
+ *  making the other two look like the complete picture when they might not be. */
+sealed interface ObservedAdvertFrame {
+    data class DeviceName(val name: String) : ObservedAdvertFrame
+    data class IBeacon(val beacon: DxCp27Protocol.AdvertisedIBeacon) : ObservedAdvertFrame
+    // Keyed by subtype (UID/URL/TLM), not one shared slot — a factory-default beacon broadcasts
+    // all three simultaneously, each as its own separate packet; collapsing them into one entry
+    // would just recreate the original oscillation bug one level down.
+    data class Eddystone(val subtype: Int, val label: String) : ObservedAdvertFrame
+    data class Unrecognized(val rawHex: String) : ObservedAdvertFrame
+
+    /** A fixed display order, independent of arrival order — see [BeaconProgrammerViewModel.mergeObservedFrame]'s own doc. */
+    val sortOrder: Int
+        get() = when (this) {
+            is DeviceName -> 0
+            is IBeacon -> 1
+            is Eddystone -> 2_000 + subtype
+            is Unrecognized -> Int.MAX_VALUE
+        }
+}
 
 enum class ProgramOutcome { SUCCESS, FAILURE }
 
@@ -152,14 +188,13 @@ class BeaconProgrammerViewModel(
                     // Logged once per beacon, not once per advertisement packet — the same
                     // beacon re-advertises continuously for as long as the scan runs.
                     val isNewBeacon = advertisement.identifier !in seenAddresses
+                    val previousFrames = seenAddresses[advertisement.identifier]?.frames ?: emptyList()
+                    val mergedFrames = mergeObservedFrame(previousFrames, advertisement)
                     seenAddresses[advertisement.identifier] = ScannedBeaconUi(
                         advertisement = advertisement,
                         address = advertisement.identifier,
-                        name = advertisement.name,
                         rssi = advertisement.rssi,
-                        decodedIBeacon = DxCp27Protocol.parseIBeaconAdvertisement(
-                            advertisement.manufacturerData(DxCp27Protocol.APPLE_COMPANY_ID),
-                        ),
+                        frames = mergedFrames,
                     )
                     scanResultsFlow.value = seenAddresses.values.sortedByDescending { it.rssi }
                     if (isNewBeacon) repository.logBeaconFound(advertisement.name, advertisement.identifier, advertisement.rssi)
@@ -175,6 +210,51 @@ class BeaconProgrammerViewModel(
         scanJob?.cancel()
         scanJob = null
         isScanningFlow.value = false
+    }
+
+    /** Refreshes whichever of [existing]'s frame kinds this [advertisement] matches (dropping its
+     *  old value, since it's possible for e.g. minor/RSSI to have changed), leaving any other
+     *  kind untouched — see [ScannedBeaconUi.frames]'s own doc for why this can't just be "the
+     *  latest advertisement decoded". Checks name, iBeacon-decode and Eddystone independently
+     *  (not else-if'd), since a factory-default beacon broadcasts an iBeacon frame *and* all
+     *  three Eddystone sub-frames simultaneously — never combined into one packet, but all real
+     *  at once. Anything matching none of those refreshes a single [ObservedAdvertFrame.Unrecognized]
+     *  slot rather than being silently dropped (see that type's own doc for why). */
+    @OptIn(ExperimentalUuidApi::class)
+    private fun mergeObservedFrame(existing: List<ObservedAdvertFrame>, advertisement: Advertisement): List<ObservedAdvertFrame> {
+        var frames = existing
+        var recognized = false
+        val name = advertisement.name
+        if (name != null) {
+            frames = frames.filterNot { it is ObservedAdvertFrame.DeviceName } + ObservedAdvertFrame.DeviceName(name)
+            recognized = true
+        }
+        val decodedIBeacon = DxCp27Protocol.parseIBeaconAdvertisement(
+            advertisement.manufacturerData(DxCp27Protocol.APPLE_COMPANY_ID)
+                ?: advertisement.manufacturerData(DxCp27Protocol.VENDOR_COMPANY_ID),
+        )
+        if (decodedIBeacon != null) {
+            frames = frames.filterNot { it is ObservedAdvertFrame.IBeacon } + ObservedAdvertFrame.IBeacon(decodedIBeacon)
+            recognized = true
+        }
+        val eddystoneData = advertisement.serviceData(DxCp27Protocol.EDDYSTONE_SERVICE_UUID.toKotlinUuid())
+        if (eddystoneData != null) {
+            val subtype = eddystoneData.firstOrNull()?.toInt()?.and(0xff) ?: -1
+            val label = DxCp27Protocol.eddystoneFrameLabel(eddystoneData)
+            frames = frames.filterNot { it is ObservedAdvertFrame.Eddystone && it.subtype == subtype } +
+                ObservedAdvertFrame.Eddystone(subtype, label)
+            recognized = true
+        }
+        if (!recognized) {
+            val rawHex = (advertisement as? PlatformAdvertisement)?.bytes?.joinToString("") { "%02x".format(it) }
+                ?: "(raw advertisement bytes unavailable)"
+            frames = frames.filterNot { it is ObservedAdvertFrame.Unrecognized } + ObservedAdvertFrame.Unrecognized(rawHex)
+        }
+        // Sorted by a fixed type order, not insertion order — this beacon's slots arrive as
+        // separate packets at unpredictable times, so without this the dialog's line order kept
+        // reshuffling mid-scan as whichever frame type most recently refreshed jumped to the end,
+        // making it unreadable while still scanning.
+        return frames.sortedBy(ObservedAdvertFrame::sortOrder)
     }
 
     fun connect(beacon: ScannedBeaconUi) {

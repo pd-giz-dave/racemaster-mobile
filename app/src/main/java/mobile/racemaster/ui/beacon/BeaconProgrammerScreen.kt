@@ -188,39 +188,60 @@ fun BeaconProgrammerScreen(
 @Composable
 private fun ScanSection(uiState: BeaconUiState, viewModel: BeaconProgrammerViewModel) {
     // Shows the decoded-advert dialog for whichever scan row's info icon was last tapped — see
-    // the Info IconButton below. Null means no dialog is showing.
-    var decodedAdvertFor by remember { mutableStateOf<ScannedBeaconUi?>(null) }
+    // the Info IconButton below. Null means no dialog is showing. Tracks the address, not a
+    // frozen ScannedBeaconUi snapshot — that beacon keeps advertising new distinct frame types
+    // for as long as the dialog is open (confirmed on real hardware: a factory-default unit's
+    // device-name/iBeacon/Eddystone×3 frames can take a few seconds each to all arrive), so this
+    // re-looks-up the live, continuously-updating scan result every recomposition rather than
+    // freezing on whatever was seen at the instant of the tap.
+    var decodedAdvertForAddress by remember { mutableStateOf<String?>(null) }
+    val decodedAdvertFor = decodedAdvertForAddress?.let { address -> uiState.scanResults.firstOrNull { it.address == address } }
     decodedAdvertFor?.let { beacon ->
-        val decoded = beacon.decodedIBeacon
         AlertDialog(
-            onDismissRequest = { decodedAdvertFor = null },
-            title = { Text(beacon.name ?: "(unnamed)") },
+            onDismissRequest = { decodedAdvertForAddress = null },
+            title = { Text(beacon.displayName ?: "(unnamed)") },
             text = {
-                if (decoded != null) {
-                    val statusLine = if (decoded.isProgrammedByThisApp) {
-                        "Programmed by this app."
-                    } else {
-                        "Advertising an iBeacon frame, but not this app's UUID — factory " +
-                            "default, or programmed by DX-SMART or something else."
-                    }
+                // This beacon broadcasts each configured slot as its own separate advertisement
+                // packet (never combined — see ScannedBeaconUi.frames's own doc), so there can be
+                // anywhere from zero (every slot deleted/disabled, or none have arrived yet) to
+                // several distinct frames to show, each its own line rather than one slot's
+                // absence masking another's presence.
+                if (beacon.frames.isEmpty()) {
                     Text(
-                        "$statusLine Decoded from the scan packet itself — no connection " +
-                            "needed:\n\n" +
-                            "UUID: ${decoded.uuidString}\n" +
-                            "Major: ${decoded.major}\n" +
-                            "Minor: ${decoded.minor}\n" +
-                            "Measured power: ${decoded.measuredPowerDbm} dBm",
-                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                    )
-                } else {
-                    Text(
-                        "Not currently advertising an iBeacon frame — factory default, " +
-                            "before this app has programmed it. Connect to see its real " +
+                        "No advertisement frames seen from this beacon yet — every slot may be " +
+                            "deleted/disabled, or none have arrived yet. Connect to see its real " +
                             "configuration.",
                     )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        beacon.frames.forEach { frame ->
+                            when (frame) {
+                                is ObservedAdvertFrame.DeviceName -> Text(
+                                    "Device name frame: \"${frame.name}\"",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                is ObservedAdvertFrame.IBeacon -> {
+                                    val label = if (frame.beacon.isProgrammedByThisApp) "Racemaster" else "Default"
+                                    Text(
+                                        "iBeacon frame — $label",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                                is ObservedAdvertFrame.Eddystone -> Text(
+                                    frame.label,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                is ObservedAdvertFrame.Unrecognized -> Text(
+                                    "Unrecognized advertisement (not a name, not a decodable " +
+                                        "iBeacon frame, not Eddystone):\n${frame.rawHex}",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                )
+                            }
+                        }
+                    }
                 }
             },
-            confirmButton = { Button(onClick = withClickSound { decodedAdvertFor = null }) { Text("Close") } },
+            confirmButton = { Button(onClick = withClickSound { decodedAdvertForAddress = null }) { Text("Close") } },
         )
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -249,14 +270,14 @@ private fun ScanSection(uiState: BeaconUiState, viewModel: BeaconProgrammerViewM
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            "${beacon.name ?: "(unnamed)"} — ${beacon.address} — ${beacon.rssi} dBm",
+                            "${beacon.displayName ?: "(unnamed)"} — ${beacon.address} — ${beacon.rssi} dBm",
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.weight(1f),
                         )
-                        // Always shown — tapping it is informative either way: a decoded iBeacon
-                        // frame if the beacon is already advertising one (whether this app's own
-                        // UUID or someone else's), or a clear "still factory default" if not.
-                        IconButton(onClick = withClickSound { decodedAdvertFor = beacon }) {
+                        // Always shown — tapping it is informative either way: whatever distinct
+                        // advertisement frames have been seen so far (possibly none — see
+                        // ScannedBeaconUi.frames's own doc).
+                        IconButton(onClick = withClickSound { decodedAdvertForAddress = beacon.address }) {
                             Icon(Icons.Filled.Info, contentDescription = "Show decoded advertisement")
                         }
                         Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Connect")

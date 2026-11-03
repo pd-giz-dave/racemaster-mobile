@@ -15,12 +15,25 @@ import androidx.core.content.ContextCompat
  *  the peripheral/hosting role (PeripheralSyncService) and the central/pulling role
  *  (MuleSyncEngine's scan) refuse to start at all without every one of these, on whichever set
  *  applies to this OS version: the BLUETOOTH_* trio from API 31 on, or the legacy
- *  ACCESS_FINE_LOCATION BLE scanning needed before that permission group existed. */
+ *  ACCESS_FINE_LOCATION BLE scanning needed before that permission group existed.
+ *
+ *  ACCESS_FINE_LOCATION is included on API 31+ too, not just pre-31 — see this app's
+ *  AndroidManifest.xml's own comment on BLUETOOTH_SCAN: without it, Android's neverForLocation
+ *  scan-result suppression (the tradeoff for *not* requesting it) silently drops Eddystone-shaped
+ *  advertisement results, confirmed on real hardware — so this app requests it everywhere rather
+ *  than asserting neverForLocation. ACCESS_COARSE_LOCATION rides along with it on every OS
+ *  version — Android requires requesting both together whenever an app wants FINE. */
 fun bluetoothPermissions(): Array<String> =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE)
+        arrayOf(
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_ADVERTISE,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+        )
     } else {
-        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
     }
 
 /** POST_NOTIFICATIONS, needed from API 33 on for PeripheralSyncService's ongoing sync

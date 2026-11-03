@@ -9,24 +9,33 @@
          Mode only needs to find nearby devices advertising our GATT service, not their
          physical location. Harmlessly ignored below API 31 (minSdk 24) rather than an error,
          so it's kept as-is rather than split into a separate API-31 manifest overlay. -->
+    <!-- Android 12+ (API 31+) Bluetooth permissions. No neverForLocation here (deliberately, as
+         of this app's Program Beacons feature): confirmed on real hardware that Android's own
+         neverForLocation scan-result suppression — allowed in exchange for skipping the runtime
+         location permission below — silently drops Eddystone-shaped advertisement results
+         specifically (Google's own canonical "this looks like a location beacon" format) even
+         though the native radio layer matches them fine. Program Beacons' "show every advert
+         type this beacon is broadcasting" feature needs those results, so this app accepts the
+         plain runtime ACCESS_FINE_LOCATION prompt below instead, app-wide, rather than silently
+         losing that feature's accuracy on Android 12+. -->
     <uses-permission
         android:name="android.permission.BLUETOOTH_SCAN"
-        android:usesPermissionFlags="neverForLocation"
         tools:ignore="UnusedAttribute" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
 
     <!-- Pre-Android-12 equivalents: install-time BLUETOOTH/BLUETOOTH_ADMIN plus the runtime
-         location permission BLE scanning required before the API 31 permission model. -->
+         location permission BLE scanning required before the API 31 permission model. No
+         maxSdkVersion cap on ACCESS_FINE_LOCATION any more — see the comment above; it's needed
+         on every supported OS version now, not just pre-31. -->
     <uses-permission
         android:name="android.permission.BLUETOOTH"
         android:maxSdkVersion="30" />
     <uses-permission
         android:name="android.permission.BLUETOOTH_ADMIN"
         android:maxSdkVersion="30" />
-    <uses-permission
-        android:name="android.permission.ACCESS_FINE_LOCATION"
-        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />

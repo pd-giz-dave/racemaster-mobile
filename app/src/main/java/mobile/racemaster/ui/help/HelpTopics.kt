@@ -169,10 +169,11 @@ object HelpTopics {
         tips = listOf(
             "Scan, then tap a beacon to connect — it authenticates automatically with the " +
                 "known passwords and shows its real current configuration, including battery.",
-            "An info icon next to every beacon in the scan list decodes its advertisement " +
-                "straight from the scan packet, with no need to connect — UUID/major/minor/ " +
-                "measured power once it's an iBeacon, and whether that's this app's own UUID " +
-                "or something else, or a plain \"still factory default\" before it is one.",
+            "An info icon next to every beacon in the scan list decodes every advertisement " +
+                "it's broadcasting, straight from the scan packets, with no need to connect — " +
+                "its device name, whether its iBeacon frame is this app's own (\"Racemaster\") " +
+                "or still factory \"Default\", and any Eddystone frames too. Seeing every type " +
+                "needs Location permission, which this app asks for up front.",
             "Programming rewrites the password away from the default, leaves slot 1 (the " +
                 "beacon's device name) alone, clears every slot after the iBeacon one, and " +
                 "writes an iBeacon frame into slot 2: this app's own UUID, major 1, the minor " +

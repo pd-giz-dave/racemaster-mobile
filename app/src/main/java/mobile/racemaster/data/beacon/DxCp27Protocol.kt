@@ -325,6 +325,48 @@ object DxCp27Protocol {
      *  range without connecting to it. */
     const val APPLE_COMPANY_ID = 0x004C
 
+    /** Not a registered Bluetooth SIG company ID — `0x44 0x58` is ASCII "DX". Confirmed against
+     *  the real capture: this beacon's iBeacon-shaped manufacturer data (`02 15` + UUID/major/
+     *  minor/measured-power, byte-for-byte identical either way) alternates between tagging
+     *  itself with this and with the genuine [APPLE_COMPANY_ID], roughly 50/50 across the whole
+     *  capture (101 vs 107 of 208 samples) — a firmware quirk, not something either app can rely
+     *  on being consistent advert to advert. DX-SMART evidently checks both company IDs (or
+     *  ignores the company ID and matches on the `02 15` shape directly); this app must check
+     *  both too, or it'll silently miss every other advertisement. */
+    const val VENDOR_COMPANY_ID = 0x4458
+
+    /** Service-data UUID 0xFEAB, seen in every advertisement this beacon has sent so far
+     *  regardless of which slot/frame type is configured — payload is a 1-byte status (which
+     *  has, so far, tracked the active slot's own frame-type byte — e.g. [FRAME_IBEACON] once
+     *  programmed — though this hasn't been independently confirmed against the vendor's own
+     *  app, just observed) followed by the 6-byte MAC. Used by [DxCp27Client.scanForDevices] as
+     *  one of the things to filter on, since it's present on every advert from this beacon
+     *  whether or not a name AD structure also is. */
+    val VENDOR_IDENTITY_SERVICE_UUID: UUID = UUID.fromString("0000feab-0000-1000-8000-00805f9b34fb")
+
+    /** Google's standard Eddystone service UUID, 0xFEAA — confirmed on real hardware: a slot
+     *  configured as Eddystone-UID/-URL/-TLM (see [FRAME_EDDYSTONE_UID]/[FRAME_EDDYSTONE_URL]/
+     *  [FRAME_EDDYSTONE_TLM], the GATT-side frame-type bytes, unrelated to these) advertises under
+     *  this real, open-standard UUID rather than any DX-specific one — the Eddystone spec's own
+     *  first service-data byte ([EDDYSTONE_FRAME_UID]/[EDDYSTONE_FRAME_URL]/[EDDYSTONE_FRAME_TLM])
+     *  says which. Used by [DxCp27Client.scanForDevices] to recognize these frames without having
+     *  to fully decode them, and by [eddystoneFrameLabel] for display. */
+    val EDDYSTONE_SERVICE_UUID: UUID = UUID.fromString("0000feaa-0000-1000-8000-00805f9b34fb")
+
+    const val EDDYSTONE_FRAME_UID = 0x00
+    const val EDDYSTONE_FRAME_URL = 0x10
+    const val EDDYSTONE_FRAME_TLM = 0x20
+
+    /** Human label for [EDDYSTONE_SERVICE_UUID] service data's own first byte — the open
+     *  Eddystone spec's frame-type discriminator, not anything DX-CP27-specific. */
+    fun eddystoneFrameLabel(serviceData: ByteArray): String = when (serviceData.firstOrNull()?.toInt()?.and(0xff)) {
+        EDDYSTONE_FRAME_UID -> "Eddystone-UID"
+        EDDYSTONE_FRAME_URL -> "Eddystone-URL"
+        EDDYSTONE_FRAME_TLM -> "Eddystone-TLM"
+        null -> "Eddystone (empty service data)"
+        else -> "Eddystone (unknown frame type 0x%02x)".format(serviceData[0])
+    }
+
     private const val IBEACON_AD_TYPE = 0x02
     private const val IBEACON_AD_LENGTH = 0x15
 

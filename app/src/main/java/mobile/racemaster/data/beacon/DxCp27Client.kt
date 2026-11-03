@@ -35,12 +35,25 @@ import kotlin.uuid.toKotlinUuid
  *  is ported call-for-call from the validated `~/dx-cp27-probing/dxbeacon.py` reference. */
 @OptIn(ExperimentalUuidApi::class)
 class DxCp27Client {
-    // Unfiltered at the native ScanFilter level, filtered manually below. The DX-CP27 is itself
-    // an iBeacon: its advertising payload is Apple manufacturer-specific data, which leaves no
-    // room to also advertise the 0xffe0 config service — that service only shows up once
-    // connected, via GATT discovery. So a service-UUID filter (as MulePullClient.scanForDevices
-    // uses, for a device that *does* advertise its service) can never match here; dxbeacon.py's
-    // own `cmd_scan` confirms this by filtering on advertised name instead ("CP27" or "DX").
+    // Unfiltered at the native ScanFilter level, filtered manually below. The 0xffe0 config
+    // service never appears in the advertisement itself (only via GATT discovery once
+    // connected), so a plain service-UUID filter (as MulePullClient.scanForDevices uses, for a
+    // device that *does* advertise its own service) can't be used here.
+    //
+    // No single shape-based heuristic (name, a specific manufacturer company ID, a specific
+    // service-data UUID) is safe to require on its own: this beacon rotates through advertising
+    // each of its configured slots as its own separate packet — confirmed on real hardware to
+    // include a device-name frame, an iBeacon frame (itself inconsistently tagged with Apple's
+    // real company ID or this vendor's own `0x4458`, see DxCp27Protocol.VENDOR_COMPANY_ID's own
+    // doc), and up to three different Eddystone sub-frames (UID/URL/TLM, each its own AD shape) —
+    // and every one of those has, in turn, turned out to be missing from an earlier version of
+    // this filter. Rather than keep extending an allowlist of shapes one bug report at a time,
+    // this recognizes a device once (by name, or any of the known manufacturer/service-data
+    // markers) and then accepts *every* advertisement from that same MAC address from then on,
+    // whatever shape it takes — so a frame type this app doesn't explicitly know about yet still
+    // reaches the UI (see ObservedAdvertFrame.Unrecognized) instead of being silently dropped at
+    // the source. Persists for this client's lifetime, not just one scan — once a beacon's MAC is
+    // known, there's no reason to make it clear its "name" hurdle again on a later scan.
     //
     // SCAN_MODE_LOW_LATENCY, unlike MulePullClient's own BALANCED choice — that file steps down
     // from LOW_LATENCY specifically because a Mule phone is simultaneously scanning *and*
@@ -54,10 +67,18 @@ class DxCp27Client {
         scanSettings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
     }
 
+    private val recognizedAddresses = mutableSetOf<String>()
+
     fun scanForDevices(): Flow<Advertisement> = scanner.advertisements
         .filter { advertisement ->
             val name = advertisement.name.orEmpty().uppercase()
-            "CP27" in name || "DX" in name
+            val looksLikeOurs = "CP27" in name || "DX" in name ||
+                advertisement.serviceData(DxCp27Protocol.VENDOR_IDENTITY_SERVICE_UUID.toKotlinUuid()) != null ||
+                advertisement.serviceData(DxCp27Protocol.EDDYSTONE_SERVICE_UUID.toKotlinUuid()) != null ||
+                advertisement.manufacturerData(DxCp27Protocol.APPLE_COMPANY_ID) != null ||
+                advertisement.manufacturerData(DxCp27Protocol.VENDOR_COMPANY_ID) != null
+            if (looksLikeOurs) recognizedAddresses += advertisement.identifier
+            looksLikeOurs || advertisement.identifier in recognizedAddresses
         }
 
     private val commandCharacteristic = characteristicOf(

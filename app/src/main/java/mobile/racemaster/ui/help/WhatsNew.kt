@@ -10,6 +10,18 @@ data class VersionNotes(val version: String, val highlights: List<String>)
 object WhatsNew {
     val versions: List<VersionNotes> = listOf(
         VersionNotes(
+            version = "0.0.25",
+            highlights = listOf(
+                "Setup Beacons' info icon now reliably shows every advertisement type a " +
+                    "beacon is broadcasting, including Eddystone — it could previously miss " +
+                    "those depending on the phone. This needs Location permission, which the " +
+                    "app will now ask for if not already granted.",
+                "That info dialog is also easier to read while still scanning: lines stay in " +
+                    "a fixed order instead of jumping around, and the iBeacon line is now a " +
+                    "simple \"Racemaster\" or \"Default\" flag instead of raw technical detail.",
+            ),
+        ),
+        VersionNotes(
             version = "0.0.24",
             highlights = listOf(
                 "Setup Beacons' scan list now has an info icon next to every beacon, showing " +
