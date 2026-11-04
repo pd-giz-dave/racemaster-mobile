@@ -85,6 +85,47 @@ class DxCp27ProtocolTest {
         assertEquals("CP27-4236", frame.name)
         assertEquals(3, frame.intervalRaw)
         assertEquals(0, frame.txPowerRaw)
+        assertEquals(false, frame.triggerEnabled)
+        assertEquals("Off", frame.triggerDescription)
+    }
+
+    @Test
+    fun parseDeviceNameFrameDecodesTriggerTrailer() {
+        // Confirmed not iBeacon-specific by a second, independent capture
+        // (snooped_data-device-info.txt) that set a device-name slot's own trigger to
+        // double-click/53s using the identical save/apply sequence.
+        val doubleClick = DxCp27Protocol.parseDeviceNameFrame(
+            "61435032372d34323336000000000000000000000000000000000000000300010135".fromHex(),
+        )
+        assertEquals(true, doubleClick.triggerEnabled)
+        assertEquals(DxCp27Protocol.TRIGGER_DOUBLE_CLICK, doubleClick.triggerMode)
+        assertEquals(53, doubleClick.triggerSeconds)
+        assertEquals("double-click, 53s", doubleClick.triggerDescription)
+    }
+
+    @Test
+    fun raceDeviceNameMatchesTodoMdsOwnSpec() {
+        // TODO.md lines 281-299: "RM.nnn[+-]pp" where nnn is the minor id zero-padded to 3
+        // digits and pp is the measured-power magnitude zero-padded to 2 digits, with a sign.
+        assertEquals("RM.007-71", DxCp27Protocol.raceDeviceName(minor = 7, measuredPowerDbm = -71))
+        assertEquals("RM.123-05", DxCp27Protocol.raceDeviceName(minor = 123, measuredPowerDbm = -5))
+        assertEquals("RM.000+00", DxCp27Protocol.raceDeviceName(minor = 0, measuredPowerDbm = 0))
+        // Not clamped to exactly 3/2 digits — a minor beyond 999 or magnitude beyond 99 still
+        // round-trips, just longer.
+        assertEquals("RM.1200-71", DxCp27Protocol.raceDeviceName(minor = 1200, measuredPowerDbm = -71))
+    }
+
+    @Test
+    fun parseRaceDeviceNameIsTheExactReverseOfRaceDeviceName() {
+        assertEquals(7 to -71, DxCp27Protocol.parseRaceDeviceName("RM.007-71"))
+        assertEquals(123 to -5, DxCp27Protocol.parseRaceDeviceName("RM.123-05"))
+        assertEquals(0 to 0, DxCp27Protocol.parseRaceDeviceName("RM.000+00"))
+        assertEquals(1200 to -71, DxCp27Protocol.parseRaceDeviceName("RM.1200-71"))
+        // Tolerates a non-padded magnitude too — parsing is lenient even though raceDeviceName
+        // itself always emits exactly 2 digits now, in case an older-written name is read back.
+        assertEquals(123 to -5, DxCp27Protocol.parseRaceDeviceName("RM.123-5"))
+        assertEquals(null, DxCp27Protocol.parseRaceDeviceName("CP27-4236")) // a factory/unrelated name
+        assertEquals(null, DxCp27Protocol.parseRaceDeviceName("RM.07-71")) // too few minor digits
     }
 
     @Test
@@ -159,13 +200,13 @@ class DxCp27ProtocolTest {
 
     @Test
     fun frameTypeLabelCoversEveryKnownSlotType() {
-        assertEquals("Device name", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_DEVICE_NAME))
+        assertEquals("Name", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_DEVICE_NAME))
         assertEquals("iBeacon", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_IBEACON))
         assertEquals("Eddystone-UID", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_EDDYSTONE_UID))
         assertEquals("Eddystone-URL", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_EDDYSTONE_URL))
         assertEquals("Eddystone-TLM", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_EDDYSTONE_TLM))
-        assertEquals("ACC (accelerometer)", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_ACC))
-        assertEquals("User data", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_USER))
+        assertEquals("ACC", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_ACC))
+        assertEquals("User", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_USER))
         assertEquals("Empty", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_EMPTY))
         assertEquals("Unknown (0x99)", DxCp27Protocol.frameTypeLabel(0x99))
     }

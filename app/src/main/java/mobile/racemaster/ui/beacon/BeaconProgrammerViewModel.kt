@@ -51,12 +51,18 @@ data class ScannedBeaconUi(
  *  (an Eddystone slot, say) would be silently dropped instead of showing up as a third line —
  *  making the other two look like the complete picture when they might not be. */
 sealed interface ObservedAdvertFrame {
-    data class DeviceName(val name: String) : ObservedAdvertFrame
-    data class IBeacon(val beacon: DxCp27Protocol.AdvertisedIBeacon) : ObservedAdvertFrame
+    /** Time between this frame kind's two most recent arrivals from this beacon, as a real
+     *  measurement of its actual advertising interval rather than whatever value was configured —
+     *  null until a second packet of this same kind has arrived this scan. See
+     *  [BeaconProgrammerViewModel.recordArrivalAndEstimateInterval]. */
+    val estimatedIntervalMillis: Long?
+
+    data class DeviceName(val name: String, override val estimatedIntervalMillis: Long?) : ObservedAdvertFrame
+    data class IBeacon(val beacon: DxCp27Protocol.AdvertisedIBeacon, override val estimatedIntervalMillis: Long?) : ObservedAdvertFrame
     // Keyed by subtype (UID/URL/TLM), not one shared slot — a factory-default beacon broadcasts
     // all three simultaneously, each as its own separate packet; collapsing them into one entry
     // would just recreate the original oscillation bug one level down.
-    data class Eddystone(val subtype: Int, val label: String) : ObservedAdvertFrame
+    data class Eddystone(val subtype: Int, val label: String, override val estimatedIntervalMillis: Long?) : ObservedAdvertFrame
 
     /** A frame type recognized via [DxCp27Protocol.isUserFrameAdvertisement]/
      *  [DxCp27Protocol.isAccFrameAdvertisement] (confirmed ACC/User shapes) or
@@ -64,8 +70,8 @@ sealed interface ObservedAdvertFrame {
      *  that function's own doc) — recognized as a type, but with no further fields to decode.
      *  Keyed by [frameType], same reasoning as [Eddystone]'s own `subtype` key: ACC and User are
      *  separate packets that can both be live from the same beacon at once. */
-    data class OtherFrameType(val frameType: Int, val label: String) : ObservedAdvertFrame
-    data class Unrecognized(val rawHex: String) : ObservedAdvertFrame
+    data class OtherFrameType(val frameType: Int, val label: String, override val estimatedIntervalMillis: Long?) : ObservedAdvertFrame
+    data class Unrecognized(val rawHex: String, override val estimatedIntervalMillis: Long?) : ObservedAdvertFrame
 
     /** A fixed display order, independent of arrival order — see [BeaconProgrammerViewModel.mergeObservedFrame]'s own doc. */
     val sortOrder: Int
@@ -105,12 +111,20 @@ data class BeaconUiState(
     val programResult: ProgramResultUi? = null,
 ) {
     val minorError: String?
-        get() = minorInput.takeIf { it.isNotEmpty() }?.toIntOrNull()?.let { if (it !in 0..65535) "0-65535 only" else null }
+        get() = minorInput.takeIf { it.isNotEmpty() }?.toIntOrNull()?.let { if (it !in 0..999) "0-999 only" else null }
             ?: minorInput.takeIf { it.isNotEmpty() && it.toIntOrNull() == null }?.let { "Numbers only" }
 
+    // Holds only a magnitude (0-90) — no sign is ever typed (see
+    // BeaconProgrammerViewModel.updateMeasuredPowerInput) — the beacon's actual measured-power
+    // dBm value is always this negated (0 stays 0), via measuredPowerDbm below.
     val measuredPowerError: String?
-        get() = measuredPowerInput.takeIf { it.isNotEmpty() }?.toIntOrNull()?.let { if (it !in -127..0) "-127 to 0 only" else null }
+        get() = measuredPowerInput.takeIf { it.isNotEmpty() }?.toIntOrNull()?.let { if (it !in 0..90) "0-90 only" else null }
             ?: measuredPowerInput.takeIf { it.isNotEmpty() && it.toIntOrNull() == null }?.let { "Numbers only" }
+
+    /** [measuredPowerInput]'s magnitude converted to the actual (always-non-positive) dBm value
+     *  everything else in the app works with. */
+    val measuredPowerDbm: Int?
+        get() = measuredPowerInput.toIntOrNull()?.let { if (it == 0) 0 else -it }
 
     val canProgram: Boolean
         get() = connectionPhase == BeaconConnectionPhase.CONNECTED && !isBusy && !isCalibrating &&
@@ -185,9 +199,14 @@ class BeaconProgrammerViewModel(
     private val seenAddresses = mutableMapOf<String, ScannedBeaconUi>()
     private var scanJob: Job? = null
 
+    // address -> frame kind key -> that kind's last two arrival timestamps this scan (oldest
+    // first, capped at 2) — see recordArrivalAndEstimateInterval.
+    private val frameArrivalTimestamps = mutableMapOf<String, MutableMap<String, MutableList<Long>>>()
+
     fun startScan() {
         if (scanJob?.isActive == true) return
         seenAddresses.clear()
+        frameArrivalTimestamps.clear()
         scanResultsFlow.value = emptyList()
         isScanningFlow.value = true
         repository.logScanStarted()
@@ -235,11 +254,13 @@ class BeaconProgrammerViewModel(
      *  type's own doc for why). */
     @OptIn(ExperimentalUuidApi::class)
     private fun mergeObservedFrame(existing: List<ObservedAdvertFrame>, advertisement: Advertisement): List<ObservedAdvertFrame> {
+        val address = advertisement.identifier
         var frames = existing
         var recognized = false
         val name = advertisement.name
         if (name != null) {
-            frames = frames.filterNot { it is ObservedAdvertFrame.DeviceName } + ObservedAdvertFrame.DeviceName(name)
+            frames = frames.filterNot { it is ObservedAdvertFrame.DeviceName } +
+                ObservedAdvertFrame.DeviceName(name, recordArrivalAndEstimateInterval(address, "DeviceName"))
             recognized = true
         }
         val decodedIBeacon = DxCp27Protocol.parseIBeaconAdvertisement(
@@ -247,7 +268,8 @@ class BeaconProgrammerViewModel(
                 ?: advertisement.manufacturerData(DxCp27Protocol.VENDOR_COMPANY_ID),
         )
         if (decodedIBeacon != null) {
-            frames = frames.filterNot { it is ObservedAdvertFrame.IBeacon } + ObservedAdvertFrame.IBeacon(decodedIBeacon)
+            frames = frames.filterNot { it is ObservedAdvertFrame.IBeacon } +
+                ObservedAdvertFrame.IBeacon(decodedIBeacon, recordArrivalAndEstimateInterval(address, "IBeacon"))
             recognized = true
         }
         val eddystoneData = advertisement.serviceData(DxCp27Protocol.EDDYSTONE_SERVICE_UUID.toKotlinUuid())
@@ -255,7 +277,7 @@ class BeaconProgrammerViewModel(
             val subtype = eddystoneData.firstOrNull()?.toInt()?.and(0xff) ?: -1
             val label = DxCp27Protocol.eddystoneFrameLabel(eddystoneData)
             frames = frames.filterNot { it is ObservedAdvertFrame.Eddystone && it.subtype == subtype } +
-                ObservedAdvertFrame.Eddystone(subtype, label)
+                ObservedAdvertFrame.Eddystone(subtype, label, recordArrivalAndEstimateInterval(address, "Eddystone:$subtype"))
             recognized = true
         }
         if (!recognized) {
@@ -266,25 +288,48 @@ class BeaconProgrammerViewModel(
             }
             if (otherFrameType != null && otherFrameType != DxCp27Protocol.FRAME_EMPTY) {
                 frames = frames.filterNot { it is ObservedAdvertFrame.OtherFrameType && it.frameType == otherFrameType } +
-                    ObservedAdvertFrame.OtherFrameType(otherFrameType, DxCp27Protocol.frameTypeLabel(otherFrameType))
+                    ObservedAdvertFrame.OtherFrameType(
+                        otherFrameType,
+                        DxCp27Protocol.frameTypeLabel(otherFrameType),
+                        recordArrivalAndEstimateInterval(address, "Other:$otherFrameType"),
+                    )
                 recognized = true
             }
         }
         if (!recognized && DxCp27Protocol.isAccFrameAdvertisement((advertisement as? PlatformAdvertisement)?.bytes)) {
             frames = frames.filterNot { it is ObservedAdvertFrame.OtherFrameType && it.frameType == DxCp27Protocol.FRAME_ACC } +
-                ObservedAdvertFrame.OtherFrameType(DxCp27Protocol.FRAME_ACC, DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_ACC))
+                ObservedAdvertFrame.OtherFrameType(
+                    DxCp27Protocol.FRAME_ACC,
+                    DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_ACC),
+                    recordArrivalAndEstimateInterval(address, "Other:${DxCp27Protocol.FRAME_ACC}"),
+                )
             recognized = true
         }
         if (!recognized) {
             val rawHex = (advertisement as? PlatformAdvertisement)?.bytes?.joinToString("") { "%02x".format(it) }
                 ?: "(raw advertisement bytes unavailable)"
-            frames = frames.filterNot { it is ObservedAdvertFrame.Unrecognized } + ObservedAdvertFrame.Unrecognized(rawHex)
+            frames = frames.filterNot { it is ObservedAdvertFrame.Unrecognized } +
+                ObservedAdvertFrame.Unrecognized(rawHex, recordArrivalAndEstimateInterval(address, "Unrecognized"))
         }
         // Sorted by a fixed type order, not insertion order — this beacon's slots arrive as
         // separate packets at unpredictable times, so without this the dialog's line order kept
         // reshuffling mid-scan as whichever frame type most recently refreshed jumped to the end,
         // making it unreadable while still scanning.
         return frames.sortedBy(ObservedAdvertFrame::sortOrder)
+    }
+
+    /** Records this instant as [frameKey]'s latest arrival from [address] and returns the gap to
+     *  its *previous* arrival — a real measurement of that frame kind's actual advertising
+     *  interval, shown per-frame in the scan list's decoded-advert dialog. Only the last two
+     *  timestamps are kept per kind — this is "time since the previous one", not a running
+     *  average, so a mid-scan BLE delivery hiccup shows up honestly as a one-off outlier rather
+     *  than being smoothed away. Returns null until a second packet of this same kind has
+     *  arrived. */
+    private fun recordArrivalAndEstimateInterval(address: String, frameKey: String, atMillis: Long = System.currentTimeMillis()): Long? {
+        val history = frameArrivalTimestamps.getOrPut(address) { mutableMapOf() }.getOrPut(frameKey) { mutableListOf() }
+        history.add(atMillis)
+        if (history.size > 2) history.removeAt(0)
+        return if (history.size == 2) history[1] - history[0] else null
     }
 
     fun connect(beacon: ScannedBeaconUi) {
@@ -298,25 +343,29 @@ class BeaconProgrammerViewModel(
         }
     }
 
-    /** Pre-fills the minor/measured-power inputs from the beacon's own currently-read iBeacon
-     *  frame, if it already has one — so re-programming an already-programmed beacon (e.g. to
-     *  tweak one field) doesn't force retyping or recalibrating values it already has. */
+    /** Pre-fills the minor/measured-power inputs by decoding them back out of the beacon's own
+     *  currently-read device name, if it's already in this app's own "RM.nnn[+-]pp" shape — so
+     *  re-programming an already-programmed beacon (e.g. to tweak one field) doesn't force
+     *  retyping or recalibrating values it already has. The parsed measured power is a signed
+     *  dBm value; the input field holds only its magnitude (see [BeaconUiState.measuredPowerDbm]). */
     private suspend fun loadConfigAndPrefill() {
         repository.loadCurrentConfig().onSuccess { config ->
-            config.iBeaconFrame?.let { frame ->
-                minorInputFlow.value = frame.minor.toString()
-                measuredPowerInputFlow.value = frame.measuredPowerDbm.toString()
+            config.deviceNameFrame?.name?.let(DxCp27Protocol::parseRaceDeviceName)?.let { (minor, measuredPower) ->
+                minorInputFlow.value = minor.toString()
+                measuredPowerInputFlow.value = kotlin.math.abs(measuredPower).toString()
             }
         }
     }
 
+    /** Capped at [DxCp27Protocol.PASSWORD_LENGTH] — the firmware's password field is a fixed
+     *  length, so anything longer is guaranteed to be rejected outright. */
     fun updateManualPassword(text: String) {
-        manualPasswordInputFlow.value = text
+        manualPasswordInputFlow.value = text.take(DxCp27Protocol.PASSWORD_LENGTH)
     }
 
     fun submitManualPassword() {
         val password = manualPasswordInputFlow.value
-        if (password.isBlank()) return
+        if (password.length != DxCp27Protocol.PASSWORD_LENGTH) return
         viewModelScope.launch {
             repository.authenticateWithPassword(password)
                 .onSuccess {
@@ -392,11 +441,13 @@ class BeaconProgrammerViewModel(
     }
 
     fun updateMinorInput(text: String) {
-        minorInputFlow.value = text.filter(Char::isDigit).take(5)
+        minorInputFlow.value = text.filter(Char::isDigit).take(3)
     }
 
+    /** Digits only, never a sign — the field represents a magnitude (0-90); the actual
+     *  measured-power dBm value is always zero or negative (see [BeaconUiState.measuredPowerDbm]). */
     fun updateMeasuredPowerInput(text: String) {
-        measuredPowerInputFlow.value = text.filter { it.isDigit() || it == '-' }.take(4)
+        measuredPowerInputFlow.value = text.filter(Char::isDigit).take(2)
     }
 
     private var calibrationJob: Job? = null
@@ -434,7 +485,7 @@ class BeaconProgrammerViewModel(
         isCalibratingFlow.value = false
         val median = calibrationSamples.takeIf { it.isNotEmpty() }?.sorted()?.get(calibrationSamples.size / 2)
         repository.logCalibrationResult(median, calibrationSamples.size)
-        if (median != null) measuredPowerInputFlow.value = median.toString()
+        if (median != null) measuredPowerInputFlow.value = kotlin.math.abs(median).toString()
         viewModelScope.launch { repository.finishCalibrating() }
     }
 
@@ -453,7 +504,7 @@ class BeaconProgrammerViewModel(
         showProgramConfirmFlow.value = false
         val state = uiState.value
         val minor = state.minorInput.toIntOrNull() ?: return
-        val measuredPower = state.measuredPowerInput.toIntOrNull() ?: return
+        val measuredPower = state.measuredPowerDbm ?: return
         viewModelScope.launch {
             val result = repository.programForRace(minor, measuredPower)
             result.onSuccess { repository.loadCurrentConfig() }

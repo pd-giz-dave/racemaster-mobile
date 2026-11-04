@@ -171,23 +171,28 @@ object HelpTopics {
                 "known passwords and shows its real current configuration, including battery.",
             "An info icon next to every beacon in the scan list decodes every advertisement " +
                 "it's broadcasting, straight from the scan packets, with no need to connect — " +
-                "its device name, whether its iBeacon frame is this app's own (\"Racemaster\") " +
-                "or still factory \"Default\", and any Eddystone, ACC or User frames too. " +
-                "Seeing every type needs Location permission, which this app asks for up front.",
-            "Programming rewrites the password away from the default, leaves slot 1 (the " +
-                "beacon's device name) alone, clears every slot after the iBeacon one, and " +
-                "writes an iBeacon frame into slot 2: this app's own UUID, major 1, the minor " +
-                "you enter, a 300ms interval, TX power -7dBm, and its trigger explicitly off — " +
-                "it advertises continuously, not just on a button click or being picked up.",
-            "Measured power needs calibrating per TX-power setting, not guessed — hold the " +
-                "beacon exactly 1 metre from the phone and tap Calibrate; it stays filled in " +
-                "for the next beacon too, so you only need to do this once per session.",
+                "its name, iBeacon, Eddystone, ACC and User frames, each labelled with an " +
+                "estimated advertising interval once it's been seen twice. Seeing every type " +
+                "needs Location permission, which this app asks for up front.",
+            "Programming rewrites the password away from the default, then writes a single " +
+                "device-name frame into slot 1 — \"RM.\" plus the Beacon Number you enter " +
+                "(0-999) plus the signed Measured power you enter or calibrate — at a 300ms " +
+                "interval, TX power -7dBm, and its trigger explicitly off so it advertises " +
+                "continuously, not just on a button click or being picked up. Every other slot " +
+                "is cleared.",
+            "Measured power is entered as a plain number (0-90) — no sign needed, it's always " +
+                "treated as negative. It needs calibrating per TX-power setting, not guessed: " +
+                "hold the beacon exactly 1 metre from the phone and tap Calibrate; it stays " +
+                "filled in for the next beacon too, so you only need to do this once per " +
+                "session.",
             "Power Off and Factory Reset sit next to Program Beacon, each behind its own " +
                 "confirmation — Power Off needs the beacon's own button pressed to bring it " +
                 "back on, Factory Reset wipes the password and every slot back to firmware " +
                 "defaults.",
             "Watch the log at the bottom — Program Beacon re-reads the beacon afterward and " +
-                "only reports success once the written values are confirmed, not just acked.",
+                "only reports success once the written values are confirmed, not just acked. " +
+                "It lists newest first and keeps itself scrolled to the top while you're " +
+                "watching it live.",
         ),
     )
 

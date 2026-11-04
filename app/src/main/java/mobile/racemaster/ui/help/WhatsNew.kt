@@ -10,6 +10,23 @@ data class VersionNotes(val version: String, val highlights: List<String>)
 object WhatsNew {
     val versions: List<VersionNotes> = listOf(
         VersionNotes(
+            version = "0.0.27",
+            highlights = listOf(
+                "Setup Beacons now programs a beacon by writing its ID straight into the " +
+                    "device name (slot 1), clearing every other slot — instead of the previous " +
+                    "scheme of an iBeacon frame in slot 2. The \"Minor ID\" prompt is now " +
+                    "\"Beacon Number (0-999)\", and \"Measured power\" is entered as a plain " +
+                    "number (no minus sign needed) and checked against its real 0 to -90dBm range.",
+                "The scan info icon now shows an estimated advertising interval next to each " +
+                    "frame type once it's been seen twice, and frame names are shorter — just " +
+                    "\"iBeacon\", \"Name\", \"ACC\", \"User\" — matching the same short names " +
+                    "now used in the connected slot list too.",
+                "Fixed Calibrate's Stop button scrolling out of reach while calibration was " +
+                    "running. The log also now lists newest-first and keeps its own size fixed " +
+                    "on screen.",
+            ),
+        ),
+        VersionNotes(
             version = "0.0.26",
             highlights = listOf(
                 "Setup Beacons' info icon now recognizes all 7 of a beacon's advertisement " +

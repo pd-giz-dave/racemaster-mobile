@@ -205,31 +205,25 @@ class DxCp27Client {
         DxCp27Protocol.parseDeviceInfo(reply)
     }
 
-    /** Ports `dxbeacon.py`'s `set_ibeacon` call-for-call: select the slot, set its frame type
-     *  (no ack expected), write every field (each ack'd), then save and apply. Runs under one
-     *  held lock for its whole sequence (see [withSession]) so nothing else can interleave a
-     *  command into the middle of it. The [APPLY_SETTLE_DELAY] after apply isn't optional —
-     *  confirmed on real hardware that the very next command issued right after a successful
-     *  apply ack can still time out waiting for a reply, because the beacon is momentarily busy
-     *  reconfiguring its advertising to match (the apply ack itself just means "accepted", not
-     *  "finished settling"). */
-    suspend fun setIBeacon(
+    /** Ports `dxbeacon.py`'s `set_name` call-for-call: select the slot, set its frame type (no
+     *  ack expected), write every field (each ack'd), then save and apply. Runs under one held
+     *  lock for its whole sequence (see [withSession]) so nothing else can interleave a command
+     *  into the middle of it. The [APPLY_SETTLE_DELAY] after apply isn't optional — confirmed on
+     *  real hardware (against the equivalent iBeacon write this replaced) that the very next
+     *  command issued right after a successful apply ack can still time out waiting for a reply,
+     *  because the beacon is momentarily busy reconfiguring its advertising to match (the apply
+     *  ack itself just means "accepted", not "finished settling"). */
+    suspend fun setDeviceName(
         slot: Int,
-        uuid: ByteArray,
-        major: Int,
-        minor: Int,
-        measuredPowerDbm: Int,
+        name: String,
         intervalRaw: Int,
         txPowerRaw: Int,
     ): Result<Unit> = withSession { current, channel ->
         sendAckLocked(current, channel, DxCp27Protocol.selectSlotCommand(slot))
-        sendCommandLocked(current, channel, DxCp27Protocol.FRAME_IBEACON, expectReply = false)
-        sendAckLocked(current, channel, DxCp27Protocol.CMD_SET_UUID, uuid)
-        sendAckLocked(current, channel, DxCp27Protocol.CMD_SET_MAJOR, be16(major))
-        sendAckLocked(current, channel, DxCp27Protocol.CMD_SET_MINOR, be16(minor))
-        sendAckLocked(current, channel, DxCp27Protocol.CMD_SET_MEASURED_POWER, byteArrayOf(measuredPowerDbm.toByte()))
-        sendAckLocked(current, channel, DxCp27Protocol.CMD_SET_ADV_INTERVAL, byteArrayOf(intervalRaw.toByte()))
-        sendAckLocked(current, channel, DxCp27Protocol.CMD_SET_TX_POWER, byteArrayOf(txPowerRaw.toByte()))
+        sendCommandLocked(current, channel, DxCp27Protocol.FRAME_DEVICE_NAME, expectReply = false)
+        sendAckLocked(current, channel, DxCp27Protocol.CMD_SET_DEVICE_NAME, name.toByteArray(Charsets.US_ASCII))
+        sendAckLocked(current, channel, DxCp27Protocol.CMD_SET_DEVICE_NAME_ADV_INTERVAL, byteArrayOf(intervalRaw.toByte()))
+        sendAckLocked(current, channel, DxCp27Protocol.CMD_SET_DEVICE_NAME_TX_POWER, byteArrayOf(txPowerRaw.toByte()))
         sendAckLocked(current, channel, DxCp27Protocol.CMD_SAVE)
         sendAckLocked(current, channel, DxCp27Protocol.CMD_APPLY)
         delay(APPLY_SETTLE_DELAY)
@@ -341,8 +335,6 @@ class DxCp27Client {
 
     private fun isAckShaped(reply: ByteArray): Boolean =
         reply.size == 6 && reply[0] == 0x4E.toByte() && reply[1] == 0x4F.toByte()
-
-    private fun be16(value: Int): ByteArray = byteArrayOf((value shr 8).toByte(), value.toByte())
 
     companion object {
         private val CONNECT_TIMEOUT = 10_000.milliseconds

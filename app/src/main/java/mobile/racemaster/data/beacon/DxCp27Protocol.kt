@@ -29,6 +29,11 @@ object DxCp27Protocol {
 
     const val DEFAULT_PASSWORD = "dx1234"
 
+    /** The firmware's fixed password length — see [RACEMASTER_PASSWORD]'s own doc for how this
+     *  was confirmed. Used to cap manual password entry in the UI, since anything else is
+     *  guaranteed to be rejected. */
+    const val PASSWORD_LENGTH = 6
+
     /** See [DeviceInfo.batteryPercent]'s own doc — a CR2032's nominal/fresh open-circuit voltage
      *  is ~3.0-3.2V; 3000mV is used as the "100%" end of the linear approximation. */
     const val CR2032_FULL_MILLIVOLTS = 3_000
@@ -39,19 +44,19 @@ object DxCp27Protocol {
     const val CR2032_EMPTY_MILLIVOLTS = 2_000
 
     // ============================================================================================
-    // Every value this app writes into a beacon's iBeacon slot — UUID, major, target password,
-    // advertising interval, TX power — lives in this one block, so a future tuning pass ("slow
-    // the interval down to save battery", "turn the TX power up") is a one-line edit here, not a
-    // hunt through BeaconRepository/DxCp27Client. MINOR isn't here: it's the one field that's
-    // genuinely per-beacon, entered by the operator on the screen itself, not a fixed constant.
+    // Every value this app writes when programming a beacon — target password, advertising
+    // interval, TX power — lives in this one block, so a future tuning pass ("slow the interval
+    // down to save battery", "turn the TX power up") is a one-line edit here, not a hunt through
+    // BeaconRepository/DxCp27Client. MINOR and the measured-power calibration aren't here: both
+    // are genuinely per-beacon, entered/measured by the operator on the screen itself, not fixed
+    // constants — see [raceDeviceName].
     // ============================================================================================
 
-    /** Fixed across every beacon this app programs — only MINOR distinguishes individual units
-     *  (MAJOR is always [RACEMASTER_MAJOR]). Generated once as a random v4 UUID; must never
-     *  change once beacons are deployed with it, or previously-programmed units stop matching. */
+    /** Still recognized when scanning (see [AdvertisedIBeacon.isProgrammedByThisApp]), for a
+     *  beacon an older version of this app programmed with an iBeacon frame — but no longer
+     *  written: see [RACE_SLOT]'s own doc for the current device-name-based scheme (TODO.md lines
+     *  281-299), which encodes minor/measured-power into a slot-1 device name instead. */
     val RACEMASTER_IBEACON_UUID: ByteArray = uuidToBytes(UUID.fromString("B9A7CE7F-5D62-4F85-B34C-B8D5BCB23B99"))
-
-    const val RACEMASTER_MAJOR = 1
 
     // Must be exactly 6 characters, matching DEFAULT_PASSWORD's own length — confirmed on real
     // hardware: a 10-character "racemaster" was rejected outright (change-password ack came back
@@ -85,14 +90,37 @@ object DxCp27Protocol {
     const val RACEMASTER_TX_POWER_DBM = -7.0
     val RACEMASTER_TX_POWER_RAW: Int = dbmToTxPowerRaw(RACEMASTER_TX_POWER_DBM)
 
-    /** Slot 1 holds this beacon's device-name frame, which this app deliberately leaves alone
-     *  (per the operator's own instruction — it's used to identify the physical unit, e.g. during
-     *  a scan) rather than clearing it like every other non-iBeacon slot. */
-    const val PRESERVED_DEVICE_NAME_SLOT = 1
+    /** This app programs slot 1 as a device-name frame (see [raceDeviceName]) and clears every
+     *  other slot — per TODO.md's own spec (lines 281-299), superseding an earlier design that
+     *  preserved slot 1's factory name and wrote an iBeacon frame into slot 2 instead (still
+     *  recognized when reading an older-programmed beacon back, just not written anymore). */
+    const val RACE_SLOT = 1
 
-    /** This app always programs the iBeacon frame into slot 2 (slot 1 is [PRESERVED_DEVICE_NAME_SLOT])
-     *  and clears every slot after it. */
-    const val IBEACON_SLOT = 2
+    /** The device-name text this app programs into [RACE_SLOT] — encodes both operator-entered
+     *  fields directly into the name itself (no separate iBeacon UUID/major/minor/measured-power
+     *  frame anymore): `"RM."` + [minor] zero-padded to at least 3 digits, then a sign (`'-'` for
+     *  negative, `'+'` otherwise — [measuredPowerDbm] is realistically always negative in
+     *  practice, but TODO.md's own spec allows either) and its magnitude zero-padded to at least
+     *  2 digits. E.g. minor 7, measured power -5dBm -> `"RM.007-05"`. Comfortably inside the
+     *  device-name frame's 28-byte max. */
+    fun raceDeviceName(minor: Int, measuredPowerDbm: Int): String {
+        val sign = if (measuredPowerDbm < 0) '-' else '+'
+        return "RM.%03d%c%02d".format(minor, sign, kotlin.math.abs(measuredPowerDbm))
+    }
+
+    private val RACE_DEVICE_NAME_REGEX = Regex("""^RM\.(\d{3,})([+-])(\d+)$""")
+
+    /** The reverse of [raceDeviceName] — `null` for anything not shaped like that exact format
+     *  (e.g. a beacon still on its factory name, or an older [RACEMASTER_IBEACON_UUID]-based
+     *  beacon whose device-name slot was left untouched). Used to pre-fill the minor/measured-
+     *  power inputs when reconnecting to an already race-programmed beacon. */
+    fun parseRaceDeviceName(name: String): Pair<Int, Int>? {
+        val match = RACE_DEVICE_NAME_REGEX.matchEntire(name) ?: return null
+        val minor = match.groupValues[1].toIntOrNull() ?: return null
+        val magnitude = match.groupValues[3].toIntOrNull() ?: return null
+        val measuredPowerDbm = if (match.groupValues[2] == "-") -magnitude else magnitude
+        return minor to measuredPowerDbm
+    }
 
     // ---- Commands (phone -> beacon, framed via buildFrame, written to COMMAND_CHARACTERISTIC_UUID) ----
     const val CMD_READ_SLOTS = 0x10
@@ -105,11 +133,11 @@ object DxCp27Protocol {
     const val CMD_DEVICE_INFO = 0x30
     const val CMD_APPLY = 0x60
 
-    /** Save, with the iBeacon slot's trigger left off/cleared — the two forms of the edit
-     *  sequence's save step (the other is [CMD_SAVE_WITH_TRIGGER]) are mutually exclusive, not a
-     *  save plus a separate trigger toggle. This is the one this app always uses: a race beacon
-     *  must advertise continuously, not just on a button click or being picked up, so every
-     *  [DxCp27Client.setIBeacon] call ends here, never on [CMD_SAVE_WITH_TRIGGER]. Confirmed via a
+    /** Save, with the slot's trigger left off/cleared — the two forms of the edit sequence's save
+     *  step (the other is [CMD_SAVE_WITH_TRIGGER]) are mutually exclusive, not a save plus a
+     *  separate trigger toggle. This is the one this app always uses: a race beacon must
+     *  advertise continuously, not just on a button click or being picked up, so every
+     *  [DxCp27Client.setDeviceName] call ends here, never on [CMD_SAVE_WITH_TRIGGER]. Confirmed via a
      *  fresh capture stepping DX-SMART's own per-slot "Trigger" option through all four of its
      *  values (double-click, triple-click, device-move, then off) — see [CMD_SAVE_WITH_TRIGGER]'s
      *  own doc for the full writeup. */
@@ -180,7 +208,17 @@ object DxCp27Protocol {
 
     const val FRAME_EMPTY = 0xFF
 
-    // ---- iBeacon field writes (sent after selecting a slot and setting its type to FRAME_IBEACON) ----
+    // ---- Device-name field writes (sent after selecting a slot and setting its type to
+    // FRAME_DEVICE_NAME) — what DxCp27Client.setDeviceName actually writes now, per RACE_SLOT's
+    // own doc. ----
+    const val CMD_SET_DEVICE_NAME = 0x71
+    const val CMD_SET_DEVICE_NAME_ADV_INTERVAL = 0x72
+    const val CMD_SET_DEVICE_NAME_TX_POWER = 0x73
+
+    // ---- iBeacon field writes (sent after selecting a slot and setting its type to FRAME_IBEACON)
+    // — kept as a faithful, complete port of the confirmed protocol (ports dxbeacon.py's own
+    // IBEACON_FIELD_* constants), but no longer written by this app itself; see RACE_SLOT's own
+    // doc for the current device-name-based scheme. ----
     const val CMD_SET_UUID = 0x74
     const val CMD_SET_MAJOR = 0x75
     const val CMD_SET_MINOR = 0x76
@@ -243,7 +281,21 @@ object DxCp27Protocol {
             ((uuid.contentHashCode() * 31 + major) * 31 + minor) * 31 + measuredPowerDbm
     }
 
-    data class DeviceNameFrame(val name: String, val intervalRaw: Int, val txPowerRaw: Int)
+    data class DeviceNameFrame(
+        val name: String,
+        val intervalRaw: Int,
+        val txPowerRaw: Int,
+        // Defaulted to "off" for the same reason as IBeaconFrame's own trigger fields — this app
+        // only ever programs with the trigger off, and parseDeviceNameFrame fills in the real
+        // read-back values regardless.
+        val triggerEnabled: Boolean = false,
+        val triggerMode: Int = TRIGGER_OFF,
+        val triggerSeconds: Int = 0,
+    ) {
+        /** Same shape as [IBeaconFrame.triggerDescription] — see that property's own doc. */
+        val triggerDescription: String
+            get() = if (!triggerEnabled) "Off" else "${triggerModeLabel(triggerMode)}, ${triggerSeconds}s"
+    }
 
     data class DeviceInfo(
         val batteryMillivolts: Int,
@@ -294,11 +346,20 @@ object DxCp27Protocol {
     }
 
     /** [FRAME_DEVICE_NAME]'s 34-byte reply: echoed type byte + 28-byte NUL-padded name +
-     *  interval + TX power + 3 reserved bytes. */
+     *  interval + TX power + trigger state (enabled flag, mode, seconds) — the same trailer
+     *  layout as [parseIBeaconFrame]'s, confirmed not iBeacon-specific by a capture
+     *  (`snooped_data-device-info.txt`) that set a device-name slot's own trigger directly. */
     fun parseDeviceNameFrame(data: ByteArray): DeviceNameFrame {
         require(data.size >= 34) { "device-name frame reply too short: ${data.size} bytes" }
         val name = String(data.copyOfRange(1, 29), Charsets.US_ASCII).trimEnd('\u0000')
-        return DeviceNameFrame(name, data[29].toInt() and 0xff, data[30].toInt() and 0xff)
+        return DeviceNameFrame(
+            name = name,
+            intervalRaw = data[29].toInt() and 0xff,
+            txPowerRaw = data[30].toInt() and 0xff,
+            triggerEnabled = (data[31].toInt() and 0xff) != 0,
+            triggerMode = data[32].toInt() and 0xff,
+            triggerSeconds = data[33].toInt() and 0xff,
+        )
     }
 
     /** [CMD_DEVICE_INFO]'s reply: echoed type byte + 2-byte battery mV (LE) + 6-byte MAC +
@@ -321,15 +382,17 @@ object DxCp27Protocol {
         )
     }
 
-    /** Human label for a slot-table/frame-type byte, for display (not protocol behavior). */
+    /** Human label for a slot-table/frame-type byte, for display (not protocol behavior) —
+     *  deliberately terse (e.g. "ACC", not "ACC (accelerometer)") so it reads cleanly both in the
+     *  programming screen's slot summary and the scan list's per-advert breakdown. */
     fun frameTypeLabel(frameType: Int): String = when (frameType) {
-        FRAME_DEVICE_NAME -> "Device name"
+        FRAME_DEVICE_NAME -> "Name"
         FRAME_IBEACON -> "iBeacon"
         FRAME_EDDYSTONE_UID -> "Eddystone-UID"
         FRAME_EDDYSTONE_URL -> "Eddystone-URL"
         FRAME_EDDYSTONE_TLM -> "Eddystone-TLM"
-        FRAME_ACC -> "ACC (accelerometer)"
-        FRAME_USER -> "User data"
+        FRAME_ACC -> "ACC"
+        FRAME_USER -> "User"
         FRAME_EMPTY -> "Empty"
         else -> "Unknown (0x%02x)".format(frameType)
     }
@@ -450,10 +513,11 @@ object DxCp27Protocol {
 
         override fun hashCode(): Int = ((uuid.contentHashCode() * 31 + major) * 31 + minor) * 31 + measuredPowerDbm
 
-        /** True once this frame's UUID matches [RACEMASTER_IBEACON_UUID] — the only thing that
-         *  distinguishes "this app already programmed this beacon" from "still factory default,
-         *  or programmed by DX-SMART/something else", since major/minor/power all vary freely
-         *  either way. */
+        /** True once this frame's UUID matches [RACEMASTER_IBEACON_UUID] — recognizes a beacon an
+         *  *older* version of this app programmed (back when it wrote an iBeacon frame rather
+         *  than [RACE_SLOT]'s device name); distinguishes that from "still factory default, or
+         *  programmed by DX-SMART/something else", since major/minor/power all vary freely
+         *  either way. A beacon this app programs now has no iBeacon frame at all. */
         val isProgrammedByThisApp: Boolean get() = uuid.contentEquals(RACEMASTER_IBEACON_UUID)
     }
 

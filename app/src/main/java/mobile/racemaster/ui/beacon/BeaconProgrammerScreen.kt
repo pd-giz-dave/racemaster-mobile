@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -43,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -55,6 +56,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.data.beacon.BeaconConnectionPhase
 import mobile.racemaster.data.beacon.BeaconLogDirection
 import mobile.racemaster.data.beacon.BeaconLogEntry
+import mobile.racemaster.data.beacon.DxCp27Protocol
 import mobile.racemaster.data.beacon.SlotSummary
 import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.ui.help.HelpTopics
@@ -124,15 +126,10 @@ fun BeaconProgrammerScreen(
         )
     }
 
+    // Manual scroll only, deliberately — the log panel below shows newest-first and never
+    // auto-scrolls (see LogPanel's own doc), so there's nothing left here needing a programmatic
+    // scroll either.
     val outerScrollState = rememberScrollState()
-    // The log panel below is a bounded-height LazyColumn that auto-scrolls *itself* to the
-    // newest entry, but that's invisible if the panel itself has scrolled out of view of this
-    // outer Column (e.g. the config/program controls above it push it past the fold) — so also
-    // scroll this outer Column to the bottom on every new entry, or the latest status is only
-    // visible after manually scrolling down to find it.
-    LaunchedEffect(uiState.log.size) {
-        outerScrollState.animateScrollTo(outerScrollState.maxValue)
-    }
 
     Scaffold(
         topBar = {
@@ -185,6 +182,10 @@ fun BeaconProgrammerScreen(
     }
 }
 
+/** " — ~Nms" once a frame kind's actual advertising interval has been measured (its second
+ *  arrival this scan), else blank — see [ObservedAdvertFrame.estimatedIntervalMillis]'s own doc. */
+private fun Long?.intervalSuffix(): String = this?.let { " — ~${it}ms" } ?: ""
+
 @Composable
 private fun ScanSection(uiState: BeaconUiState, viewModel: BeaconProgrammerViewModel) {
     // Shows the decoded-advert dialog for whichever scan row's info icon was last tapped — see
@@ -217,27 +218,25 @@ private fun ScanSection(uiState: BeaconUiState, viewModel: BeaconProgrammerViewM
                         beacon.frames.forEach { frame ->
                             when (frame) {
                                 is ObservedAdvertFrame.DeviceName -> Text(
-                                    "Device name frame: \"${frame.name}\"",
+                                    "Name: \"${frame.name}\"" + frame.estimatedIntervalMillis.intervalSuffix(),
                                     style = MaterialTheme.typography.bodySmall,
                                 )
-                                is ObservedAdvertFrame.IBeacon -> {
-                                    val label = if (frame.beacon.isProgrammedByThisApp) "Racemaster" else "Default"
-                                    Text(
-                                        "iBeacon frame — $label",
-                                        style = MaterialTheme.typography.bodySmall,
-                                    )
-                                }
+                                is ObservedAdvertFrame.IBeacon -> Text(
+                                    "iBeacon" + frame.estimatedIntervalMillis.intervalSuffix(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
                                 is ObservedAdvertFrame.Eddystone -> Text(
-                                    frame.label,
+                                    frame.label + frame.estimatedIntervalMillis.intervalSuffix(),
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                                 is ObservedAdvertFrame.OtherFrameType -> Text(
-                                    "${frame.label} frame",
+                                    frame.label + frame.estimatedIntervalMillis.intervalSuffix(),
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                                 is ObservedAdvertFrame.Unrecognized -> Text(
                                     "Unrecognized advertisement (not a name, not a decodable " +
-                                        "iBeacon frame, not Eddystone):\n${frame.rawHex}",
+                                        "iBeacon frame, not Eddystone)" + frame.estimatedIntervalMillis.intervalSuffix() +
+                                        ":\n${frame.rawHex}",
                                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                                 )
                             }
@@ -304,13 +303,16 @@ private fun ScanSection(uiState: BeaconUiState, viewModel: BeaconProgrammerViewM
                 OutlinedTextField(
                     value = uiState.manualPasswordInput,
                     onValueChange = viewModel::updateManualPassword,
-                    label = { Text("Password") },
+                    label = { Text("Password (6 chars)") },
                     singleLine = true,
                     modifier = Modifier.weight(1f),
                 )
                 Button(
                     onClick = withClickSound(viewModel::submitManualPassword),
-                    enabled = !uiState.isBusy && uiState.manualPasswordInput.isNotBlank(),
+                    // Firmware's password field is a fixed 6 characters — anything shorter is
+                    // guaranteed to be rejected, so don't let the operator submit it and wait on
+                    // a doomed round trip.
+                    enabled = !uiState.isBusy && uiState.manualPasswordInput.length == DxCp27Protocol.PASSWORD_LENGTH,
                 ) { Text("Try") }
             }
         }
@@ -342,7 +344,7 @@ private fun ConnectedSection(uiState: BeaconUiState, viewModel: BeaconProgrammer
             OutlinedTextField(
                 value = uiState.measuredPowerInput,
                 onValueChange = viewModel::updateMeasuredPowerInput,
-                label = { Text("Measured power (dBm)") },
+                label = { Text("Measured power @1m (-dBm)") },
                 isError = uiState.measuredPowerError != null,
                 supportingText = uiState.measuredPowerError?.let { { Text(it) } },
                 singleLine = true,
@@ -374,7 +376,7 @@ private fun ConnectedSection(uiState: BeaconUiState, viewModel: BeaconProgrammer
         OutlinedTextField(
             value = uiState.minorInput,
             onValueChange = viewModel::updateMinorInput,
-            label = { Text("Minor ID (0-65535)") },
+            label = { Text("Beacon Number (0-999)") },
             isError = uiState.minorError != null,
             supportingText = uiState.minorError?.let { { Text(it) } },
             singleLine = true,
@@ -439,10 +441,9 @@ private fun CurrentConfigSection(config: mobile.racemaster.data.beacon.BeaconCon
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        config.iBeaconFrame?.let { frame ->
+        config.deviceNameFrame?.let { frame ->
             Text(
-                "iBeacon: UUID ${frame.uuidString}, major ${frame.major}, minor ${frame.minor}, " +
-                    "measured power ${frame.measuredPowerDbm} dBm, interval ${frame.intervalRaw}, " +
+                "Name: \"${frame.name}\", interval ${frame.intervalRaw}, " +
                     "TX power ${frame.txPowerRaw}, trigger ${frame.triggerDescription}",
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -455,11 +456,30 @@ private fun CurrentConfigSection(config: mobile.racemaster.data.beacon.BeaconCon
     }
 }
 
+/** Newest entry first, oldest last — so the latest status is always right under the "Log"
+ *  header. Auto-scrolls to reveal each new entry only while the operator is actually looking at
+ *  the top of the list (see [pinnedToTop] below) — scrolled away to read older entries, it leaves
+ *  the view alone rather than yanking a line they're mid-read on out from under them. Either way
+ *  the list's own bounded height (below) never grows to fit its content — only the content
+ *  scrolls inside it, the surrounding layout never reflows. */
 @Composable
 private fun LogPanel(log: List<BeaconLogEntry>, onClear: () -> Unit) {
     val listState = rememberLazyListState()
+    // True once the operator has scrolled back up to (or never away from) the very top. Derived
+    // only from real scroll gestures (the isScrollInProgress transition below), not read fresh on
+    // every new log entry — LazyColumn's own key-based scroll-position preservation shifts
+    // firstVisibleItemIndex by itself once a new item lands at index 0, which would otherwise make
+    // "was at the top" look false the instant it stops being true for the wrong reason.
+    var pinnedToTop by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }.collect { inProgress ->
+            if (!inProgress) {
+                pinnedToTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+            }
+        }
+    }
     LaunchedEffect(log.size) {
-        if (log.isNotEmpty()) listState.animateScrollToItem(log.lastIndex)
+        if (pinnedToTop && log.isNotEmpty()) listState.animateScrollToItem(0)
     }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -469,9 +489,12 @@ private fun LogPanel(log: List<BeaconLogEntry>, onClear: () -> Unit) {
         // Bounded height — this LazyColumn sits inside the screen's own outer verticalScroll
         // Column, which hands it an infinite height constraint and crashes
         // ("vertically scrollable component was measured with infinity maximum height") unless
-        // its own height is capped here.
-        LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).padding(top = 4.dp)) {
-            items(log, key = { it.id }) { entry -> LogRow(entry) }
+        // its own height is capped here. Fixed, not just capped — heightIn(max=) alone would let
+        // a short log leave the box short too, shrinking and growing the layout around it as
+        // entries are cleared/added; a plain height() keeps the scroll area's own footprint
+        // constant regardless of entry count.
+        LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().height(320.dp).padding(top = 4.dp)) {
+            items(log.asReversed(), key = { it.id }) { entry -> LogRow(entry) }
         }
     }
 }

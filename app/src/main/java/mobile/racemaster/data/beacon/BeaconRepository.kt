@@ -28,7 +28,7 @@ data class SlotSummary(val slot: Int, val frameType: Int, val label: String = Dx
 
 data class BeaconConfig(
     val slots: List<SlotSummary>,
-    val iBeaconFrame: DxCp27Protocol.IBeaconFrame?,
+    val deviceNameFrame: DxCp27Protocol.DeviceNameFrame?,
     val deviceInfo: DxCp27Protocol.DeviceInfo,
 )
 
@@ -217,17 +217,19 @@ class BeaconRepository(private val client: DxCp27Client) {
 
     private suspend fun readSlotsRaw(): List<Int> = client.readSlots().getOrThrow()
 
-    /** Reads the slot table, every non-empty slot's own frame (just the iBeacon one is decoded
-     *  for display — others show as a labelled-but-opaque row, since this screen doesn't need to
-     *  edit them), and device info — everything [BeaconConfig] needs. */
+    /** Reads the slot table, the device-name frame if one is present (decoded for display —
+     *  other slot types, including an iBeacon one left by an older app version, DX-SMART, or the
+     *  factory default, show as a labelled-but-opaque row, since this screen no longer writes or
+     *  displays one itself — see [DxCp27Protocol.RACE_SLOT]'s own doc), and device info —
+     *  everything [BeaconConfig] needs. */
     suspend fun loadCurrentConfig(): Result<BeaconConfig> = withBusyLock {
         runCatching {
             val slotTypes = readSlotsRaw()
             val slots = slotTypes.mapIndexed { index, type -> SlotSummary(index + 1, type) }
-            val iBeaconFrame = slots.firstOrNull { it.frameType == DxCp27Protocol.FRAME_IBEACON }
-                ?.let { DxCp27Protocol.parseIBeaconFrame(client.readFrame(DxCp27Protocol.FRAME_IBEACON).getOrThrow()) }
+            val deviceNameFrame = slots.firstOrNull { it.frameType == DxCp27Protocol.FRAME_DEVICE_NAME }
+                ?.let { DxCp27Protocol.parseDeviceNameFrame(client.readFrame(DxCp27Protocol.FRAME_DEVICE_NAME).getOrThrow()) }
             val deviceInfo = client.readDeviceInfo().getOrThrow()
-            BeaconConfig(slots, iBeaconFrame, deviceInfo).also {
+            BeaconConfig(slots, deviceNameFrame, deviceInfo).also {
                 configFlow.value = it
                 log(BeaconLogDirection.INFO, "Read current config — battery ${it.deviceInfo.batteryMillivolts} mV")
             }
@@ -287,10 +289,11 @@ class BeaconRepository(private val client: DxCp27Client) {
     }
 
     /** The one real feature: rewrite the password unless it's already this app's own target,
-     *  write the iBeacon frame into [DxCp27Protocol.IBEACON_SLOT], clear every other slot, then
-     *  read everything back and verify it genuinely matches what was just written — see this
-     *  class's own doc for why that verification matters (a transport-level ack isn't proof the
-     *  beacon actually applied it).
+     *  write the device name into [DxCp27Protocol.RACE_SLOT] (encoding minor/measured-power
+     *  directly in the name text — see [DxCp27Protocol.raceDeviceName]'s own doc), clear every
+     *  other slot, then read everything back and verify it genuinely matches what was just
+     *  written — see this class's own doc for why that verification matters (a transport-level
+     *  ack isn't proof the beacon actually applied it).
      *
      *  Deliberately compares against [DxCp27Protocol.RACEMASTER_PASSWORD] rather than tracking
      *  "was the default" as a separate flag — a beacon can land on some other non-default
@@ -298,11 +301,11 @@ class BeaconRepository(private val client: DxCp27Client) {
      *  own target password constant changing between runs), and it still needs fixing up to the
      *  current target, not left alone just because it isn't the factory default.
      *
-     *  Likewise skips the iBeacon write entirely (see `alreadyCorrect` below) if the beacon's
-     *  currently-loaded config already matches every target field exactly — not just to avoid
-     *  pointless I/O, but because every write here ends in an apply, and apply is the step
+     *  Likewise skips the device-name write entirely (see `alreadyCorrect` below) if the
+     *  beacon's currently-loaded config already matches every target field exactly — not just to
+     *  avoid pointless I/O, but because every write here ends in an apply, and apply is the step
      *  that's proven disruptive on real hardware (drops the connection for a password change,
-     *  can leave the beacon unresponsive for a stretch for an iBeacon/slot write). Don't pay
+     *  can leave the beacon unresponsive for a stretch for a device-name/slot write). Don't pay
      *  that cost for a no-op. */
     suspend fun programForRace(minor: Int, measuredPowerDbm: Int): Result<Unit> = withBusyLock {
         runCatching {
@@ -325,50 +328,46 @@ class BeaconRepository(private val client: DxCp27Client) {
                 log(BeaconLogDirection.INFO, "Already authenticated with '${DxCp27Protocol.RACEMASTER_PASSWORD}' — skipping password change.")
             }
 
-            val expected = DxCp27Protocol.IBeaconFrame(
-                uuid = DxCp27Protocol.RACEMASTER_IBEACON_UUID,
-                major = DxCp27Protocol.RACEMASTER_MAJOR,
-                minor = minor,
-                measuredPowerDbm = measuredPowerDbm,
+            val expectedName = DxCp27Protocol.raceDeviceName(minor, measuredPowerDbm)
+            val expected = DxCp27Protocol.DeviceNameFrame(
+                name = expectedName,
                 intervalRaw = DxCp27Protocol.RACEMASTER_ADV_INTERVAL_RAW,
                 txPowerRaw = DxCp27Protocol.RACEMASTER_TX_POWER_RAW,
                 // A race beacon must advertise continuously, never just on a click/motion
-                // trigger — DxCp27Client.setIBeacon always saves via CMD_SAVE (trigger off, never
-                // CMD_SAVE_WITH_TRIGGER), so the read-back must show it off too, not just assume it.
+                // trigger — DxCp27Client.setDeviceName always saves via CMD_SAVE (trigger off,
+                // never CMD_SAVE_WITH_TRIGGER), so the read-back must show it off too, not just
+                // assume it.
                 triggerEnabled = false,
                 triggerMode = DxCp27Protocol.TRIGGER_OFF,
                 triggerSeconds = 0,
             )
             val current = configFlow.value
-            val alreadyCorrect = current != null && current.iBeaconFrame == expected &&
+            val alreadyCorrect = current != null && current.deviceNameFrame == expected &&
                 current.slots.all {
                     when (it.slot) {
-                        DxCp27Protocol.PRESERVED_DEVICE_NAME_SLOT -> true // left alone, whatever it holds
-                        DxCp27Protocol.IBEACON_SLOT -> it.frameType == DxCp27Protocol.FRAME_IBEACON
+                        DxCp27Protocol.RACE_SLOT -> it.frameType == DxCp27Protocol.FRAME_DEVICE_NAME
                         else -> it.frameType == DxCp27Protocol.FRAME_EMPTY
                     }
                 }
 
             if (alreadyCorrect) {
                 // Every write here ends in an apply, and apply is the disruptive step (password
-                // changes drop the connection outright; iBeacon/slot writes can leave the beacon
-                // unresponsive for a stretch) — so if the beacon already holds exactly these
-                // values, skip writing anything at all rather than reapplying a no-op change.
+                // changes drop the connection outright; device-name/slot writes can leave the
+                // beacon unresponsive for a stretch) — so if the beacon already holds exactly
+                // these values, skip writing anything at all rather than reapplying a no-op
+                // change.
                 log(BeaconLogDirection.INFO, "Already programmed with these exact values — nothing to write.")
             } else {
-                log(BeaconLogDirection.TX, "Writing iBeacon frame — major ${DxCp27Protocol.RACEMASTER_MAJOR}, minor $minor, measured power $measuredPowerDbm dBm…")
-                client.setIBeacon(
-                    slot = DxCp27Protocol.IBEACON_SLOT,
-                    uuid = DxCp27Protocol.RACEMASTER_IBEACON_UUID,
-                    major = DxCp27Protocol.RACEMASTER_MAJOR,
-                    minor = minor,
-                    measuredPowerDbm = measuredPowerDbm,
+                log(BeaconLogDirection.TX, "Writing device name '$expectedName'…")
+                client.setDeviceName(
+                    slot = DxCp27Protocol.RACE_SLOT,
+                    name = expectedName,
                     intervalRaw = DxCp27Protocol.RACEMASTER_ADV_INTERVAL_RAW,
                     txPowerRaw = DxCp27Protocol.RACEMASTER_TX_POWER_RAW,
                 ).getOrThrow()
-                log(BeaconLogDirection.RX, "iBeacon frame written.")
+                log(BeaconLogDirection.RX, "Device name written.")
 
-                // Confirmed on real hardware: applying a settings change (iBeacon frame, slot
+                // Confirmed on real hardware: applying a settings change (device name frame, slot
                 // delete) can leave the very next command waiting indefinitely for a reply that
                 // never comes, with no clean disconnect Kable can detect — a longer post-apply
                 // settle delay alone didn't fix it. Retrying via a full reconnect + re-auth,
@@ -376,7 +375,7 @@ class BeaconRepository(private val client: DxCp27Client) {
                 // link actually died silently or the beacon just stopped honoring the old
                 // subscription.
                 val slotsAfterWrite = retryingAfterReconnect { readSlotsRaw() }
-                for (slot in (DxCp27Protocol.IBEACON_SLOT + 1)..7) {
+                for (slot in (DxCp27Protocol.RACE_SLOT + 1)..7) {
                     if (slotsAfterWrite[slot - 1] != DxCp27Protocol.FRAME_EMPTY) {
                         log(BeaconLogDirection.TX, "Clearing slot $slot (${DxCp27Protocol.frameTypeLabel(slotsAfterWrite[slot - 1])})…")
                         retryingAfterReconnect { client.deleteSlot(slot).getOrThrow() }
@@ -386,14 +385,14 @@ class BeaconRepository(private val client: DxCp27Client) {
 
                 log(BeaconLogDirection.INFO, "Verifying…")
                 val finalSlots = retryingAfterReconnect { readSlotsRaw() }
-                val otherSlotsEmpty = ((DxCp27Protocol.IBEACON_SLOT + 1)..7).all { finalSlots[it - 1] == DxCp27Protocol.FRAME_EMPTY }
-                check(finalSlots[DxCp27Protocol.IBEACON_SLOT - 1] == DxCp27Protocol.FRAME_IBEACON && otherSlotsEmpty) {
-                    "slot table after programming was $finalSlots, expected [preserved, iBeacon, empty×5]"
+                val otherSlotsEmpty = ((DxCp27Protocol.RACE_SLOT + 1)..7).all { finalSlots[it - 1] == DxCp27Protocol.FRAME_EMPTY }
+                check(finalSlots[DxCp27Protocol.RACE_SLOT - 1] == DxCp27Protocol.FRAME_DEVICE_NAME && otherSlotsEmpty) {
+                    "slot table after programming was $finalSlots, expected [device name, empty×6]"
                 }
-                val written = retryingAfterReconnect { client.readFrame(DxCp27Protocol.FRAME_IBEACON).getOrThrow() }
-                    .let(DxCp27Protocol::parseIBeaconFrame)
+                val written = retryingAfterReconnect { client.readFrame(DxCp27Protocol.FRAME_DEVICE_NAME).getOrThrow() }
+                    .let(DxCp27Protocol::parseDeviceNameFrame)
                 check(written == expected) { "read-back frame $written didn't match what was written ($expected)" }
-                log(BeaconLogDirection.INFO, "Programmed and verified — minor $minor, measured power $measuredPowerDbm dBm.")
+                log(BeaconLogDirection.INFO, "Programmed and verified — name '$expectedName'.")
             }
         }.onFailure { e -> log(BeaconLogDirection.ERROR, "Programming failed: ${e.message}") }
     }
