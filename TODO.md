@@ -281,25 +281,23 @@ hardware through that screen, not just implemented.
 ### The programming script in this app needs to be able setup the devices such that:
 
 - [x] the operator needs to be shown a list of visible beacons and be able to select one
+  - [x] the scan to provide a list of current frames the beacon is transmitting
+  - [x] the scan should also estimate the transmit interval (interval estimate is shown per 
+        frame type)
 - [x] the password needs to be changed away from the default 'dx1234' if a probe discovers it's
-      still set — to 'racer1', not 'racemaster' as originally written here: the beacon's
-      change-password command rejected a 10-character password on real hardware (confirmed via
-      a 0x00 failure ack), matching `dxbeacon.py`'s own warning that passwords must stay
-      6 characters, same length as the factory default (the app's own constant ended up
-      `"mercia"`, also 6 characters)
+      still set — to 'mercia'
 - [x] the current configuration of the selected one needs to be shown, including its battery status
-- [x] slot 1 (the beacon's own device-name frame, used to identify the physical unit e.g. during
-      a scan) is left alone; the iBeacon frame goes in slot 2; slots 3-7 are set to no-data
-- [x] the UUID in that needs to be set to something unique to this app
-- [x] the major id needs to be set to 1
-- [x] the minor id needs to be set to a sequence number (operator entered)
-- [x] the advertising interval needs to be set to 3 (300mS) — DX-SMART's own interval field is
-      100-1500ms in 100ms steps (raw = ms / 100)
-- [x] the tx-power needs to be set to -7dBm (raw index 2) — DX-SMART's own TX-power field is 8
-      fixed, unevenly-spaced values (raw index -> dBm): 0=-19.5, 1=-13.5, 2=-7, 3=-3.5, 4=-1,
-      5=+1, 6=+1.5, 7=+2.5
-- [x] the reserved bytes need to be set to 0 (satisfied by construction and checked on read-back,
-      not independently settable — see this section's own intro)
+- [x] all slots except slot 1 need to be set to empty
+- [x] slot 1 needs to be set as:
+  - [x] BLE Name to be RM.nnn-pp where nnn is an operator entered number in range 0..999, 
+        with leading 0's so its always 3 digits and pp is an RSSI@1m the sign being + or 1,
+        the pp to be determined via a calibration facility
+  - [x] the advertising interval needs to be set to 3 (300mS) — DX-SMART's own interval field is
+        100-1500ms in 100ms steps (raw = ms / 100)
+  - [x] the tx-power needs to be set to -7dBm (raw index 2) — DX-SMART's own TX-power field is 8
+        fixed, unevenly-spaced values (raw index -> dBm): 0=-19.5, 1=-13.5, 2=-7, 3=-3.5, 4=-1,
+        5=+1, 6=+1.5, 7=+2.5
+  - [x] trigger to be set off
 
 ### Race-day usage
 
