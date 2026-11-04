@@ -231,6 +231,10 @@ private fun ScanSection(uiState: BeaconUiState, viewModel: BeaconProgrammerViewM
                                     frame.label,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
+                                is ObservedAdvertFrame.OtherFrameType -> Text(
+                                    "${frame.label} frame",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
                                 is ObservedAdvertFrame.Unrecognized -> Text(
                                     "Unrecognized advertisement (not a name, not a decodable " +
                                         "iBeacon frame, not Eddystone):\n${frame.rawHex}",

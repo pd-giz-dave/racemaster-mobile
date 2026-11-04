@@ -158,6 +158,63 @@ class DxCp27ProtocolTest {
     }
 
     @Test
+    fun frameTypeLabelCoversEveryKnownSlotType() {
+        assertEquals("Device name", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_DEVICE_NAME))
+        assertEquals("iBeacon", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_IBEACON))
+        assertEquals("Eddystone-UID", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_EDDYSTONE_UID))
+        assertEquals("Eddystone-URL", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_EDDYSTONE_URL))
+        assertEquals("Eddystone-TLM", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_EDDYSTONE_TLM))
+        assertEquals("ACC (accelerometer)", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_ACC))
+        assertEquals("User data", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_USER))
+        assertEquals("Empty", DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_EMPTY))
+        assertEquals("Unknown (0x99)", DxCp27Protocol.frameTypeLabel(0x99))
+    }
+
+    @Test
+    fun identityServiceFrameTypeDecodesTheRealCapturedStatusPlusMacShape() {
+        // "ab fe 62 48 87 2d 9e 42 36" (service UUID 0xfeab + status + MAC) was the real service
+        // data captured from a beacon with its iBeacon slot active, and "ab fe 63 ..."/"ab fe 64
+        // ..." likewise for its Eddystone-UID/-URL slots — see ~/dx-cp27-probing's
+        // btsnoop_hci-more-frames.log / btsnoop_hci-with-user.log. The leading "ab fe" (the
+        // service UUID itself) isn't part of what's passed here — Kable's own serviceData(uuid)
+        // already strips that, same as every other serviceData()/manufacturerData() call in this
+        // codebase.
+        assertEquals(DxCp27Protocol.FRAME_IBEACON, DxCp27Protocol.identityServiceFrameType("6248872d9e4236".fromHex()))
+        assertEquals(DxCp27Protocol.FRAME_EDDYSTONE_UID, DxCp27Protocol.identityServiceFrameType("6348872d9e4236".fromHex()))
+        assertEquals(DxCp27Protocol.FRAME_EDDYSTONE_URL, DxCp27Protocol.identityServiceFrameType("6448872d9e4236".fromHex()))
+        // The User frame's own shape (see isUserFrameAdvertisementRecognizesTheRealCapturedUserDataShape)
+        // isn't a status+MAC pair at all, so this deliberately returns null for it rather than
+        // misreading its first byte as a frame-type status.
+        assertEquals(null, DxCp27Protocol.identityServiceFrameType("40a0000040a00000c14600000000727400000000".fromHex()))
+    }
+
+    @Test
+    fun isUserFrameAdvertisementRecognizesTheRealCapturedUserDataShape() {
+        // Real service data (service UUID 0xfeab, already stripped by the caller same as every
+        // other serviceData() call) captured from a beacon with its User slot active, cross-
+        // checked against the operator's own knowledge of which slot held which frame type — see
+        // ~/dx-cp27-probing/btsnoop_hci-more-frames.log. 20 bytes, not the GATT side's full
+        // 22-byte field, since the legacy advertisement's 31-byte payload limit truncates it.
+        assertTrue(
+            DxCp27Protocol.isUserFrameAdvertisement(
+                "40a0000040a00000c14600000000727400000000".fromHex(),
+            ),
+        )
+        assertTrue(!DxCp27Protocol.isUserFrameAdvertisement("6248872d9e4236".fromHex())) // status+MAC, not User
+    }
+
+    @Test
+    fun isAccFrameAdvertisementRecognizesTheRealCapturedAccShape() {
+        // Real raw advertisement bytes captured from the same beacon with its ACC slot active:
+        // flags, a 16-bit UUID list, then a malformed one-data-byte "manufacturer specific data"
+        // AD entry (02 ff 12) — one byte short of a real 2-byte company ID, which is why this is
+        // checked structurally rather than by that byte's exact value.
+        assertTrue(DxCp27Protocol.isAccFrameAdvertisement("0201060303a5fd02ff12".fromHex()))
+        assertTrue(!DxCp27Protocol.isAccFrameAdvertisement("0201060303a5fd".fromHex())) // no 0xff AD at all
+        assertTrue(!DxCp27Protocol.isAccFrameAdvertisement(null))
+    }
+
+    @Test
     fun parseIBeaconAdvertisementRejectsNonIBeaconOrMissingData() {
         assertEquals(null, DxCp27Protocol.parseIBeaconAdvertisement(null))
         assertEquals(null, DxCp27Protocol.parseIBeaconAdvertisement("0215".fromHex())) // too short

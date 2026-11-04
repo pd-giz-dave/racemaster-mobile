@@ -57,6 +57,14 @@ sealed interface ObservedAdvertFrame {
     // all three simultaneously, each as its own separate packet; collapsing them into one entry
     // would just recreate the original oscillation bug one level down.
     data class Eddystone(val subtype: Int, val label: String) : ObservedAdvertFrame
+
+    /** A frame type recognized via [DxCp27Protocol.isUserFrameAdvertisement]/
+     *  [DxCp27Protocol.isAccFrameAdvertisement] (confirmed ACC/User shapes) or
+     *  [DxCp27Protocol.identityServiceFrameType]'s status-byte fallback (defensive only — see
+     *  that function's own doc) — recognized as a type, but with no further fields to decode.
+     *  Keyed by [frameType], same reasoning as [Eddystone]'s own `subtype` key: ACC and User are
+     *  separate packets that can both be live from the same beacon at once. */
+    data class OtherFrameType(val frameType: Int, val label: String) : ObservedAdvertFrame
     data class Unrecognized(val rawHex: String) : ObservedAdvertFrame
 
     /** A fixed display order, independent of arrival order — see [BeaconProgrammerViewModel.mergeObservedFrame]'s own doc. */
@@ -65,6 +73,7 @@ sealed interface ObservedAdvertFrame {
             is DeviceName -> 0
             is IBeacon -> 1
             is Eddystone -> 2_000 + subtype
+            is OtherFrameType -> 1_500 + frameType
             is Unrecognized -> Int.MAX_VALUE
         }
 }
@@ -218,8 +227,12 @@ class BeaconProgrammerViewModel(
      *  latest advertisement decoded". Checks name, iBeacon-decode and Eddystone independently
      *  (not else-if'd), since a factory-default beacon broadcasts an iBeacon frame *and* all
      *  three Eddystone sub-frames simultaneously — never combined into one packet, but all real
-     *  at once. Anything matching none of those refreshes a single [ObservedAdvertFrame.Unrecognized]
-     *  slot rather than being silently dropped (see that type's own doc for why). */
+     *  at once. Anything matching none of those falls back to [DxCp27Protocol.isUserFrameAdvertisement]/
+     *  [DxCp27Protocol.isAccFrameAdvertisement] (recognizing ACC/User, which have no further
+     *  fields to decode) or [DxCp27Protocol.identityServiceFrameType]'s defensive status-byte
+     *  check, and only once all of those also fail to match does it refresh a single
+     *  [ObservedAdvertFrame.Unrecognized] slot rather than being silently dropped (see that
+     *  type's own doc for why). */
     @OptIn(ExperimentalUuidApi::class)
     private fun mergeObservedFrame(existing: List<ObservedAdvertFrame>, advertisement: Advertisement): List<ObservedAdvertFrame> {
         var frames = existing
@@ -243,6 +256,23 @@ class BeaconProgrammerViewModel(
             val label = DxCp27Protocol.eddystoneFrameLabel(eddystoneData)
             frames = frames.filterNot { it is ObservedAdvertFrame.Eddystone && it.subtype == subtype } +
                 ObservedAdvertFrame.Eddystone(subtype, label)
+            recognized = true
+        }
+        if (!recognized) {
+            val identityData = advertisement.serviceData(DxCp27Protocol.VENDOR_IDENTITY_SERVICE_UUID.toKotlinUuid())
+            val otherFrameType = identityData?.let { data ->
+                DxCp27Protocol.identityServiceFrameType(data)
+                    ?: DxCp27Protocol.FRAME_USER.takeIf { DxCp27Protocol.isUserFrameAdvertisement(data) }
+            }
+            if (otherFrameType != null && otherFrameType != DxCp27Protocol.FRAME_EMPTY) {
+                frames = frames.filterNot { it is ObservedAdvertFrame.OtherFrameType && it.frameType == otherFrameType } +
+                    ObservedAdvertFrame.OtherFrameType(otherFrameType, DxCp27Protocol.frameTypeLabel(otherFrameType))
+                recognized = true
+            }
+        }
+        if (!recognized && DxCp27Protocol.isAccFrameAdvertisement((advertisement as? PlatformAdvertisement)?.bytes)) {
+            frames = frames.filterNot { it is ObservedAdvertFrame.OtherFrameType && it.frameType == DxCp27Protocol.FRAME_ACC } +
+                ObservedAdvertFrame.OtherFrameType(DxCp27Protocol.FRAME_ACC, DxCp27Protocol.frameTypeLabel(DxCp27Protocol.FRAME_ACC))
             recognized = true
         }
         if (!recognized) {

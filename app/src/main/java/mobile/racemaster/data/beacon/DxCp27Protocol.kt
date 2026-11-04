@@ -165,6 +165,19 @@ object DxCp27Protocol {
     const val FRAME_EDDYSTONE_UID = 0x63
     const val FRAME_EDDYSTONE_URL = 0x64
     const val FRAME_EDDYSTONE_TLM = 0x65
+
+    /** Accelerometer frame — no fields of its own (reading one back returns just the common
+     *  interval/TX-power/trigger trailer, like TLM). Confirmed on real hardware: a slot set to
+     *  this makes the beacon only become connectable around a trigger event instead of
+     *  continuously — worth knowing if a slot ever seems to "disappear" after editing. */
+    const val FRAME_ACC = 0x66
+
+    /** Arbitrary up-to-22-byte user data frame — written via [CMD_SET_UUID]-adjacent command
+     *  `0x95` (not currently used by this app; see `~/dx-cp27-probing/README.md`'s "Two more
+     *  frame types" section for the full write sequence, ported into `dxbeacon.py` but not yet
+     *  into this client). */
+    const val FRAME_USER = 0x67
+
     const val FRAME_EMPTY = 0xFF
 
     // ---- iBeacon field writes (sent after selecting a slot and setting its type to FRAME_IBEACON) ----
@@ -315,6 +328,8 @@ object DxCp27Protocol {
         FRAME_EDDYSTONE_UID -> "Eddystone-UID"
         FRAME_EDDYSTONE_URL -> "Eddystone-URL"
         FRAME_EDDYSTONE_TLM -> "Eddystone-TLM"
+        FRAME_ACC -> "ACC (accelerometer)"
+        FRAME_USER -> "User data"
         FRAME_EMPTY -> "Empty"
         else -> "Unknown (0x%02x)".format(frameType)
     }
@@ -336,13 +351,62 @@ object DxCp27Protocol {
     const val VENDOR_COMPANY_ID = 0x4458
 
     /** Service-data UUID 0xFEAB, seen in every advertisement this beacon has sent so far
-     *  regardless of which slot/frame type is configured — payload is a 1-byte status (which
-     *  has, so far, tracked the active slot's own frame-type byte — e.g. [FRAME_IBEACON] once
-     *  programmed — though this hasn't been independently confirmed against the vendor's own
-     *  app, just observed) followed by the 6-byte MAC. Used by [DxCp27Client.scanForDevices] as
+     *  regardless of which slot/frame type is configured — payload is a 1-byte status followed
+     *  by the 6-byte MAC, for every slot type that otherwise advertises its own distinct AD
+     *  structure ([FRAME_IBEACON]/[FRAME_EDDYSTONE_UID]/[FRAME_EDDYSTONE_URL]/[FRAME_EDDYSTONE_TLM],
+     *  confirmed on real hardware the status byte tracks the active slot's own frame-type byte).
+     *  [FRAME_USER] is the one confirmed exception: a slot with a real, variable-length data
+     *  field of its own reuses this *same* service UUID to carry that raw data instead of a
+     *  status+MAC pair — see [isUserFrameAdvertisement]. Used by [DxCp27Client.scanForDevices] as
      *  one of the things to filter on, since it's present on every advert from this beacon
-     *  whether or not a name AD structure also is. */
+     *  whether or not a name AD structure also is, and by [identityServiceFrameType]/
+     *  [isUserFrameAdvertisement] as scan-time frame-type recognition. */
     val VENDOR_IDENTITY_SERVICE_UUID: UUID = UUID.fromString("0000feab-0000-1000-8000-00805f9b34fb")
+
+    /** Decodes [VENDOR_IDENTITY_SERVICE_UUID] service data's status byte as a slot's frame-type
+     *  byte (see that constant's own doc) — `null` for anything not shaped like status+MAC (7
+     *  bytes total), which is what [isUserFrameAdvertisement] is for instead. In practice this
+     *  path is defensive, not load-bearing: device name/iBeacon/Eddystone are all decoded
+     *  directly from their own AD structures first and never reach this fallback, so it only
+     *  matters if one of those ever misses. */
+    fun identityServiceFrameType(serviceData: ByteArray): Int? {
+        if (serviceData.size != 7) return null
+        return serviceData[0].toInt() and 0xff
+    }
+
+    /** True once [VENDOR_IDENTITY_SERVICE_UUID]'s service data is present but isn't the plain
+     *  7-byte status+MAC shape every other recognized frame type uses — confirmed on real
+     *  hardware (against a beacon with every one of its 7 slots configured, cross-checked with
+     *  the operator's own knowledge of which slot held which frame type) that this is
+     *  [FRAME_USER]'s raw data field, truncated to fit the legacy advertisement's 31-byte payload
+     *  limit: its GATT-side field is up to 22 bytes (see `~/dx-cp27-probing/dxbeacon.py`'s
+     *  `parse_frame`), but only 20 survive here once the fixed AD overhead (flags + 16-bit UUID
+     *  list + this service data's own 2-byte UUID) is subtracted. The data itself is arbitrary —
+     *  nothing further to decode, just that it's present. */
+    fun isUserFrameAdvertisement(serviceData: ByteArray): Boolean = serviceData.size != 7
+
+    /** True for [FRAME_ACC]'s over-the-air shape: a manufacturer-specific-data AD structure with
+     *  exactly one data byte — one short of the 2-byte company ID the Bluetooth spec requires,
+     *  so no well-formed manufacturer data could ever look like this. Confirmed on real hardware
+     *  the same way as [isUserFrameAdvertisement]: fits the GATT side's own "no fields of its
+     *  own" (see [FRAME_ACC]'s own doc) — there's nothing to carry, so the firmware broadcasts
+     *  almost nothing. Checked structurally (the malformed length), not by this byte's exact
+     *  value, since nothing says a future firmware revision won't change it. Takes the whole raw
+     *  advertisement (not just one AD entry's data) since this malformed shape can't be looked up
+     *  by company ID the way well-formed manufacturer data normally can. */
+    fun isAccFrameAdvertisement(rawAdvertisementBytes: ByteArray?): Boolean {
+        if (rawAdvertisementBytes == null) return false
+        var i = 0
+        while (i < rawAdvertisementBytes.size) {
+            val length = rawAdvertisementBytes[i].toInt() and 0xff
+            if (length == 0) break
+            if (i + 1 >= rawAdvertisementBytes.size) break
+            val type = rawAdvertisementBytes[i + 1].toInt() and 0xff
+            if (type == 0xFF && length == 2) return true
+            i += 1 + length
+        }
+        return false
+    }
 
     /** Google's standard Eddystone service UUID, 0xFEAA — confirmed on real hardware: a slot
      *  configured as Eddystone-UID/-URL/-TLM (see [FRAME_EDDYSTONE_UID]/[FRAME_EDDYSTONE_URL]/

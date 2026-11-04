@@ -10,6 +10,14 @@ data class VersionNotes(val version: String, val highlights: List<String>)
 object WhatsNew {
     val versions: List<VersionNotes> = listOf(
         VersionNotes(
+            version = "0.0.26",
+            highlights = listOf(
+                "Setup Beacons' info icon now recognizes all 7 of a beacon's advertisement " +
+                    "types, not just 5 — ACC and User frames used to show up as raw, " +
+                    "undecoded bytes.",
+            ),
+        ),
+        VersionNotes(
             version = "0.0.25",
             highlights = listOf(
                 "Setup Beacons' info icon now reliably shows every advertisement type a " +
