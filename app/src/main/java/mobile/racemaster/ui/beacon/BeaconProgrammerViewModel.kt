@@ -7,21 +7,29 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.juul.kable.Advertisement
 import com.juul.kable.PlatformAdvertisement
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import mobile.racemaster.data.beacon.BeaconConfig
 import mobile.racemaster.data.beacon.BeaconConnectionPhase
 import mobile.racemaster.data.beacon.BeaconLogEntry
 import mobile.racemaster.data.beacon.BeaconRepository
 import mobile.racemaster.data.beacon.DxCp27Protocol
 import mobile.racemaster.data.mule.BluetoothStateRepository
+import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
+import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.toKotlinUuid
 
@@ -138,8 +146,41 @@ data class BeaconUiState(
 class BeaconProgrammerViewModel(
     private val repository: BeaconRepository,
     private val bluetoothStateRepository: BluetoothStateRepository,
+    private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
     fun isBluetoothEnabled(): Boolean = bluetoothStateRepository.isEnabled()
+
+    // Mule's own scanner (SCAN_MODE_BALANCED, unfiltered, see MulePullClient) contending with
+    // this screen's scanner (SCAN_MODE_LOW_LATENCY, see DxCp27Client) over the single BLE radio
+    // receive window was confirmed on real hardware (an HCI snoop/bugreport capture) to be
+    // *part* of why beacons appeared to advertise at a wildly irregular interval instead of
+    // their real, precise one — but silencing just that scanner (via muleSyncEnabled) wasn't
+    // enough: a second capture, on a different phone, still showed even worse gaps, and that
+    // phone's own bugreport showed why — this phone's PeripheralSyncService (the *advertising*/
+    // GATT-server side of Mule, independent of muleSyncEnabled by design: see its own doc) was
+    // still up and still answering a real incoming connection from another Mule the entire time,
+    // which the radio has to service too. bluetoothOff is the one switch that already tears
+    // *both* roles down (see SettingsRepository.bluetoothOff's own doc: "no scanning, no
+    // advertising, not answerable by any other Mule over BLE") — exactly what setting up beacons
+    // needs, since it's never done at the same time as Mule syncing in practice. Restoring
+    // outlives viewModelScope (already cancelled by the time onCleared runs), since the restore
+    // write has to survive past it.
+    private val muleOverrideScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var bluetoothWasOnBeforeSetup: Boolean? = null
+
+    init {
+        muleOverrideScope.launch {
+            val wasOff = settingsRepository.bluetoothOff.first()
+            if (!wasOff) settingsRepository.setBluetoothOff(true)
+            bluetoothWasOnBeforeSetup = !wasOff
+        }
+    }
+
+    override fun onCleared() {
+        if (bluetoothWasOnBeforeSetup == true) {
+            muleOverrideScope.launch { settingsRepository.setBluetoothOff(false) }
+        }
+    }
 
     private val isScanningFlow = MutableStateFlow(false)
     private val scanResultsFlow = MutableStateFlow<List<ScannedBeaconUi>>(emptyList())
@@ -212,20 +253,33 @@ class BeaconProgrammerViewModel(
         repository.logScanStarted()
         scanJob = viewModelScope.launch {
             try {
-                repository.scanForDevices().collect { advertisement ->
-                    // Logged once per beacon, not once per advertisement packet — the same
-                    // beacon re-advertises continuously for as long as the scan runs.
-                    val isNewBeacon = advertisement.identifier !in seenAddresses
-                    val previousFrames = seenAddresses[advertisement.identifier]?.frames ?: emptyList()
-                    val mergedFrames = mergeObservedFrame(previousFrames, advertisement)
-                    seenAddresses[advertisement.identifier] = ScannedBeaconUi(
-                        advertisement = advertisement,
-                        address = advertisement.identifier,
-                        rssi = advertisement.rssi,
-                        frames = mergedFrames,
-                    )
-                    scanResultsFlow.value = seenAddresses.values.sortedByDescending { it.rssi }
-                    if (isNewBeacon) repository.logBeaconFound(advertisement.name, advertisement.identifier, advertisement.rssi)
+                // One unbroken Kable scan session degrades over time — confirmed on real
+                // hardware (an HCI snoop capture over this screen's own scan showed clean
+                // reception for the first ~couple of minutes, then increasingly long gaps, up
+                // to 100+ seconds, for the rest of a 30+ minute session) and already hit, and
+                // already fixed the same way, by MuleSyncEngine's own SCAN_REFRESH_INTERVAL —
+                // periodically tearing down and restarting the underlying native scan is what
+                // actually recovers a healthy receive duty cycle. seenAddresses/
+                // frameArrivalTimestamps deliberately aren't cleared between restarts, so the
+                // scan list on screen stays put across each internal refresh.
+                while (isActive) {
+                    withTimeoutOrNull(SCAN_SESSION_REFRESH_INTERVAL) {
+                        repository.scanForDevices().collect { advertisement ->
+                            // Logged once per beacon, not once per advertisement packet — the
+                            // same beacon re-advertises continuously for as long as the scan runs.
+                            val isNewBeacon = advertisement.identifier !in seenAddresses
+                            val previousFrames = seenAddresses[advertisement.identifier]?.frames ?: emptyList()
+                            val mergedFrames = mergeObservedFrame(previousFrames, advertisement)
+                            seenAddresses[advertisement.identifier] = ScannedBeaconUi(
+                                advertisement = advertisement,
+                                address = advertisement.identifier,
+                                rssi = advertisement.rssi,
+                                frames = mergedFrames,
+                            )
+                            scanResultsFlow.value = seenAddresses.values.sortedByDescending { it.rssi }
+                            if (isNewBeacon) repository.logBeaconFound(advertisement.name, advertisement.identifier, advertisement.rssi)
+                        }
+                    }
                 }
             } finally {
                 isScanningFlow.value = false
@@ -530,10 +584,18 @@ class BeaconProgrammerViewModel(
     companion object {
         const val PROGRAM_RESULT_DISPLAY_MILLIS = 5_000L
 
+        // Matches MuleSyncEngine's own SCAN_REFRESH_INTERVAL — same underlying Kable/Android
+        // scan-degradation issue, same fix.
+        private val SCAN_SESSION_REFRESH_INTERVAL = 90.seconds
+
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val container = appContainer()
-                BeaconProgrammerViewModel(container.beaconRepository, container.bluetoothStateRepository)
+                BeaconProgrammerViewModel(
+                    container.beaconRepository,
+                    container.bluetoothStateRepository,
+                    container.settingsRepository,
+                )
             }
         }
     }

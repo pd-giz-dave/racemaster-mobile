@@ -23,6 +23,100 @@ doc is the full design.
    whether that's landed; if not, phase 1 and most of phase 2 can still be built/tested against
    a hand-crafted local `ProgressEntry` with `fobShortCode` set.
 
+## 2026-11-05 update: real-hardware scan-reliability findings and resulting policy
+
+A separate investigation (on the `beacon-tracking` branch, using the now-built Setup Beacons
+screen and real DX-CP27 hardware — see "staleness flag" below) measured, via real HCI snoop
+captures on a Samsung XCover 4 and XCover 7, how reliably Android's BLE scanner actually
+receives a beacon's advertisements over time. This matters directly to `BeaconScanEngine`
+below, since it's the same `BluetoothLeScanner`/Kable receive path this plan depends on.
+
+**What was found and fixed already** (both now live in `BeaconProgrammerViewModel.kt`, worth
+porting into `BeaconScanEngine` rather than rediscovering):
+- A second, concurrently-registered app-level BLE scanner (this app's own Mule Mode, both its
+  scan *and* advertise/GATT-server roles) measurably degrades reception of a third-party
+  beacon — confirmed via `dumpsys bluetooth_manager`'s "App Scan Info"/logcat `BLE_GAP` lines
+  showing two live scanners and an active incoming GATT connection from a Mule peer during a
+  test. Fixed for Setup Beacons via `SettingsRepository.bluetoothOff` (suspends *both* Mule
+  roles, not just `muleSyncEnabled` which only covers scanning).
+- A single, unbroken Kable scan session degrades over time even with nothing else running —
+  confirmed as a clean time-trend in an HCI capture (clean for ~230s, then increasingly long
+  gaps for the rest of a 30+ minute session). This is the exact same failure
+  `MuleSyncEngine.SCAN_REFRESH_INTERVAL` (90s teardown/restart) already exists to work around
+  for Mule's own scanning — Setup Beacons' scan didn't have it and now does.
+
+**What remains after both fixes — an irreducible tail, not further fixable from app code**:
+on a clean 23-minute post-fix capture, a beacon advertising nominally every ~300ms still showed
+gaps up to 9.5s (median ~509ms); one nominally every 1.8s showed gaps up to 39.6s (median right
+on target, no further time-trend). `dumpsys bluetooth_manager` shows why: Samsung's
+`com.samsung.android.beaconmanager` and Google Play Services both register their own permanent
+background BLE scanners on stock Android — the radio's single scan window is shared/
+time-multiplexed across every registered scanner system-wide, not just this app's, and no
+Android API exists for one app to get scan priority over another. This is a platform ceiling.
+
+**Commercial precedent** (direct research, not guesswork): Atlas Live Tracking is a real
+race-timing product using ordinary Android phones as BLE checkpoint/finish-line scanners —
+the same architecture as this plan. It claims ~0.5s accuracy but explicitly caps event size
+(~3,000-4,000 participants) specifically because of BLE scanning throughput limits, and
+recommends **2-3 phones per line**, not one, as its own mitigation for exactly the missed-
+advertisement problem measured above. Even its vendor concedes RFID remains the gold standard
+for scale/precision, since RFID antennas listen continuously at the physical layer with no OS
+scan scheduler involved at all. A separate academic BLE race-timing paper found that shortening
+a beacon's advertising interval (not scanner-side tuning) has the largest effect on worst-case
+discovery latency, and that adding a second scanner materially cuts mean discovery time.
+
+**Resulting policy for this app** (operator decision, not a technical requirement — captures
+the actual accuracy needs of this app's two use cases):
+- **Checkpoints**: timing is *not* critical — a runner only needs to be caught once while
+  passing, at whatever moment the phone's duty cycle happens to be listening. The single-
+  scanner design in §2/§4 below is sufficient as originally planned; no redundancy needed here.
+- **Finish line**: timing *does* matter — require **at least 2 phones, one positioned either
+  side of the finish line**, both running the same `BeaconScanEngine`, so a missed window on
+  one phone doesn't cost the whole race its finish timestamp for that runner. Mirrors Atlas's
+  own field practice directly. **Open design question this plan doesn't yet resolve**: two
+  independent phones will each independently try to `commitPass`/`recordEntry` for the same
+  runner's finish — needs de-duplication, presumably riding the existing Mule-sync +
+  `BibValidation` duplicate-split detection path (`findDuplicateSplitRefs`) that already
+  tolerates near-simultaneous entries for the same bib, rather than new plumbing. Confirm this
+  actually resolves sensibly (e.g. picks the stronger/closer peak-RSSI reading, not just
+  "first synced wins") before shipping the dual-phone finish setup.
+- **Beacon radio tuning — done, applies to every beacon, not just finish-line ones**: rather
+  than building a Checkpoint/Finish role split, the operator decided to just raise the floor for
+  every beacon this app programs — simpler than maintaining two profiles, and checkpoint
+  detection is only better off for it even though it doesn't strictly need it. `DxCp27Protocol`'s
+  `RACEMASTER_TX_POWER_DBM`/`RACEMASTER_ADV_INTERVAL_MS` constants are now **-1.0dBm** (was
+  -7.0dBm, `TX_POWER_DBM_BY_RAW` index 2 → index 4) and **200ms** (was 300ms) — live in
+  `BeaconRepository.programForRace` as of 2026-11-05. No Setup Beacons UI change was needed
+  (no role selector, no second profile) — this was a one-line constant change.
+
+**Architecture implications for `BeaconScanEngine` (§4) specifically**:
+- It already runs from `PeripheralSyncService.onCreate()` — i.e. already inside a genuine
+  foreground service, which the research flagged as the single most important prerequisite for
+  sustained BLE scanning on Android. Good — no change needed there.
+- **New action item**: request exemption from battery optimization for this app (Samsung's
+  Device Care/"Put unused apps to sleep" in particular has repeated, if unofficial, reports of
+  throttling or killing foreground-service BLE scanning after sustained use regardless of the
+  foreground-service status) — surface this as an onboarding/setup-time prompt, not something
+  silently assumed.
+- **Port the 90-second scan-restart mitigation into `BeaconScanEngine` from day one**, not as a
+  later fix — it'll run for an entire race (hours), far longer than the admin screen session
+  that originally surfaced the degradation, so the failure mode is if anything more certain to
+  occur here.
+- Confirmed-safe to leave alone: `setReportDelay`/batching (evidence points to it making
+  latency-sensitive detection *worse*, not better — stay at `0`/no batching, which §2 already
+  does implicitly) and extended-advertising/Coded PHY (no reliability benefit found for this
+  use case, just range/throughput, not worth the compatibility risk).
+
+**Staleness flag for whoever resumes this plan**: §1 below (`IBeaconParser`) still assumes a
+generic Apple-iBeacon-manufacturer-data fob, written when this plan was parked waiting on
+AliExpress fobs to be acquired. The hardware has since settled on DX-CP27 beacons programmed
+via this app's own Setup Beacons screen, which encodes the bib/power identity in the **device
+name** AD field (`"RM." + minor + sign + measuredPower`, parsed by
+`DxCp27Protocol.parseRaceDeviceName`), not an iBeacon manufacturer-data frame. `BeaconScanEngine`
+should almost certainly decode advertisements via `DxCp27Protocol`'s existing parser rather than
+building a new `IBeaconParser` against a format that was never actually adopted — confirm this
+before starting phase 1, and treat §1's code sketch as superseded, not as a spec to implement.
+
 ## Context
 
 TODO.md's "Another idea" (being explored on the `beacon-tracking` branch) proposes extending
@@ -414,6 +508,13 @@ Confirm this holds during phase 2 testing rather than adding new plumbing.
     one genuinely open empirical question in this plan.
 12. Tune `GONE_SILENT_MS`/path-loss exponent/default distance thresholds against real multi-fob
     field data (e.g. a start line with several runners passing close together).
+13. Port `MuleSyncEngine`'s `SCAN_REFRESH_INTERVAL` (90s teardown/restart) into
+    `BeaconScanEngine` and prompt for battery-optimization exemption at setup — see the
+    2026-11-05 update above; both are now known prerequisites, not speculative hardening.
+14. Field-validate the finish-line policy specifically: two phones either side of the line (all
+    beacons already at -1.0dBm/200ms — see above), and confirm the dual-phone
+    duplicate-finish-entry question (flagged above) actually resolves to one sensible timestamp
+    per runner rather than two conflicting ones.
 
 ## Verification
 
@@ -445,6 +546,13 @@ Confirm this holds during phase 2 testing rather than adding new plumbing.
 - Whether the shared-scan change holds up under combined Mule-sync + GATT-advertise +
   beacon-scan load on the XCover 4 specifically (phase 3, step 11).
 - Foreground-service BLE scanning continuing correctly with the screen backgrounded/display off.
+- Already partly answered, for the underlying Android scan reliability (not yet for this
+  engine's own logic): a 2026-11-05 HCI-snoop investigation on real XCover 4/7 hardware found
+  an irreducible tail of multi-second-to-tens-of-seconds reception gaps even after fixing every
+  app-level cause found (concurrent Mule scanning/advertising, one long-lived scan session) —
+  see the 2026-11-05 update above for the full numbers and the resulting checkpoint-vs-finish
+  policy split. `BeaconScanEngine` inherits this ceiling; phase 3 step 14's dual-phone finish
+  test is what actually validates whether the policy adopted in response is sufficient.
 
 **Cross-repo, tracked separately**: the `~/racemaster` server needs a `fobShortCode` field added
 to its progress-entry shape and a registration-time bib↔fob lookup UI, before phase 2's

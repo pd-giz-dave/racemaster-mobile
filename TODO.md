@@ -292,11 +292,15 @@ hardware through that screen, not just implemented.
   - [x] BLE Name to be RM.nnn-pp where nnn is an operator entered number in range 0..999, 
         with leading 0's so its always 3 digits and pp is an RSSI@1m the sign being + or 1,
         the pp to be determined via a calibration facility
-  - [x] the advertising interval needs to be set to 3 (300mS) — DX-SMART's own interval field is
-        100-1500ms in 100ms steps (raw = ms / 100)
-  - [x] the tx-power needs to be set to -7dBm (raw index 2) — DX-SMART's own TX-power field is 8
+  - [x] the advertising interval needs to be set to 2 (200mS) — DX-SMART's own interval field is
+        100-1500ms in 100ms steps (raw = ms / 100); dropped from the original 300mS (raw 3) on
+        2026-11-05 once real-hardware testing showed Android's own BLE scan scheduling, not this
+        beacon's transmit timing, bounds real-world detection latency — see
+        docs/beacon-detection-plan.md's "2026-11-05 update"
+  - [x] the tx-power needs to be set to -1dBm (raw index 4) — DX-SMART's own TX-power field is 8
         fixed, unevenly-spaced values (raw index -> dBm): 0=-19.5, 1=-13.5, 2=-7, 3=-3.5, 4=-1,
-        5=+1, 6=+1.5, 7=+2.5
+        5=+1, 6=+1.5, 7=+2.5; raised from the original -7dBm (raw 2) alongside the interval change
+        above, same reasoning
   - [x] trigger to be set off
 
 ### Race-day usage
@@ -311,7 +315,8 @@ hardware through that screen, not just implemented.
       status and powers off the beacon and also logs what has been returned so we know who to
       chase that have not given their beacon back
 - [ ] during the race when the app is in bibs mode it needs to detect a passing beacon as
-      described elsewhere
+      described elsewhere, BUT... to do that reliably the phone must NOT also be in mule mode
+      (see the mitigations implemented for beacon programming around scanning)
 - [ ] a beacon with minor id of 0 is not allowed for a runner, its reserved for the sweep
 
 ## Location Maps

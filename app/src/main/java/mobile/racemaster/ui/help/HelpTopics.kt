@@ -176,8 +176,8 @@ object HelpTopics {
                 "needs Location permission, which this app asks for up front.",
             "Programming rewrites the password away from the default, then writes a single " +
                 "device-name frame into slot 1 — \"RM.\" plus the Beacon Number you enter " +
-                "(0-999) plus the signed Measured power you enter or calibrate — at a 300ms " +
-                "interval, TX power -7dBm, and its trigger explicitly off so it advertises " +
+                "(0-999) plus the signed Measured power you enter or calibrate — at a 200ms " +
+                "interval, TX power -1dBm, and its trigger explicitly off so it advertises " +
                 "continuously, not just on a button click or being picked up. Every other slot " +
                 "is cleared.",
             "Measured power is entered as a plain number (0-90) — no sign needed, it's always " +
@@ -193,6 +193,10 @@ object HelpTopics {
                 "only reports success once the written values are confirmed, not just acked. " +
                 "It lists newest first and keeps itself scrolled to the top while you're " +
                 "watching it live.",
+            "Mule Mode is paused — both syncing and being visible to other Mules — for as " +
+                "long as this screen stays open, and resumes automatically once you leave. " +
+                "The two were found to compete for the same Bluetooth radio, badly enough to " +
+                "throw off the scan list's advertising-interval estimates.",
         ),
     )
 

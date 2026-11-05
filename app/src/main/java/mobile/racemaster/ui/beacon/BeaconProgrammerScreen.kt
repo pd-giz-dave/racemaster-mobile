@@ -67,11 +67,11 @@ import mobile.racemaster.util.openAppPermissionSettings
 import mobile.racemaster.util.withClickSound
 
 /** Lists nearby DX-CP27 beacons, connects and authenticates, shows the selected one's real
- *  current configuration (including battery), and programs it per TODO.md: iBeacon-only
- *  advertising, this app's own fixed UUID, major 1, an operator-entered minor, 300ms interval,
- *  TX power 6 — see [mobile.racemaster.data.beacon.BeaconRepository.programForRace]. Every step
- *  narrates into the log at the bottom, which is the only place to see whether a step genuinely
- *  took effect on the real beacon. */
+ *  current configuration (including battery), and programs it per TODO.md: a device-name frame
+ *  encoding an operator-entered minor and measured power, 200ms interval, TX power -1dBm — see
+ *  [mobile.racemaster.data.beacon.BeaconRepository.programForRace]. Every step narrates into the
+ *  log at the bottom, which is the only place to see whether a step genuinely took effect on the
+ *  real beacon. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BeaconProgrammerScreen(

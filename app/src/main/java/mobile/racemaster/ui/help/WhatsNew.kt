@@ -10,6 +10,22 @@ data class VersionNotes(val version: String, val highlights: List<String>)
 object WhatsNew {
     val versions: List<VersionNotes> = listOf(
         VersionNotes(
+            version = "0.0.28",
+            highlights = listOf(
+                "Setup Beacons now pauses Mule Mode's Bluetooth entirely — both syncing and " +
+                    "being visible to other Mules — for as long as the screen is open, and " +
+                    "resumes it automatically on exit. The two were found to compete for the " +
+                    "same radio badly enough to throw off the scan list's own advertising-" +
+                    "interval estimates.",
+                "The scan itself now refreshes its underlying Bluetooth session every 90 " +
+                    "seconds automatically — a single long-running scan was found to miss more " +
+                    "and more advertisements the longer it stayed open without this.",
+                "Programmed beacons now use a stronger signal and faster advertising interval " +
+                    "(-1dBm, 200ms, up from -7dBm/300ms) — real-world testing showed this " +
+                    "meaningfully shrinks the worst-case delay before a beacon gets detected.",
+            ),
+        ),
+        VersionNotes(
             version = "0.0.27",
             highlights = listOf(
                 "Setup Beacons now programs a beacon by writing its ID straight into the " +

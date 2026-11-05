@@ -72,7 +72,12 @@ object DxCp27Protocol {
         return ms / 100
     }
 
-    const val RACEMASTER_ADV_INTERVAL_MS = 300
+    // Dropped one 100ms notch from the original 300ms — a 2026-11-05 HCI-snoop investigation
+    // (see docs/beacon-detection-plan.md's "2026-11-05 update") found Android's own BLE scan
+    // scheduling, not this beacon's transmit timing, is what actually bounds real-world
+    // detection latency; a shorter interval gives the scanner more chances per second to land
+    // inside whatever duty-cycle window it's currently being given, shrinking worst-case gaps.
+    const val RACEMASTER_ADV_INTERVAL_MS = 200
     val RACEMASTER_ADV_INTERVAL_RAW: Int = msToIntervalRaw(RACEMASTER_ADV_INTERVAL_MS)
 
     /** DX-SMART's own TX-power raw index 0-7, in dBm — not evenly spaced, so this is a lookup
@@ -87,7 +92,11 @@ object DxCp27Protocol {
         return raw
     }
 
-    const val RACEMASTER_TX_POWER_DBM = -7.0
+    // Raised two notches from the original -7.0dBm, same 2026-11-05 finding as
+    // RACEMASTER_ADV_INTERVAL_MS above — a stronger signal is more likely to still be received
+    // during whatever reduced-duty-cycle window the OS's scan scheduler happens to be giving
+    // this app at any given moment.
+    const val RACEMASTER_TX_POWER_DBM = -1.0
     val RACEMASTER_TX_POWER_RAW: Int = dbmToTxPowerRaw(RACEMASTER_TX_POWER_DBM)
 
     /** This app programs slot 1 as a device-name frame (see [raceDeviceName]) and clears every
