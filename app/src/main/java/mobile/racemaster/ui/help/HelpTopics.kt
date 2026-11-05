@@ -176,8 +176,12 @@ object HelpTopics {
     val ProgramBeacons = HelpTopic(
         title = "Program Beacon",
         tips = listOf(
-            "Scan, then tap a beacon to connect — it authenticates automatically with the " +
-                "known passwords and shows its real current configuration, including battery.",
+            "Scan, then tap a beacon to connect — it authenticates automatically and shows its " +
+                "real current configuration, including battery. A beacon whose name already " +
+                "looks like one this app programmed goes straight for that password; anything " +
+                "else tries the factory default first. If that single guess is wrong, the " +
+                "password field that appears pre-fills with whichever guess wasn't tried, as a " +
+                "starting point to correct from.",
             "An info icon next to every beacon in the scan list decodes every advertisement " +
                 "it's broadcasting, straight from the scan packets, with no need to connect — " +
                 "its name, iBeacon, Eddystone, ACC and User frames, each labelled with an " +

@@ -92,28 +92,39 @@ class BeaconRepository(private val client: DxCp27Client) {
         }
     }
 
-    /** Tries [DxCp27Protocol.DEFAULT_PASSWORD] then [DxCp27Protocol.RACEMASTER_PASSWORD], in that
-     *  fixed order — no candidate guessing based on session memory (an earlier version tried a
-     *  previous session's password first, which went wrong once that in-memory state legitimately
-     *  outlived what the operator believed was an app restart — and masked the real bug, a stray
-     *  notification confusing the read path; see [DxCp27Client.sendReadLocked]'s own doc). This
-     *  facility normally programs a beacon exactly once from purchase (see [programForRace]'s own
-     *  doc on skipping a no-op rewrite), so a fresh connect is almost always the factory default —
-     *  but a beacon already programmed once can legitimately come back for re-programming (e.g.
-     *  field experience calling for a different interval/TX power), hence the second, fixed
-     *  fallback rather than dropping it entirely.
+    /** Tries each of [passwordCandidates] in order — no candidate guessing based on session
+     *  memory (an earlier version tried a previous session's password first, which went wrong
+     *  once that in-memory state legitimately outlived what the operator believed was an app
+     *  restart — and masked the real bug, a stray notification confusing the read path; see
+     *  [DxCp27Client.sendReadLocked]'s own doc).
      *
-     *  Reconnects fresh between the two attempts — confirmed on real hardware that trying a second
+     *  Defaults to [DxCp27Protocol.DEFAULT_PASSWORD] then [DxCp27Protocol.RACEMASTER_PASSWORD]:
+     *  this facility normally programs a beacon exactly once from purchase (see
+     *  [programForRace]'s own doc on skipping a no-op rewrite), so a fresh connect is almost
+     *  always the factory default — but a beacon already programmed once can legitimately come
+     *  back for re-programming (e.g. field experience calling for a different interval/TX
+     *  power), hence the second, fixed fallback rather than dropping it entirely.
+     *  [mobile.racemaster.ui.beacon.BeaconProgrammerViewModel.connect] overrides this to a
+     *  single-candidate `[RACEMASTER_PASSWORD]` when the beacon's own advertised device name
+     *  already matches this app's "RM.nnn±pp" programmed shape — that shape only ever gets
+     *  written after the password's already been changed (same doc), so trying the factory
+     *  default first there would just waste a round trip on a password that's already known to
+     *  no longer apply.
+     *
+     *  Reconnects fresh between attempts — confirmed on real hardware that trying a second
      *  password on an already-authenticated-once connection fails even for the genuinely correct
      *  password, since `dxbeacon.py` (the validated reference) only ever authenticates once per
      *  connection.
      *
-     *  If both fail — e.g. a beacon some other tool changed the password on — [authenticateWithPassword]
-     *  is the manual fallback. */
-    suspend fun connectAndAuthenticate(advertisement: Advertisement): Result<Unit> = withBusyLock {
+     *  If every candidate fails — e.g. a beacon some other tool changed the password on —
+     *  [authenticateWithPassword] is the manual fallback. */
+    suspend fun connectAndAuthenticate(
+        advertisement: Advertisement,
+        passwordCandidates: List<String> = listOf(DxCp27Protocol.DEFAULT_PASSWORD, DxCp27Protocol.RACEMASTER_PASSWORD),
+    ): Result<Unit> = withBusyLock {
         configFlow.value = null
         lastAdvertisement = advertisement
-        for (candidate in listOf(DxCp27Protocol.DEFAULT_PASSWORD, DxCp27Protocol.RACEMASTER_PASSWORD)) {
+        for (candidate in passwordCandidates) {
             connectLocked(advertisement).onFailure { return@withBusyLock Result.failure(it) }
             if (tryPasswordLocked(candidate)) {
                 connectionPhaseFlow.value = BeaconConnectionPhase.CONNECTED

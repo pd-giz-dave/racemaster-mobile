@@ -390,10 +390,28 @@ class BeaconProgrammerViewModel(
         stopScan()
         connectedAdvertisementFlow.value = beacon.advertisement
         showManualPasswordFieldFlow.value = false
+        manualPasswordInputFlow.value = ""
+        // A beacon already advertising this app's own "RM.nnn±pp" device-name shape was
+        // necessarily already programmed once, which always leaves the password changed to
+        // RACEMASTER_PASSWORD (see BeaconRepository.programForRace) — so go straight to it
+        // instead of wasting a round trip on the factory default first. If that single guess is
+        // wrong anyway (e.g. some other tool touched the password since), pre-fill the manual
+        // field with the factory default as the next most likely guess rather than leaving it
+        // blank; a beacon that doesn't look already-programmed keeps the normal default-then-
+        // racemaster chain and an empty manual field, since neither guess is especially likelier.
+        val looksAlreadyProgrammed = beacon.displayName?.let(DxCp27Protocol::parseRaceDeviceName) != null
+        val passwordCandidates = if (looksAlreadyProgrammed) listOf(DxCp27Protocol.RACEMASTER_PASSWORD) else null
         viewModelScope.launch {
-            repository.connectAndAuthenticate(beacon.advertisement)
-                .onSuccess { loadConfigAndPrefill() }
-                .onFailure { showManualPasswordFieldFlow.value = true }
+            val result = if (passwordCandidates != null) {
+                repository.connectAndAuthenticate(beacon.advertisement, passwordCandidates)
+            } else {
+                repository.connectAndAuthenticate(beacon.advertisement)
+            }
+            result.onSuccess { loadConfigAndPrefill() }
+                .onFailure {
+                    if (looksAlreadyProgrammed) manualPasswordInputFlow.value = DxCp27Protocol.DEFAULT_PASSWORD
+                    showManualPasswordFieldFlow.value = true
+                }
         }
     }
 
