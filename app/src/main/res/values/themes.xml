@@ -2,4 +2,17 @@
 <resources>
 
     <style name="Theme.RacemasterMobile" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- Shown as MainActivity's starting window while the process/first Compose frame is
+         still loading (see RacemasterApplication's own doc on why that can take a visible
+         moment on a slow chipset) — androidx.core.splashscreen backports the same look to
+         every supported API level (minSdk 24) instead of the plain blank white window the
+         OS would otherwise show. Reuses the launcher icon's own green/foreground so it reads
+         as "the app is starting," not "the app is broken." postSplashScreenTheme is what
+         installSplashScreen() switches MainActivity to once it exits. -->
+    <style name="Theme.RacemasterMobile.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#1A6E3C</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.RacemasterMobile</item>
+    </style>
 </resources>

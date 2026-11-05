@@ -77,7 +77,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.RacemasterMobile"
+            android:theme="@style/Theme.RacemasterMobile.Starting"
             android:windowSoftInputMode="adjustResize">
             <!-- Without this, the OS decides how to react to the keyboard on its own —
                  usually fine on a modern device (API 30+), where WindowInsets.ime is

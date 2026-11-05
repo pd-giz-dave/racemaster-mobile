@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.ui.Modifier
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import mobile.racemaster.data.mule.PeripheralSyncService
 import mobile.racemaster.navigation.RacemasterNavHost
 import mobile.racemaster.ui.components.AppBanner
@@ -41,6 +42,10 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Must come before super.onCreate() — this is what actually keeps the themed splash
+        // (see Theme.RacemasterMobile.Starting) up until the first Compose frame draws,
+        // instead of it vanishing the instant onCreate() returns.
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         // Operators rely on the screen throughout a race; don't let it sleep on them.
