@@ -285,4 +285,38 @@ class ProgressRepositoryTest {
 
         assertNull(repository.pendingTargetedProgress("never-cached", maxAgeDays = 2))
     }
+
+    // getBibForBeacon — the beacon-detection plan's own bib-lookup piggybacked on this existing
+    // progress-propagation data (see ProgressEntry.beaconNumber's own doc), not a new store.
+
+    @Test
+    fun getBibForBeaconResolvesTheBibPairedToThatBeaconNumber() = runTest {
+        val payload = ProgressPayload(
+            raceName = "Test Race", raceDate = "23/08/2026", generatedAt = "2026-08-23T10:00:00.000Z",
+            entries = listOf(
+                ProgressEntry(bibNumber = 101, name = "Dave", course = "Seniors", beaconNumber = 7),
+                ProgressEntry(bibNumber = 102, name = "Amy", course = "Juniors", beaconNumber = 12),
+            ),
+        )
+        repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = payload)
+
+        assertEquals(101, repository.getBibForBeacon(raceId = 1L, beaconNumber = 7))
+        assertEquals(102, repository.getBibForBeacon(raceId = 1L, beaconNumber = 12))
+    }
+
+    @Test
+    fun getBibForBeaconReturnsNullWhenNoEntryIsPairedToThatBeaconNumber() = runTest {
+        val payload = ProgressPayload(
+            raceName = "Test Race", raceDate = "23/08/2026", generatedAt = "2026-08-23T10:00:00.000Z",
+            entries = listOf(ProgressEntry(bibNumber = 101, name = "Dave", course = "Seniors", beaconNumber = 7)),
+        )
+        repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = payload)
+
+        assertNull(repository.getBibForBeacon(raceId = 1L, beaconNumber = 999))
+    }
+
+    @Test
+    fun getBibForBeaconReturnsNullWhenNothingStoredForThatRace() = runTest {
+        assertNull(repository.getBibForBeacon(raceId = 5L, beaconNumber = 7))
+    }
 }

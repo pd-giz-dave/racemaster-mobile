@@ -19,7 +19,18 @@ object Routes {
     // now gets created, independent of mode selection.
     const val SETUP_RACE = "setup_race"
     const val MULE_SERVER_SETUP = "mule_server_setup"
+
+    // Mode Picker's "Beacons" button lands here, not straight on any one operation — see
+    // BeaconOperationsScreen's own doc for why a hub beat a 4th top-level button.
+    const val BEACON_OPERATIONS = "beacon_operations"
     const val PROGRAM_BEACONS = "program_beacons"
+    // Registration-desk read-only utility — see IdentifyFobScreen's own doc. Separate from
+    // PROGRAM_BEACONS: that screen programs a beacon, this one just reads an already-programmed
+    // one's number back off it.
+    const val IDENTIFY_FOB = "identify_fob"
+    // Post-race tidy-up (TODO.md's "finish mode") — see CloseBeaconsScreen's own doc; not yet
+    // implemented, the button exists so the hub's three operations are all in place up front.
+    const val CLOSE_BEACONS = "close_beacons"
 
     // Bare path — every existing caller that just wants plain Options (Setup Device's own
     // Options button, the Mode Picker's Mule-off-routes-here flow) keeps navigating here

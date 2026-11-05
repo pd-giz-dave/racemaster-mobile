@@ -11,14 +11,20 @@ import com.juul.kable.State
 import com.juul.kable.WriteType
 import com.juul.kable.characteristicOf
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -239,7 +245,19 @@ class MulePullClient {
     // from MuleSyncEngine's side (a device that just never shows up).
     private val loggedRawAddresses = Collections.synchronizedSet(mutableSetOf<String>())
 
-    fun scanForDevices(): Flow<Advertisement> = scanner.advertisements
+    // Outlives any single collector — scanForDevices (Mule's own device discovery) and
+    // scanForAdvertisements (BeaconScanEngine/IdentifyFobScreen, see docs/beacon-detection-plan.md
+    // §2's own "key architectural call") both need to consume the *same* underlying native scan
+    // registration rather than each opening their own via a second Kable Scanner, since a second
+    // independent android.bluetooth.le.BluetoothLeScanner.startScan() registration risks exactly
+    // the cheap/old-chipset scan+advertise+GATT-server radio contention this file's own doc
+    // already documents (see its class-level comment). shareIn's WhileSubscribed keeps the real
+    // scan torn down whenever nothing downstream is collecting, same lifecycle scanner.advertisements
+    // itself would have had with a single direct collector; replay=0 means a brand-new collector
+    // only ever sees adverts from the moment it starts collecting, not ones from before.
+    private val scanScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val sharedAdvertisements: SharedFlow<Advertisement> = scanner.advertisements
         .onEach { advertisement ->
             if (loggedRawAddresses.add(advertisement.identifier)) {
                 Log.d(
@@ -250,7 +268,17 @@ class MulePullClient {
                 )
             }
         }
-        .filter { advertisement -> MuleGattProfile.SERVICE_UUID.toKotlinUuid() in advertisement.uuids }
+        .shareIn(scanScope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 2_000L), replay = 0)
+
+    fun scanForDevices(): Flow<Advertisement> =
+        sharedAdvertisements.filter { advertisement -> MuleGattProfile.SERVICE_UUID.toKotlinUuid() in advertisement.uuids }
+
+    /** Unfiltered fan-out of the exact same underlying scan [scanForDevices] uses — for a
+     *  downstream consumer that needs to see every nearby advertisement, not just this app's own
+     *  Mule-service-UUID ones (e.g. a DX-CP27 race beacon's device-name advert — see
+     *  [mobile.racemaster.data.beacon.BeaconScanDecoder]). See [sharedAdvertisements]'s own doc
+     *  for why this shares one scan rather than opening a second. */
+    fun scanForAdvertisements(): Flow<Advertisement> = sharedAdvertisements
 
     /** Cheap, non-authoritative identity hint read straight off [advertisement]'s scan-response
      *  manufacturer data — no BLE connect involved (pure byte parsing of data already delivered

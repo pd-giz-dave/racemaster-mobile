@@ -276,7 +276,7 @@ class BeaconProgrammerViewModel(
                                 rssi = advertisement.rssi,
                                 frames = mergedFrames,
                             )
-                            scanResultsFlow.value = seenAddresses.values.sortedByDescending { it.rssi }
+                            scanResultsFlow.value = seenAddresses.values.sortedByDisplayName()
                             if (isNewBeacon) repository.logBeaconFound(advertisement.name, advertisement.identifier, advertisement.rssi)
                         }
                     }
@@ -474,8 +474,16 @@ class BeaconProgrammerViewModel(
 
     private fun removeFromScanResults(address: String?) {
         if (address == null || seenAddresses.remove(address) == null) return
-        scanResultsFlow.value = seenAddresses.values.sortedByDescending { it.rssi }
+        scanResultsFlow.value = seenAddresses.values.sortedByDisplayName()
     }
+
+    /** By [ScannedBeaconUi.displayName], not RSSI — RSSI reorders the list every time a nearby
+     *  beacon's signal strength jitters, which made tapping the right one while still scanning
+     *  genuinely unreliable (confirmed on real hardware with two beacons live at once). Device
+     *  name is stable once a beacon's name frame has arrived at all; beacons without one yet
+     *  sort after those that do, rather than jumping around relative to them. */
+    private fun Collection<ScannedBeaconUi>.sortedByDisplayName(): List<ScannedBeaconUi> =
+        sortedWith(compareBy(nullsLast()) { it.displayName })
 
     fun requestFactoryReset() {
         showFactoryResetConfirmFlow.value = true

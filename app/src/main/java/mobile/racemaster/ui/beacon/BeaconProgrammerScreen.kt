@@ -134,7 +134,7 @@ fun BeaconProgrammerScreen(
     Scaffold(
         topBar = {
             ScreenTopBar(
-                title = { Text("Setup Beacons") },
+                title = { Text("Program Beacon") },
                 onBack = { viewModel.disconnect(); onDone() },
                 onHome = onHome,
                 helpTopic = HelpTopics.ProgramBeacons,
@@ -389,7 +389,7 @@ private fun ConnectedSection(uiState: BeaconUiState, viewModel: BeaconProgrammer
                 enabled = uiState.canProgram,
                 contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
                 modifier = Modifier.weight(1f),
-            ) { Text("Program Beacon", style = MaterialTheme.typography.labelSmall, maxLines = 1) }
+            ) { Text("Set Program", style = MaterialTheme.typography.labelSmall, maxLines = 1) }
             OutlinedButton(
                 onClick = withClickSound(viewModel::requestPowerOff),
                 enabled = !uiState.isBusy && !uiState.isCalibrating,

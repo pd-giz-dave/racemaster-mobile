@@ -111,6 +111,11 @@ class MuleRepository(
 
     fun scanForDevices(): Flow<Advertisement> = pullClient.scanForDevices()
 
+    /** See [MulePullClient.scanForAdvertisements]'s own doc — the unfiltered counterpart to
+     *  [scanForDevices], for a beacon-detection consumer that isn't looking for other
+     *  RaceMaster phones at all. */
+    fun scanForAdvertisements(): Flow<Advertisement> = pullClient.scanForAdvertisements()
+
     // See MulePullClient.decodeAdvertisedIdentity's own doc — a cheap, no-connect-required
     // hint used by MuleSyncEngine to decide whether readDeviceInfo below is even worth
     // attempting on a given tick.

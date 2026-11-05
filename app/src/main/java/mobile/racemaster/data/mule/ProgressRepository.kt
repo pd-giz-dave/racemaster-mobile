@@ -130,6 +130,15 @@ class ProgressRepository(
     private suspend fun existingEntries(raceId: Long): List<ProgressEntry> =
         progressDao.getByRaceId(raceId)?.toStoredProgress()?.entries.orEmpty()
 
+    /** The bib paired (at registration, server-side — see [ProgressEntry.beaconNumber]'s own
+     *  doc) with a race beacon's own [beaconNumber], or null if nothing's paired to it (including
+     *  "no progress stored for this race yet"). Reads the Room-persisted copy via
+     *  [existingEntries], not just [current] — a beacon detection needs to resolve against
+     *  whatever's stored for the active race regardless of whether this exact device happened to
+     *  be the one that most recently received it. */
+    suspend fun getBibForBeacon(raceId: Long, beaconNumber: Int): Int? =
+        existingEntries(raceId).firstOrNull { it.beaconNumber == beaconNumber }?.bibNumber
+
     // Upserts [changed] into [existing] by bibNumber — a changed bib replaces its old entry, a
     // new bib is added, everything else is left exactly as it was. Mirrors racemaster's own
     // server/mobile.js mergeProgress (the write-side counterpart), just with no equivalent of its

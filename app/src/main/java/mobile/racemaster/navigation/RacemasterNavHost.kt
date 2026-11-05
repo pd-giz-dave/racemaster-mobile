@@ -21,6 +21,9 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.beacon.BeaconProgrammerScreen
+import mobile.racemaster.ui.beaconidentify.IdentifyFobScreen
+import mobile.racemaster.ui.beaconops.BeaconOperationsScreen
+import mobile.racemaster.ui.beaconops.CloseBeaconsScreen
 import mobile.racemaster.ui.bibsmode.BibsModeScreen
 import mobile.racemaster.ui.editentry.EditEntryScreen
 import mobile.racemaster.ui.help.HelpScreen
@@ -96,7 +99,22 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                         onReviewPastRaces = { navController.navigate(Routes.RACE_HISTORY) },
                         onHelp = { navController.navigate(Routes.HELP) },
                         onSetupDevice = { navController.navigate(Routes.SETUP_DEVICE) },
-                        onSetupBeacons = { navController.navigate(Routes.PROGRAM_BEACONS) },
+                        onBeaconOperations = { navController.navigate(Routes.BEACON_OPERATIONS) },
+                    )
+                }
+                composable(Routes.BEACON_OPERATIONS) {
+                    BeaconOperationsScreen(
+                        onDone = { navController.popBackStack() },
+                        onHome = { navController.navigateHome() },
+                        onCheck = { navController.navigate(Routes.IDENTIFY_FOB) },
+                        onClose = { navController.navigate(Routes.CLOSE_BEACONS) },
+                        onProgram = { navController.navigate(Routes.PROGRAM_BEACONS) },
+                    )
+                }
+                composable(Routes.CLOSE_BEACONS) {
+                    CloseBeaconsScreen(
+                        onDone = { navController.popBackStack() },
+                        onHome = { navController.navigateHome() },
                     )
                 }
                 composable(Routes.HELP) {
@@ -110,6 +128,12 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                         onSetupServer = { navController.navigate(Routes.MULE_SERVER_SETUP) },
                         onOptions = { navController.navigate(Routes.SETUP_OPTIONS) },
                         onSetupRace = { navController.navigate(Routes.SETUP_RACE) },
+                    )
+                }
+                composable(Routes.IDENTIFY_FOB) {
+                    IdentifyFobScreen(
+                        onDone = { navController.popBackStack() },
+                        onHome = { navController.navigateHome() },
                     )
                 }
                 composable(Routes.NAME_DEVICE) {

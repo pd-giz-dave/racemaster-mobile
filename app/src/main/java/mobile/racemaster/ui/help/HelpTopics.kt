@@ -164,8 +164,17 @@ object HelpTopics {
         ),
     )
 
+    val BeaconOperations = HelpTopic(
+        title = "Beacons",
+        tips = listOf(
+            "Three separate jobs share this hub: Check (confirm a beacon's on and its number " +
+                "matches its label), Close (post-race battery/power-off tidy-up — not yet " +
+                "implemented), and Program (write a beacon's number ahead of a race).",
+        ),
+    )
+
     val ProgramBeacons = HelpTopic(
-        title = "Setup Beacons",
+        title = "Program Beacon",
         tips = listOf(
             "Scan, then tap a beacon to connect — it authenticates automatically with the " +
                 "known passwords and shows its real current configuration, including battery.",
@@ -185,11 +194,11 @@ object HelpTopics {
                 "hold the beacon exactly 1 metre from the phone and tap Calibrate; it stays " +
                 "filled in for the next beacon too, so you only need to do this once per " +
                 "session.",
-            "Power Off and Factory Reset sit next to Program Beacon, each behind its own " +
+            "Power Off and Factory Reset sit next to Set Program, each behind its own " +
                 "confirmation — Power Off needs the beacon's own button pressed to bring it " +
                 "back on, Factory Reset wipes the password and every slot back to firmware " +
                 "defaults.",
-            "Watch the log at the bottom — Program Beacon re-reads the beacon afterward and " +
+            "Watch the log at the bottom — Set Program re-reads the beacon afterward and " +
                 "only reports success once the written values are confirmed, not just acked. " +
                 "It lists newest first and keeps itself scrolled to the top while you're " +
                 "watching it live.",
@@ -200,8 +209,31 @@ object HelpTopics {
         ),
     )
 
+    val IdentifyFob = HelpTopic(
+        title = "Check Beacon",
+        tips = listOf(
+            "Hold one race beacon close to the phone — its Beacon Number (the same number " +
+                "entered on Program Beacon when it was programmed) shows as big as the screen " +
+                "allows, so it's easy to check against the beacon's own label.",
+            "Lists every beacon within half a metre, nearest first — if more than one shows " +
+                "up, move the others further away so only the one you're checking is listed.",
+            "Read-only: this doesn't pair a bib to a beacon — that pairing happens at " +
+                "registration in the Racemaster web app, not on the phone.",
+        ),
+    )
+
+    val CloseBeacons = HelpTopic(
+        title = "Close Beacons",
+        tips = listOf(
+            "Not yet implemented. Once built, this will be the post-race tidy-up: connect to " +
+                "each beacon handed out, read its battery, power it off, and log what came " +
+                "back so anyone still holding one gets chased.",
+        ),
+    )
+
     val all: List<HelpTopic> = listOf(
-        Overview, SetupDevice, SetupServer, SetupRace, ProgramBeacons, Options,
-        TimeMode, BibsMode, MuleMode, RaceHistory, HistoryLineFormat,
+        Overview, SetupDevice, SetupServer, SetupRace, BeaconOperations, IdentifyFob,
+        ProgramBeacons, CloseBeacons, Options, TimeMode, BibsMode, MuleMode, RaceHistory,
+        HistoryLineFormat,
     )
 }

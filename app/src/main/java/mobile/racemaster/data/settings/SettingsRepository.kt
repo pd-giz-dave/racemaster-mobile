@@ -3,6 +3,7 @@ package mobile.racemaster.data.settings
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
@@ -46,6 +47,11 @@ val DEFAULT_BIBS_AUTO_SAVE_ACTION: HistoryAction = HistoryAction.FINISH
 // FEMALE only so the setting has *some* deterministic value before an operator ever touches it.
 val DEFAULT_BIB_SPEECH_VOICE: BibVoice = BibVoice.FEMALE
 
+// See SettingsRepository.beaconIdentifyDistanceMeters's own doc — deliberately tight (TODO.md's
+// own point 2: "much tighter at registration" than race-time detection) so IdentifyFobScreen
+// doesn't accidentally read a neighbouring beacon in a box/cluster of them.
+const val DEFAULT_BEACON_IDENTIFY_DISTANCE_METERS = 0.5
+
 class SettingsRepository(
     private val dataStore: DataStore<Preferences>,
 ) {
@@ -77,6 +83,7 @@ class SettingsRepository(
         val BIBS_AUTO_SAVE_ACTION = stringPreferencesKey("bibs_auto_save_action")
         val SPEAK_BIBS_ALOUD = booleanPreferencesKey("speak_bibs_aloud")
         val BIB_SPEECH_VOICE = stringPreferencesKey("bib_speech_voice")
+        val BEACON_IDENTIFY_DISTANCE_METERS = doublePreferencesKey("beacon_identify_distance_meters")
     }
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -440,5 +447,20 @@ class SettingsRepository(
 
     suspend fun setBibSpeechVoice(voice: BibVoice) {
         dataStore.edit { prefs -> prefs[Keys.BIB_SPEECH_VOICE] = voice.name }
+    }
+
+    // Registration-desk threshold IdentifyFobScreen filters a detected race beacon's own
+    // BeaconScanDecoder.estimateDistanceMeters against (see docs/beacon-detection-plan.md §5) —
+    // deliberately tighter than the not-yet-built race-time beaconMaxDistanceMeters (TODO.md
+    // point 2's "much tighter at registration"), so reading one specific fob out of a box/
+    // cluster of them doesn't pick up its neighbour instead. No SetupOptionsScreen control yet
+    // (phase 3's own job, once real field testing has a value worth exposing) — fixed at
+    // DEFAULT_BEACON_IDENTIFY_DISTANCE_METERS for now, same "constant first, setting later if it
+    // turns out to need per-race tuning" posture as e.g. BeaconScanEngine's own GONE_SILENT_MS.
+    val beaconIdentifyDistanceMeters: Flow<Double> =
+        dataStore.data.map { prefs -> prefs[Keys.BEACON_IDENTIFY_DISTANCE_METERS] ?: DEFAULT_BEACON_IDENTIFY_DISTANCE_METERS }
+
+    suspend fun setBeaconIdentifyDistanceMeters(meters: Double) {
+        dataStore.edit { prefs -> prefs[Keys.BEACON_IDENTIFY_DISTANCE_METERS] = meters }
     }
 }

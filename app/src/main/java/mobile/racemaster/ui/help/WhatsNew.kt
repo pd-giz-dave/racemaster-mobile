@@ -10,6 +10,22 @@ data class VersionNotes(val version: String, val highlights: List<String>)
 object WhatsNew {
     val versions: List<VersionNotes> = listOf(
         VersionNotes(
+            version = "0.0.29",
+            highlights = listOf(
+                "The Mode Picker's \"Beacons\" button now opens a small menu — Check, Close, " +
+                    "Program — instead of going straight to beacon programming.",
+                "New \"Check\" screen: hold a beacon close to the phone to confirm it's on and " +
+                    "read its number back, big enough to check against the label on the " +
+                    "beacon itself. Lists every beacon within half a metre, nearest first, and " +
+                    "stays steady even with more than one beacon nearby.",
+                "\"Close\" (a post-race battery check and power-off) is listed but not yet " +
+                    "built.",
+                "Program Beacon's scan list is now sorted by beacon name instead of signal " +
+                    "strength, so it no longer reshuffles mid-scan while you're trying to tap " +
+                    "the right one.",
+            ),
+        ),
+        VersionNotes(
             version = "0.0.28",
             highlights = listOf(
                 "Setup Beacons now pauses Mule Mode's Bluetooth entirely — both syncing and " +

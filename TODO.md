@@ -218,7 +218,11 @@ See alibaba express for examples.
 
 Full design: [docs/beacon-detection-plan.md](docs/beacon-detection-plan.md) (on the
 `beacon-tracking` branch) — includes architecture, code sketches, phased build-out, test plan,
-and a "How to resume this later" section. **Parked until real BLE tracker fobs are acquired.**
+and a "How to resume this later" section. The hardware question is resolved (DX-CP27 beacons,
+programmed via Setup Beacons — see "Programming the DX-CP27 Bluetooth Beacon" below), and
+phase 1 (parsing + distance estimation + the Identify Fob registration-desk screen) is now
+implemented — see the plan doc's own 2026-11-05 updates. Phase 2 (`BeaconScanEngine`'s actual
+auto-record-on-pass detection) is not yet built.
 
 - [ ] detection timed at peak signal strength (closest approach), not first/last-seen — the fob
       doubles as a timing device (photo-finish resolution), not just bib ID
@@ -305,19 +309,31 @@ hardware through that screen, not just implemented.
 
 ### Race-day usage
 
-- [ ] during registration this app needs to be set in a 'check' mode that can verify that a
-      beacon is switched on and that its major/minor id are that expected and its battery
-      level is acceptable, when multiple devices are visible a list should be shown in the
-      order of highest power first (i.e. closest first)
-      (the operator needs to check the major id is 1 and the minor id matches the label
-      on the beacon)
+Reached from the Mode Picker's "Beacons" button, which now opens a small hub
+(`ui/beaconops/BeaconOperationsScreen.kt`) with three buttons — Check, Close, Program — rather
+than going straight to one screen; see docs/beacon-detection-plan.md's 2026-11-05 "Beacon
+Operations hub" section.
+
+- [x] during registration this app needs to be set in a 'check' mode that can verify that a
+      beacon is switched on and that its id is that expected, when multiple devices are visible 
+      a list should be shown in the order of highest power first (i.e. closest first),
+      the operator needs to check the id matches the label on the beacon so the screen should
+      ensure the id is shown as big as possible within the screen constraints of the phone
+      — **done**: Beacons > Check (`IdentifyFobScreen`/`IdentifyFobViewModel`), field-verified
+      against two real DX-CP27s side by side.
 - [ ] after the race is over this app needs to be in a 'finish' mode that shows the battery
       status and powers off the beacon and also logs what has been returned so we know who to
-      chase that have not given their beacon back
+      chase that have not given their beacon back, this finish mode should be able to detect
+      connect to, read the battery, power-off and record the battery level and date and
+      send that to the racemaster app so it can record beacon usage in its beacon log, that
+      log should record beacon id, mac, last read battery level and date and also update
+      an accumulator for how many hours the beacon has been active for, for each race assume
+      it was turned on 2 hours before the start
+      — Beacons > Close (`CloseBeaconsScreen`) is a placeholder for this; not yet implemented.
 - [ ] during the race when the app is in bibs mode it needs to detect a passing beacon as
       described elsewhere, BUT... to do that reliably the phone must NOT also be in mule mode
       (see the mitigations implemented for beacon programming around scanning)
-- [ ] a beacon with minor id of 0 is not allowed for a runner, its reserved for the sweep
+- [ ] a beacon with an id of 0 is not allowed for a runner, its reserved for the sweep
 
 ## Location Maps
 
@@ -325,3 +341,12 @@ Modify all modes to relay their physical location, via GPS, back to the server/r
 Modify the racemaster web-app to show mobile locations on a map tagging the location with the
 location code reported by the phone. The best place for the map is another tab on the Mobile
 Files page. Ideally an OS map if available for free, else the best OpenStreetMap variant.
+
+## Bluetooth Beacon range estimation
+
+A facility is required to get a handle on how the RSSI drops off with range with a view to
+calculating more accurate distances. There are several contexts: 
+  - [ ] during registration inside a building with lots of people milling about and lots of 
+        beacons in range.
+  - [ ] at a CP out in thw wild, few people, no buildings, only a few beacons in range
+  - [ ] at the finish line, lots of people, no buildings, lots of nearby beacons

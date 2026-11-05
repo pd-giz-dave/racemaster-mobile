@@ -548,6 +548,14 @@ data class ProgressEntry(
     // ProgressRepository's merge-by-bibNumber keys a "did this entry actually change" decision
     // off when reconciling a partial payload into what's already stored locally.
     val updatedAt: String? = null,
+    // Pairing a bib to a physical race beacon happens at registration in the racemaster web-app,
+    // not on the phone (see docs/beacon-detection-plan.md's TODO.md point 3) — this is that
+    // mapping's own wire field, piggybacked onto the existing bib/name propagation this app
+    // already has rather than a new sync mechanism. Matches DxCp27Protocol.raceDeviceName's own
+    // "Beacon Number" (0-999, the same value an operator enters on Beacons > Program when
+    // programming a beacon) — null for a bib with no beacon assigned, or a payload from before
+    // this field existed (mirrors updatedAt's own null-means-older-payload precedent above).
+    val beaconNumber: Int? = null,
 )
 
 /** Race-wide progress payload — see [ProgressEntry]'s own doc. [generatedAt] is the racemaster

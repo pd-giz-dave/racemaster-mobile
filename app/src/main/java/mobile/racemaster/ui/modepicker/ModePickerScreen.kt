@@ -49,7 +49,7 @@ fun ModePickerScreen(
     onReviewPastRaces: () -> Unit,
     onHelp: () -> Unit,
     onSetupDevice: () -> Unit,
-    onSetupBeacons: () -> Unit,
+    onBeaconOperations: () -> Unit,
     viewModel: ModePickerViewModel = viewModel(factory = ModePickerViewModel.Factory),
 ) {
     val hasActiveRace by viewModel.hasActiveRace.collectAsStateWithLifecycle()
@@ -89,9 +89,9 @@ fun ModePickerScreen(
         // became a distinct, separate role from Mule (see MuleSyncEngine's own doc): an
         // operator on a Time-mode phone shouldn't have to detour through a role they never
         // actually use just to reach setup. Always just a spanner icon + "Device" now that this
-        // button shares its row with Setup Beacons at this narrower, half-width size — "Setup
+        // button shares its row with Beacons at this narrower, half-width size — "Setup
         // Device" in full was getting ellipsized down to just "Setup" on narrower screens (e.g.
-        // the Samsung XCover 4), same fix as Setup Beacons' own button right next to it.
+        // the Samsung XCover 4), same fix as the Beacons button right next to it.
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = withClickSound(onSetupDevice),
@@ -106,7 +106,7 @@ fun ModePickerScreen(
                 Text("Device", style = MaterialTheme.typography.titleMedium)
             }
             Button(
-                onClick = withClickSound(onSetupBeacons),
+                onClick = withClickSound(onBeaconOperations),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.secondary,
                     contentColor = MaterialTheme.colorScheme.onSecondary,

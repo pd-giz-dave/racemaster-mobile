@@ -1,28 +1,5 @@
 # Plan: BLE beacon detection for auto-recording runner bib passes
 
-Status: **parked, not yet implemented** — waiting on real BLE tracker fobs to be acquired.
-See TODO.md's "Another idea" section for the originating idea and a condensed checklist; this
-doc is the full design.
-
-## How to resume this later
-
-1. Check out the `beacon-tracking` branch (`git checkout beacon-tracking`, or a fresh
-   `git worktree`/clone if `main` has moved on since).
-2. Read this doc in full — it's self-contained (architecture, exact code sketches, phased
-   build-out, verification plan, critical file list).
-3. Before writing any code, do phase 1 step 2: capture one real fob's actual raw advertisement
-   via nRF Connect and confirm the iBeacon byte layout (`0x02 0x15` prefix) and measured-power
-   field actually match what `IBeaconParser` assumes below — cheap clone chipsets sometimes
-   deviate. Adjust the parser's assumptions in this doc if they don't match before building on
-   top of it.
-4. Ask Claude to implement starting from "Phase 1" below, pointing it at this file directly —
-   a fresh session has no memory of how this plan was derived, so hand it this doc rather than
-   re-describing the feature from scratch.
-5. The companion server (`~/racemaster`) needs its own `fobShortCode` field + registration UI
-   added before phase 2 (auto-record) can be tested end-to-end against real server data — check
-   whether that's landed; if not, phase 1 and most of phase 2 can still be built/tested against
-   a hand-crafted local `ProgressEntry` with `fobShortCode` set.
-
 ## 2026-11-05 update: real-hardware scan-reliability findings and resulting policy
 
 A separate investigation (on the `beacon-tracking` branch, using the now-built Setup Beacons
@@ -32,7 +9,8 @@ receives a beacon's advertisements over time. This matters directly to `BeaconSc
 below, since it's the same `BluetoothLeScanner`/Kable receive path this plan depends on.
 
 **What was found and fixed already** (both now live in `BeaconProgrammerViewModel.kt`, worth
-porting into `BeaconScanEngine` rather than rediscovering):
+porting into `BeaconScanEngine` rather than rediscovering) (NB: duplication not allowed, 
+re-use where possible):
 - A second, concurrently-registered app-level BLE scanner (this app's own Mule Mode, both its
   scan *and* advertise/GATT-server roles) measurably degrades reception of a third-party
   beacon — confirmed via `dumpsys bluetooth_manager`'s "App Scan Info"/logcat `BLE_GAP` lines
@@ -117,6 +95,21 @@ should almost certainly decode advertisements via `DxCp27Protocol`'s existing pa
 building a new `IBeaconParser` against a format that was never actually adopted — confirm this
 before starting phase 1, and treat §1's code sketch as superseded, not as a spec to implement.
 
+**2026-11-05 — resolved, phase 1 implemented**: §1 is replaced by
+`data/beacon/BeaconScanDecoder.kt` (`DetectedRaceBeacon`/`decodeFromAdvertisement`/`decode`/
+`estimateDistanceMeters`), built on `DxCp27Protocol.parseRaceDeviceName` as predicted above — see
+§1's own rewritten text below. Also while implementing phase 1, the generic "fob short code"
+vocabulary throughout this doc (and §3/§4's original code sketches) has been replaced with
+**`beaconNumber: Int`** end to end — matching the real identity model (the same 0-999 "Beacon
+Number" an operator already enters on Setup Beacons, not an opaque string), not a leftover from
+when the hardware was an unspecified AliExpress fob. `ProgressEntry.fobShortCode: String?` is now
+`ProgressEntry.beaconNumber: Int?`, and `ProgressRepository.getBibForFob` is now `getBibForBeacon`
+— §3/§4/§6 below are updated to match; the **cross-repo server-side field name** (§3's own
+"out of scope" note) must use this same `beaconNumber` name, not `fobShortCode`, once that work
+starts. Phase 1 steps 1, 3, 4, and 5 (parser, shared-scan plumbing, bib-lookup field, and
+IdentifyFobScreen/nav wiring) are done; step 6 (manual field test against a real beacon) is the
+one thing only achievable with real hardware in hand, left for the operator.
+
 ## Context
 
 TODO.md's "Another idea" (being explored on the `beacon-tracking` branch) proposes extending
@@ -129,23 +122,23 @@ TODO.md's own "Implementation notes" spell out three requirements that shape thi
    first-seen or last-seen — because the fob is meant to double as a *timing* device (resolving
    photo-finishes), not just a bib-ID reader. The signal profile isn't a simple bell curve, so
    the engine must track a running best-RSSI-so-far for a candidate pass and only commit once
-   the fob has gone out of range.
-2. Measured-power (the iBeacon TX-power field) should be used to estimate distance and enforce
-   a max-range threshold, tighter during registration than during race detection — so a fob in
-   an adjacent lane, or sitting in a box of unassigned fobs, doesn't get matched.
+   the fob has gone out of range. At the finish, runners tend to hang about, so repeat detections
+   are almost certain, these need to be ignored.
+2. Measured-power at 1m (as encoded in the device name - see elsewhere) should be used to estimate 
+   distance and enforce a max-range threshold, tight during registration (<1m), loose at CPs and
+   not so loose at the finish (<3m).
 3. **Bib-to-fob pairing happens at registration in the Racemaster web-app, not on the phone.**
    Each fob has a short-code (a sequence number unique to that physical unit, known to the
    web-app) — the same shape as an orienteering dibber-number allocation. The web-app's
    lookup table is populated at registration and then broadcast to phones piggybacked on the
    **existing bib/name propagation system** (`ProgressEntry`/`ProgressPayload`), not a new
-   mechanism.
+   mechanism. Fobs are normally allocated from 1 upwards for each race just like dibbers.
 
 Point 3 is a significant correction to the design's data flow versus a first pass at this plan:
 there is no local "pairing database" to build and no on-phone marshal-tap-to-assign screen as
 the primary mechanism — the phone is a consumer of a mapping the server already knows, riding
 the sync path that already carries bib/name/course data down to every device. The only
-on-device, registration-time need is a way to *read a fob's own hardware ID* so staff can type
-it into the web-app — a small read-only utility, not a database.
+on-device, registration-time need is a way to verify the fobs ID is as expected (matches it label).
 
 This also needs to coexist with the existing BLE central-scanning role (`MulePullClient.kt`)
 used by Mule Mode, especially on the low-end/old hardware (Samsung XCover 4) separately being
@@ -154,82 +147,42 @@ problems running scan+advertise+GATT-server simultaneously on cheap chipsets, wh
 scan-integration decision below.
 
 Confirmed design decisions:
-- **Protocol**: assume iBeacon-style advertising (Apple manufacturer ID `0x004C`, 16-byte
-  proximity UUID + major + minor + measured power) — parseable from the advertisement alone,
-  no GATT connect needed.
+- **Protocol**: assume device-info advertising (ID + measured power encoded in the device
+  name) — parseable from the advertisement alone, no GATT connect needed.
 - **Auto-record, no manual confirm step** — refined by point 1 above into "auto-record, timed
   at peak signal, committed once the fob is gone."
 
 ## Architecture
 
-| Piece | Location | Follows the pattern of |
-|---|---|---|
-| `IBeaconParser` | `data/beacon/IBeaconParser.kt` | `MuleGattProfile.decodeAdvertisedIdentity` — pure byte decode, never throws |
-| `ProgressEntry.fobShortCode` (new field) | `data/mule/MuleGattProfile.kt` | existing `ProgressEntry` fields — rides the existing bib/name propagation, no new sync path |
-| `BeaconScanEngine` | `data/beacon/BeaconScanEngine.kt` | `MuleSyncEngine` — process-lifetime, started once from `PeripheralSyncService.onCreate`, gated by a settings flow |
-| `IdentifyFobScreen`/`ViewModel` | `ui/beaconidentify/` | a small read-only diagnostic screen, registration-desk use only |
+Original plan item here deleted as no longer accurate.
 
 No new Room entity, no DB version bump, no new foreground service, no new Kable `Scanner`, no
 AndroidManifest changes. This is a meaningfully smaller surface than a local-pairing-database
 design would have needed, precisely because point 3 moves the mapping authority server-side.
 
-### 1. `IBeaconParser`
+### 1. Device info parser — implemented as `BeaconScanDecoder`
 
-New package `data/beacon/` (not `data/mule/` — this is Apple's iBeacon format, unrelated to
-`MuleGattProfile`'s own custom protocol).
+`data/beacon/BeaconScanDecoder.kt` (not `IBeaconParser` — see the staleness flag above):
+- `DetectedRaceBeacon(address, beaconNumber, measuredPowerDbm, rssi)`, with a computed
+  `estimatedDistanceMeters` property.
+- `decode(name: String?, rssi: Int, address: String): DetectedRaceBeacon?` — the real, pure,
+  unit-tested logic: `null` for no name or a name not shaped like
+  `DxCp27Protocol.raceDeviceName`'s format, otherwise built from
+  `DxCp27Protocol.parseRaceDeviceName(name)` plus the passed-through rssi/address.
+- `decodeFromAdvertisement(advertisement: Advertisement): DetectedRaceBeacon?` — a thin wrapper
+  calling `decode(advertisement.name, advertisement.rssi, advertisement.identifier)`, kept
+  separate so `decode` itself stays testable against plain synthetic values without needing a
+  real or mocked Kable `Advertisement` (confirmed: this JVM-only test module has no way to
+  construct one, since it wraps a platform `ScanResult`).
+- `estimateDistanceMeters(measuredPowerDbm: Int, rssi: Int): Double` — log-distance path-loss
+  model, `10 ^ ((measuredPowerDbm - rssi) / (10 * n))`, fixed `n = 2` (free-space exponent) for
+  now — see phase 3 step 12's own "tune path-loss exponent against real field data".
 
-```kotlin
-object IBeaconParser {
-    const val APPLE_MANUFACTURER_ID = 0x004C
-    private const val IBEACON_TYPE: Byte = 0x02
-    private const val IBEACON_SUBLENGTH: Byte = 0x15 // 21 bytes: 16 UUID + 2 major + 2 minor + 1 power
+`BeaconScanDecoderTest.kt` covers: a real race-programmed name decodes correctly; a factory/
+unrelated name and a missing name both return `null`; the distance formula is exactly 1m when
+rssi matches measuredPower, and scales correctly (10x/0.1x for a ±20dB offset at n=2).
 
-    data class IBeaconAdvertisement(
-        val proximityUuid: String, val major: Int, val minor: Int,
-        val measuredPower: Int, val rssi: Int,
-    ) {
-        // What's looked up against ProgressEntry.fobShortCode (§3) and shown on
-        // IdentifyFobScreen (§5) for transcription into the web-app at registration. Exact
-        // composition (minor alone vs. the full triple) depends on whether the fob batch
-        // shares one UUID/major — confirm against real hardware (see phase 1, step 2) before
-        // fixing this format, since it's also the format staff will be typing by hand.
-        val fobShortCode: String get() = "$major-$minor"
-    }
-
-    // Pure decode, never throws — null for anything too short/not iBeacon-shaped, mirroring
-    // MuleGattProfile.decodeAdvertisedIdentity's fail-safe convention.
-    fun decode(bytes: ByteArray?, rssi: Int): IBeaconAdvertisement? {
-        if (bytes == null || bytes.size < 23) return null
-        if (bytes[0] != IBEACON_TYPE || bytes[1] != IBEACON_SUBLENGTH) return null
-        val uuid = formatUuid(bytes.copyOfRange(2, 18))
-        val major = ((bytes[18].toInt() and 0xFF) shl 8) or (bytes[19].toInt() and 0xFF)
-        val minor = ((bytes[20].toInt() and 0xFF) shl 8) or (bytes[21].toInt() and 0xFF)
-        return IBeaconAdvertisement(uuid, major, minor, measuredPower = bytes[22].toInt(), rssi = rssi)
-    }
-
-    // Formats 16 raw bytes into canonical lowercase 8-4-4-4-12 UUID form.
-    private fun formatUuid(bytes: ByteArray): String {
-        val hex = bytes.joinToString("") { "%02x".format(it) }
-        return "${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-" +
-            "${hex.substring(16, 20)}-${hex.substring(20, 32)}"
-    }
-
-    fun decodeFromAdvertisement(advertisement: Advertisement): IBeaconAdvertisement? =
-        decode(advertisement.manufacturerData(APPLE_MANUFACTURER_ID), advertisement.rssi)
-
-    // distance ≈ 10^((measuredPower - rssi) / (10*N)), N≈2, tune empirically against real fobs.
-    fun estimateDistanceMeters(measuredPower: Int, rssi: Int, pathLossExponent: Double = 2.0): Double =
-        Math.pow(10.0, (measuredPower - rssi) / (10.0 * pathLossExponent))
-}
-```
-
-**Flag for phase 1**: cheap clone fobs aren't guaranteed to emit the canonical `0x02 0x15`
-prefix byte-for-byte, and the path-loss exponent needs empirical tuning per fob model/mounting
-(worn on a runner, not held in open air). Before building anything on top of this, capture one
-real fob's actual raw advertisement via nRF Connect and sanity-check both the byte layout and
-roughly how `estimateDistanceMeters` tracks real distance at a few paces.
-
-### 2. Scan integration — key architectural call
+### 2. Scan integration — key architectural call — implemented as described below
 
 **Share the one Kable `Scanner` `MulePullClient` already owns; do not open a second one.**
 `MulePullClient.kt`'s own doc comments (around lines 44–73) already document, from real field
@@ -241,7 +194,7 @@ precisely the hardware this project is trying to validate as cheap dedicated uni
 
 Sharing is safe and free: `MuleRepository.scanForDevices()` already filters one unfiltered
 `scanner.advertisements` stream downstream in Kotlin (`MulePullClient.kt:242`). Fan that same
-raw stream out to a second downstream consumer (iBeacon matching) — pure in-process `Flow`
+raw stream out to a second downstream consumer (device info matching) — pure in-process `Flow`
 fan-out, no extra radio cost.
 
 `MulePullClient.kt` change:
@@ -269,10 +222,13 @@ one collector won't kill another, **provided** every new collector uses the same
 Kotlin's 5000 default) absorbs a brief subscriber gap without a full scan restart; revisit
 empirically during real multi-device field testing, same as this file's other tuned constants.
 
-### 3. Bib lookup — piggybacked on existing progress propagation, not a new mapping store
+### 3. Bib lookup — piggybacked on existing progress propagation, not a new mapping store — implemented
 
-Per TODO.md point 3, add one new field to the payload that already carries bib/name/course data
-to every phone over both transports:
+Per TODO.md point 3, added one new field to the payload that already carries bib/name/course
+data to every phone over both transports — `beaconNumber: Int?`, not the originally-sketched
+`fobShortCode: String?` (see the 2026-11-05 staleness-flag update above for why: the real
+identity is the same 0-999 "Beacon Number" integer the operator already enters on Setup Beacons,
+not an opaque string short-code):
 
 `data/mule/MuleGattProfile.kt`'s `ProgressEntry`:
 ```kotlin
@@ -286,7 +242,7 @@ data class ProgressEntry(
     val finishTime: String = "",
     val cpTimes: Map<String, String> = emptyMap(),
     val updatedAt: String? = null,
-    val fobShortCode: String? = null, // NEW — matches IBeaconParser.IBeaconAdvertisement.fobShortCode
+    val beaconNumber: Int? = null, // NEW
 )
 ```
 Default `null` keeps this wire-compatible with older payloads/servers (mirrors `updatedAt`'s own
@@ -296,18 +252,21 @@ kotlinx.serialization JSON blob (not individual Room columns), **this needs no R
 no DB version bump** — it's purely a Kotlin data-class field. Same for `TargetedProgressEntity`,
 which stores the full payload verbatim already.
 
-`data/mule/ProgressRepository.kt`: add
+`data/mule/ProgressRepository.kt`:
 ```kotlin
-suspend fun getBibForFob(raceId: Long, fobShortCode: String): Int? =
-    getStored(raceId)?.entries?.firstOrNull { it.fobShortCode == fobShortCode }?.bibNumber
+suspend fun getBibForBeacon(raceId: Long, beaconNumber: Int): Int? =
+    existingEntries(raceId).firstOrNull { it.beaconNumber == beaconNumber }?.bibNumber
 ```
-following the file's existing `existingEntries`/`getStored` helpers.
+Reads the Room-persisted copy via the file's existing `existingEntries` helper (not just
+`current`), so a lookup resolves against whatever's stored for the race regardless of which
+device most recently received it — covered by `ProgressRepositoryTest.kt`.
 
 **Cross-repo dependency, out of scope for this plan but required for the end-to-end feature**:
 the companion server (`~/racemaster/server/routes/mobile.js`, which builds/merges `progress.json`
 per its own `mergeProgress`/entry-shape comments around line 71) needs the matching
-`fobShortCode` field added to its entry shape and registration UI, and its own lookup table
-(bib ↔ fob short-code, assigned at registration) populated the same way bib allocations already
+`beaconNumber` field (an integer, not a string) added to its entry shape and registration UI, and
+its own lookup table
+(bib ↔ beacon number, assigned at registration) populated the same way bib allocations already
 are. That work is tracked in the `~/racemaster` repo, not here — this plan only ensures the
 mobile app correctly consumes the field once the server emits it.
 
@@ -322,7 +281,7 @@ an app restart is an acceptable edge case, not a correctness requirement):
 
 ```kotlin
 private data class PassTracking(
-    val fobShortCode: String,
+    val beaconNumber: Int,
     var peakRssi: Int,
     var peakAtMillis: Long,
     var lastSeenAtMillis: Long,
@@ -335,8 +294,8 @@ class BeaconScanEngine(
     private val raceRepository: RaceRepository,
     private val bibsModeRepository: BibsModeRepository,
 ) {
-    private val tracking = ConcurrentHashMap<String, PassTracking>()
-    private val cooldownUntilMillis = ConcurrentHashMap<String, Long>()
+    private val tracking = ConcurrentHashMap<Int, PassTracking>()
+    private val cooldownUntilMillis = ConcurrentHashMap<Int, Long>()
 
     fun start() {
         engineScope.launch { observeScanningEnabled() } // flatMapLatest-restart on toggle, like MuleSyncEngine's bluetooth-state loop
@@ -344,20 +303,19 @@ class BeaconScanEngine(
     }
 
     private suspend fun handleAdvertisement(advertisement: Advertisement) {
-        val beacon = IBeaconParser.decodeFromAdvertisement(advertisement) ?: return
+        val beacon = BeaconScanDecoder.decodeFromAdvertisement(advertisement) ?: return
         val maxDistance = settingsRepository.beaconMaxDistanceMeters.first()
-        val distance = IBeaconParser.estimateDistanceMeters(beacon.measuredPower, beacon.rssi)
-        if (distance > maxDistance) return
+        if (beacon.estimatedDistanceMeters > maxDistance) return
         val now = System.currentTimeMillis()
-        if ((cooldownUntilMillis[beacon.fobShortCode] ?: 0) > now) return
-        tracking.compute(beacon.fobShortCode) { _, existing ->
+        if ((cooldownUntilMillis[beacon.beaconNumber] ?: 0) > now) return
+        tracking.compute(beacon.beaconNumber) { _, existing ->
             if (existing == null || beacon.rssi > existing.peakRssi)
-                PassTracking(beacon.fobShortCode, beacon.rssi, now, now)
+                PassTracking(beacon.beaconNumber, beacon.rssi, now, now)
             else existing.apply { lastSeenAtMillis = now }
         }
     }
 
-    // Runs periodically: any tracked fob not seen for GONE_SILENT_MS is finalized — the pass
+    // Runs periodically: any tracked beacon not seen for GONE_SILENT_MS is finalized — the pass
     // is over, commit using the peak moment, not "now".
     private suspend fun finalizeStalePasses() {
         val now = System.currentTimeMillis()
@@ -373,13 +331,13 @@ class BeaconScanEngine(
         val raceId = settingsRepository.activeRaceId.first() ?: return
         val race = raceRepository.getRace(raceId) ?: return
         if (race.bibsModeStartedAtMillis == null) return
-        val bib = progressRepository.getBibForFob(raceId, t.fobShortCode) ?: return
+        val bib = progressRepository.getBibForBeacon(raceId, t.beaconNumber) ?: return
         val action = settingsRepository.bibsAutoSaveAction.first()
         val cooldownMs = settingsRepository.beaconCooldownSeconds.first() * 1000L
-        cooldownUntilMillis[t.fobShortCode] = System.currentTimeMillis() + cooldownMs
+        cooldownUntilMillis[t.beaconNumber] = System.currentTimeMillis() + cooldownMs
         bibsModeRepository.recordEntry(
             raceId, action, bib,
-            note = "beacon:${t.fobShortCode} rssi=${t.peakRssi}",
+            note = "beacon:${t.beaconNumber} rssi=${t.peakRssi}",
             timestampMillis = t.peakAtMillis, // the closest-approach moment, not "now" — the whole point of tracking peak RSSI
         )
     }
@@ -397,14 +355,14 @@ Key points:
   auto-save already reads, seeded via `LocationValidation.defaultActionForLocation`) rather than
   hardcoding an action — a beacon-triggered record and a manual entry can't disagree about what
   a crossing means right now.
-- **`note = "beacon:<fobShortCode> rssi=<peakRssi>"`** is the only field distinguishing an
+- **`note = "beacon:<beaconNumber> rssi=<peakRssi>"`** is the only field distinguishing an
   auto-recorded row from a manual one in `HistoryLineEntity` — enough for audit/debugging without
   needing a new column. If near-simultaneous passes ever need forensic review, extend this to
   include a short RSSI trace (e.g. last few `(t, rssi)` samples as compact JSON) rather than
   building a separate synced table — it rides the exact same existing history-line → HTTP push →
   web-app path with no protocol change. Treat that as a later refinement, not phase-1 scope.
 - **Gated on `AppMode.BIBS` and `race.bibsModeStartedAtMillis != null`**, same as before.
-- **Cooldown is applied at commit time**, keyed per fob, to stop the same runner re-triggering
+- **Cooldown is applied at commit time**, keyed per beacon number, to stop the same runner re-triggering
   if they linger or double back near the line within the window — separate from (and after)
   the peak-tracking/gone-silent logic, not a replacement for it.
 - **`GONE_SILENT_MS`** (e.g. 3000ms — a fob advertises roughly once a second, so a few missed
@@ -424,37 +382,94 @@ following the existing `by lazy { ... }` pattern (`override val beaconScanEngine
 BeaconScanEngine(muleRepository, progressRepository, settingsRepository, raceRepository,
 bibsModeRepository) }`).
 
-### 5. `IdentifyFobScreen` — registration-desk read-only utility
+### 5. `IdentifyFobScreen` — registration-desk read-only utility — implemented
 
 The one on-device UI this feature needs. Not a pairing/assignment screen — per point 3, pairing
 is data entry in the web-app. This screen's only job is letting registration staff read a
-specific physical fob's `fobShortCode` off itself (e.g. picked out of a box of unassigned
-fobs) so they can type it into the web-app's registration form.
+specific physical beacon's number off itself so it can be verified as working and its number
+matches the label on it.
 
-`ui/beaconidentify/IdentifyFobViewModel.kt` (new): subscribes to
-`muleRepository.scanForAdvertisements()`, decodes via `IBeaconParser`, filters to the single
-closest beacon currently within `settingsRepository.beaconIdentifyDistanceMeters` (a
-deliberately **tighter** threshold than race-time `beaconMaxDistanceMeters`, per point 2's "much
-tighter at registration" — avoids reading the wrong fob out of a cluster), and exposes
-`fobShortCode`/RSSI/estimated distance, or "no fob in range" / "multiple fobs in range, move
-closer" when the tight threshold still admits more than one.
+`ui/beaconidentify/IdentifyFobViewModel.kt`: subscribes to
+`muleRepository.scanForAdvertisements()`, decodes via `BeaconScanDecoder`, keeps a
+`ConcurrentHashMap<address, BeaconTracking>` pruned every 300ms of anything not refreshed within
+the last 8s (initially 2s, found too tight in testing — indoor BLE scanning drops the occasional
+packet even from a beacon sitting right next to the phone, and evicting on that wiped the
+beacon's smoothing/hysteresis state and dropped the screen to "Hold a beacon close to the phone"
+on nothing more than one missed packet; 8s is generous enough that only the beacon actually being
+taken away reaches it, at the cost of making a reappearing beacon's old, possibly stale
+`smoothedRssi` linger for up to 8s before a fresh advertisement even gets a vote — so a second
+knob, `RESET_SMOOTHING_AFTER_GAP_MILLIS = 2_000L`, resets `smoothedRssi` to the bare new reading
+(instead of blending into the old average) whenever a beacon's gap since its last packet exceeds
+2s, which is what actually makes a just-switched-on or freshly-returned fob show up promptly
+rather than having to slowly out-vote several seconds of someone else's history; eviction and
+detection speed are deliberately tuned independently this way). Real-hardware testing (indoors,
+the actual registration-desk environment) also showed raw per-packet RSSI swinging 5-10dB with
+nothing moving, enough to flip a beacon in
+and out of range every recompute, and that two layers of defense against it (smoothing + a
+hysteresis band) still wasn't quite enough — `BeaconTracking` now stacks three: `smoothedRssi` is
+an EMA
+(`alpha = 0.15`) of every raw reading rather than the latest one; `inRange` enters at
+`settingsRepository.beaconIdentifyDistanceMeters` (a deliberately **tighter** threshold than
+race-time `beaconMaxDistanceMeters` per point 2's "much tighter at registration") but only exits
+past `1.8×` that distance; and on top of that band, `pendingFlips` requires the *other* state to
+keep winning for several consecutive 300ms recomputes in a row (2 to enter, 6 to exit —
+asymmetric: a fob just presented should register fairly quickly, but one held steadily shouldn't
+blink out on a single bad reading) before `inRange` actually changes. Registration can afford that
+extra second or so of lag per direction since a fob sits there for several seconds anyway, and
+this consecutive-reading requirement is what finally stopped the flicker the EMA and the band
+alone didn't. Exposes `IdentifyFobUiState(beaconsInRange: List<DetectedRaceBeacon>)`, nearest-first,
+empty when nothing's in range — no separate "exactly one"
+vs. "ambiguous" status; the screen is always just that one list.
 
-`ui/beaconidentify/IdentifyFobScreen.kt` (new): large, simple display of the current reading —
-this is a hold-the-phone-next-to-one-fob workflow, not a list.
+`ui/beaconidentify/IdentifyFobScreen.kt`: a `LazyColumn` of whatever's in `beaconsInRange`
+(nearest first), each row showing its beacon number at `MaterialTheme.typography.displayLarge`
+(matching TODO.md's own "shown as big as possible") plus RSSI/distance; "Hold a beacon close to
+the phone" when the list is empty. Deliberately always the same list shape regardless of count —
+an earlier version special-cased "exactly one" vs. "ambiguous" into different layouts, which made
+the screen visibly unstable as a second fob wandered in and out of range.
 
-Navigation: `Routes.kt` add `IDENTIFY_FOB`; `navigation/RacemasterNavHost.kt` add the
-`composable(...)`. Entry point: `ui/modepicker/SetupDeviceScreen.kt` gets a new "Identify Fob"
-button alongside its existing device-setup actions.
+Navigation (2026-11-05 update — moved, see "Beacon Operations hub" below): `Routes.kt`'s
+`IDENTIFY_FOB` is reached via a new `ui/beaconops/BeaconOperationsScreen.kt` hub's "Check"
+button, not directly off `SetupDeviceScreen.kt` as originally built — the screen's own displayed
+title changed from "Identify Fob" to "Check Beacon" to match, though the Kotlin file/class names
+(`IdentifyFobScreen`, `IdentifyFobViewModel`, `HelpTopics.IdentifyFob`) were left as-is to avoid
+unnecessary rename churn.
 
-### 6. New settings
+### Beacon Operations hub — new, 2026-11-05
+
+Mode Picker's "Beacons" button used to go straight to `PROGRAM_BEACONS` (then titled "Setup
+Beacons"); it now goes to a new `Routes.BEACON_OPERATIONS` hub screen
+(`ui/beaconops/BeaconOperationsScreen.kt`, following `SetupDeviceScreen`'s own plain-list-of-
+buttons shape) with three buttons matching TODO.md's "Race-day usage" section's own vocabulary:
+- **Check** → `IDENTIFY_FOB` (this section's `IdentifyFobScreen`, now titled "Check Beacon").
+- **Close** → new `Routes.CLOSE_BEACONS` / `ui/beaconops/CloseBeaconsScreen.kt` — TODO.md's
+  "finish mode" (post-race battery read / power-off / return-tracking). Not yet implemented; the
+  button and route exist (placeholder screen, `HelpTopics.CloseBeacons`) so the hub's three
+  operations are all in place up front rather than appearing piecemeal as each is built.
+- **Program** → `PROGRAM_BEACONS` (`BeaconProgrammerScreen`, retitled from "Setup Beacons" to
+  "Program Beacon" to stop colliding with the hub's own "Beacons" title; `HelpTopics.ProgramBeacons`
+  retitled to match).
+
+`ModePickerScreen`'s own callback renamed `onSetupBeacons` → `onBeaconOperations` to match.
+`HelpTopics.all` gained `BeaconOperations` (the hub's own topic) and `CloseBeacons`, reordered to
+`..., SetupRace, BeaconOperations, IdentifyFob, ProgramBeacons, CloseBeacons, Options, ...` —
+the order an operator actually meets each screen in, hub first then its three children.
+
+### 6. New settings — `beaconIdentifyDistanceMeters` implemented now; the rest is phase 2's job
 
 `data/settings/SettingsRepository.kt` additions, following the existing scalar conventions
-(e.g. `pingIntervalSeconds` at line ~393, boolean `muleSyncEnabled` at line ~101):
+(e.g. `pingIntervalSeconds`, boolean `muleSyncEnabled`):
+- `beaconIdentifyDistanceMeters: Flow<Double>` / `setBeaconIdentifyDistanceMeters` — **done**,
+  needed by phase 1's `IdentifyFobScreen` itself; default
+  `DEFAULT_BEACON_IDENTIFY_DISTANCE_METERS = 0.5` (tightened from an initial 1.0 once multiple
+  fobs showing up at once in testing made clear registration needs a tighter radius than that).
+  No `SetupOptionsScreen` control yet — fixed at the default until real field testing has a value
+  worth exposing (phase 3 step 10's job).
 - `beaconScanningEnabled: Flow<Boolean>` / `setBeaconScanningEnabled` — default `false` (opt-in).
-- `beaconMaxDistanceMeters: Flow<Double>` / setter — race-time detection threshold.
-- `beaconIdentifyDistanceMeters: Flow<Double>` / setter — tighter registration-time threshold,
-  default meaningfully smaller than the race-time one (e.g. a fraction of it).
-- `beaconCooldownSeconds: Flow<Int>` / setter — default `30`.
+  Not yet added — `BeaconScanEngine` doesn't exist yet to gate (phase 2).
+- `beaconMaxDistanceMeters: Flow<Double>` / setter — race-time detection threshold. Not yet
+  added, same reason (phase 2).
+- `beaconCooldownSeconds: Flow<Int>` / setter — default `30`. Not yet added, same reason (phase 2).
 
 Surfaced in `ui/mulemode/SetupOptionsScreen.kt`, following `PingIntervalControl`'s exact shape
 (`OutlinedTextField` + `canSave`/`save()` guard), added below the existing controls. Simplest
@@ -474,26 +489,36 @@ Confirm this holds during phase 2 testing rather than adding new plumbing.
 
 ## Phased build-out
 
-**Phase 1 — parsing + distance estimation + identify tool (no auto-record yet)**
-1. `IBeaconParser` (decode + `estimateDistanceMeters`) + unit tests against synthetic byte
-   arrays and known measuredPower/rssi pairs.
-2. Capture one real fob's actual advertisement via nRF Connect; confirm/adjust the `0x02 0x15`
-   layout and sanity-check distance estimates at a few measured paces, worn vs. held in open air.
-3. `MulePullClient.scanForAdvertisements()` / `MuleRepository` passthrough (the `shareIn`
-   change) — manually verify Mule Mode's own device discovery still works unchanged.
-4. `ProgressEntry.fobShortCode` field + `ProgressRepository.getBibForFob` — unit-testable
-   against a synthetic stored payload, no server change needed yet to build/test this side.
-5. `IdentifyFobScreen`/`ViewModel`, nav wiring, `SetupDeviceScreen` button.
-6. Manual test on a real device + real fob: `IdentifyFobScreen` correctly reads one fob's code
-   at close range and reports ambiguity when two fobs are both in range.
+**Phase 1 — parsing + distance estimation + identify tool (no auto-record yet) — done except step 6**
+1. **Done.** `BeaconScanDecoder` (decode + `estimateDistanceMeters`) + unit tests against
+   synthetic name/rssi values and known measuredPower/rssi pairs — see §1 above.
+3. **Done.** `MulePullClient.scanForAdvertisements()` / `MuleRepository` passthrough (the
+   `shareIn` change) — compiles/tests/lints clean; manually verifying Mule Mode's own device
+   discovery still works unchanged (it only gained a second downstream consumer of the same
+   shared flow, Mule's own filtered path is untouched) is folded into step 6's field test below.
+4. **Done.** `ProgressEntry.beaconNumber` field + `ProgressRepository.getBibForBeacon` —
+   unit-tested against a synthetic stored payload (`ProgressRepositoryTest.kt`), no server change
+   needed yet to build/test this side.
+5. **Done.** `IdentifyFobScreen`/`ViewModel`, nav wiring (`Routes.IDENTIFY_FOB`), `HelpTopics.IdentifyFob`
+   (title "Check Beacon"). Originally reached via a `SetupDeviceScreen` "Identify Fob" button;
+   moved 2026-11-05 to the new Beacon Operations hub's "Check" button (see that section above) —
+   `SetupDeviceScreen` no longer has a beacon-related button at all.
+6. **Done**, including the real-hardware part, after three rounds of field-testing against two
+   real DX-CP27s side by side indoors (the actual registration-desk environment) surfaced and
+   fixed real display-stability bugs — see `IdentifyFobViewModel`'s own doc (`smoothedRssi` EMA,
+   the enter/exit hysteresis band, `pendingFlips`' consecutive-reading debounce, and
+   `RESET_SMOOTHING_AFTER_GAP_MILLIS` vs. `STALE_AFTER_MILLIS` being tuned independently) for the
+   full account of what raw indoor BLE scanning needed beyond the naive threshold this step
+   originally called for. `./gradlew assembleDebug testDebugUnitTest lintDebug installDebug` all
+   passed clean throughout.
 
 **Phase 2 — auto-record integration**
 7. `BeaconScanEngine` (fixed internal constants for cooldown/gone-silent, no settings UI yet),
    wired into `PeripheralSyncService.onCreate()` unconditionally enabled for now. Requires
    coordinating with the `~/racemaster` server change (§3) landing, or a hand-written test
-   `ProgressEntry` with `fobShortCode` set, to exercise end-to-end locally before the server
+   `ProgressEntry` with `beaconNumber` set, to exercise end-to-end locally before the server
    side exists.
-8. Manual device test: start Bibs Mode at a CP/Finish location, walk a paired fob past the
+8. Manual device test: start Bibs Mode at a CP/Finish location, walk a paired beacon past the
    phone repeatedly at varying speed/distance — confirm exactly one record per pass, recorded
    timestamp matches the closest-approach moment (not first/last seen), correct action/note/beep,
    and `BibValidation`'s flags behave identically to a manual entry.
@@ -519,26 +544,26 @@ Confirm this holds during phase 2 testing rather than adding new plumbing.
 ## Verification
 
 **Unit tests (`app/src/test/`, JVM)**:
-- `data/beacon/IBeaconParserTest.kt`: round-trip a synthetic iBeacon byte array; reject
-  too-short/wrong-type-byte inputs (never throws, always null); confirm `fobShortCode`
-  composition; sanity-check `estimateDistanceMeters` against known measuredPower/rssi pairs.
-- `data/beacon/BeaconScanEngineTest.kt`: pull the pass-tracking state transitions (peak-update,
-  gone-silent finalization, cooldown gating) into pure testable functions and test each
-  transition independently of any BLE/coroutine machinery.
-- `data/mule/ProgressRepositoryTest.kt` (extend if present, else new): `getBibForFob` against a
-  stored payload with and without a matching `fobShortCode`.
-- Extend `data/repository/BibValidationTest.kt`: confirm a `note`-tagged beacon row is flagged
-  by `findDuplicateSplitRefs`/`unexpectedBibNumbers` identically regardless of `note` content,
-  and regardless of `timestampMillis` being backdated to a peak-RSSI moment.
+- **Done.** `data/beacon/BeaconScanDecoderTest.kt`: decodes a real race-programmed name into
+  `beaconNumber`/`measuredPowerDbm`; returns `null` for a factory/unrelated name and for no name
+  at all (never throws); `estimatedDistanceMeters` checked against known measuredPower/rssi pairs.
+- `data/beacon/BeaconScanEngineTest.kt` (phase 2, not yet written): pull the pass-tracking state
+  transitions (peak-update, gone-silent finalization, cooldown gating) into pure testable
+  functions and test each transition independently of any BLE/coroutine machinery.
+- **Done.** `data/mule/ProgressRepositoryTest.kt` (extended): `getBibForBeacon` against a
+  stored payload with and without a matching `beaconNumber`, and against an unknown raceId.
+- Extend `data/repository/BibValidationTest.kt` (phase 2): confirm a `note`-tagged beacon row is
+  flagged by `findDuplicateSplitRefs`/`unexpectedBibNumbers` identically regardless of `note`
+  content, and regardless of `timestampMillis` being backdated to a peak-RSSI moment.
 
 **Instrumented tests (`app/src/androidTest/`)**:
 - A `BibsModeRepository`-level test confirming `recordEntry(raceId, action, bib, note =
   "beacon:...", timestampMillis = <backdated>)` produces a row structurally identical to a
   manual entry, with the backdated timestamp actually persisted (not silently overwritten).
 
-**Requires real BLE hardware + a real fob (can't be simulated)**:
-- The actual iBeacon byte layout and realistic distance-estimate accuracy for the specific fob
-  model being bought (phase 1, step 2).
+**Requires real BLE hardware + a real beacon (can't be simulated)**:
+- Realistic distance-estimate accuracy for the real DX-CP27 hardware (phase 1, step 6 —
+  everything else code-side is done; this is the one remaining phase-1 item).
 - Whether peak-RSSI timing is actually precise enough to resolve close finishes in practice —
   this is the plan's core empirical bet and can only be validated with real runners/fobs moving
   at race speed, not a stationary bench test.
@@ -554,12 +579,17 @@ Confirm this holds during phase 2 testing rather than adding new plumbing.
   policy split. `BeaconScanEngine` inherits this ceiling; phase 3 step 14's dual-phone finish
   test is what actually validates whether the policy adopted in response is sufficient.
 
-**Cross-repo, tracked separately**: the `~/racemaster` server needs a `fobShortCode` field added
-to its progress-entry shape and a registration-time bib↔fob lookup UI, before phase 2's
+**Cross-repo, tracked separately**: the `~/racemaster` server needs a `beaconNumber` field added
+to its progress-entry shape and a registration-time bib↔beacon lookup UI, before phase 2's
 end-to-end auto-record path can be exercised against real server data rather than a hand-crafted
 test payload.
 
 ### Critical files
+- `app/src/main/java/mobile/racemaster/data/beacon/BeaconScanDecoder.kt` (phase 1, new)
+- `app/src/main/java/mobile/racemaster/data/beacon/DxCp27Protocol.kt` (`raceDeviceName`/
+  `parseRaceDeviceName` — what `BeaconScanDecoder` is built on)
+- `app/src/main/java/mobile/racemaster/ui/beaconidentify/IdentifyFobViewModel.kt` (phase 1, new)
+- `app/src/main/java/mobile/racemaster/ui/beaconidentify/IdentifyFobScreen.kt` (phase 1, new)
 - `app/src/main/java/mobile/racemaster/data/mule/MulePullClient.kt`
 - `app/src/main/java/mobile/racemaster/data/mule/MuleRepository.kt`
 - `app/src/main/java/mobile/racemaster/data/mule/MuleGattProfile.kt`
@@ -569,3 +599,10 @@ test payload.
 - `app/src/main/java/mobile/racemaster/data/settings/SettingsRepository.kt`
 - `app/src/main/java/mobile/racemaster/data/mule/PeripheralSyncService.kt`
 - `app/src/main/java/mobile/racemaster/di/AppContainer.kt`
+- `app/src/main/java/mobile/racemaster/navigation/Routes.kt` /
+  `app/src/main/java/mobile/racemaster/navigation/RacemasterNavHost.kt` (`IDENTIFY_FOB`/
+  `BEACON_OPERATIONS`/`CLOSE_BEACONS` wiring)
+- `app/src/main/java/mobile/racemaster/ui/beaconops/BeaconOperationsScreen.kt` /
+  `CloseBeaconsScreen.kt` (2026-11-05, new — see "Beacon Operations hub" above)
+- `app/src/main/java/mobile/racemaster/ui/modepicker/SetupDeviceScreen.kt` (no longer has a
+  beacon-related button — moved to the hub above)
