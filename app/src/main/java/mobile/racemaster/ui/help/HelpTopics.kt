@@ -201,7 +201,7 @@ object HelpTopics {
     )
 
     val all: List<HelpTopic> = listOf(
-        Overview, SetupDevice, SetupServer, Options, SetupRace, TimeMode, BibsMode, MuleMode,
-        RaceHistory, HistoryLineFormat, ProgramBeacons,
+        Overview, SetupDevice, SetupServer, SetupRace, ProgramBeacons, Options,
+        TimeMode, BibsMode, MuleMode, RaceHistory, HistoryLineFormat,
     )
 }

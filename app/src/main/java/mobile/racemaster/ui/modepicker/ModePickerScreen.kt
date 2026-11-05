@@ -6,15 +6,20 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -83,9 +88,10 @@ fun ModePickerScreen(
         // inside Mule Mode's own screen. That stopped making sense once Time/Bibs/CP phones
         // became a distinct, separate role from Mule (see MuleSyncEngine's own doc): an
         // operator on a Time-mode phone shouldn't have to detour through a role they never
-        // actually use just to reach setup. Always just "Setup Device" now that this button
-        // shares its row with Setup Beacons — echoing the device name here as well as in
-        // RaceProgressSummary below wrapped onto two lines at this narrower, half-width size.
+        // actually use just to reach setup. Always just a spanner icon + "Device" now that this
+        // button shares its row with Setup Beacons at this narrower, half-width size — "Setup
+        // Device" in full was getting ellipsized down to just "Setup" on narrower screens (e.g.
+        // the Samsung XCover 4), same fix as Setup Beacons' own button right next to it.
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = withClickSound(onSetupDevice),
@@ -95,7 +101,9 @@ fun ModePickerScreen(
                 ),
                 modifier = Modifier.weight(1f).height(48.dp),
             ) {
-                Text("Setup Device", style = MaterialTheme.typography.titleMedium)
+                Icon(Icons.Default.Build, contentDescription = null, modifier = Modifier.height(20.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Device", style = MaterialTheme.typography.titleMedium)
             }
             Button(
                 onClick = withClickSound(onSetupBeacons),
@@ -105,7 +113,9 @@ fun ModePickerScreen(
                 ),
                 modifier = Modifier.weight(1f).height(48.dp),
             ) {
-                Text("Setup Beacons", style = MaterialTheme.typography.titleMedium)
+                Icon(Icons.Default.Build, contentDescription = null, modifier = Modifier.height(20.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Beacons", style = MaterialTheme.typography.titleMedium)
             }
         }
         // Replaces the old static "Select device mode" text — a mode is now chosen once, at
