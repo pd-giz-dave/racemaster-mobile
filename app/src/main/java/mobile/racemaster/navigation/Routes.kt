@@ -31,6 +31,9 @@ object Routes {
     // Post-race tidy-up (TODO.md's "finish mode") — see CloseBeaconsScreen's own doc; not yet
     // implemented, the button exists so the hub's three operations are all in place up front.
     const val CLOSE_BEACONS = "close_beacons"
+    // TODO.md's "Bluetooth Beacon range estimation" section — see RangeCalibrationScreen's own
+    // doc; a data-collection tool, not a race-day operation.
+    const val RANGE_CALIBRATION = "range_calibration"
 
     // Bare path — every existing caller that just wants plain Options (Setup Device's own
     // Options button, the Mode Picker's Mule-off-routes-here flow) keeps navigating here

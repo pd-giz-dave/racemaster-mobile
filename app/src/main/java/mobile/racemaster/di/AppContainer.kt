@@ -7,6 +7,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.room.Room
 import mobile.racemaster.data.beacon.BeaconRepository
 import mobile.racemaster.data.beacon.DxCp27Client
+import mobile.racemaster.data.beacon.RangeSampleLogger
 import mobile.racemaster.data.db.RacemasterDatabase
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.MulePullClient
@@ -35,6 +36,7 @@ interface AppContainer {
     val progressRepository: ProgressRepository
     val bibSpeaker: BibSpeaker
     val beaconRepository: BeaconRepository
+    val rangeSampleLogger: RangeSampleLogger
 }
 
 class DefaultAppContainer(context: Context) : AppContainer {
@@ -91,4 +93,6 @@ class DefaultAppContainer(context: Context) : AppContainer {
     override val bibSpeaker: BibSpeaker by lazy { BibSpeaker(context) }
 
     override val beaconRepository: BeaconRepository by lazy { BeaconRepository(DxCp27Client()) }
+
+    override val rangeSampleLogger: RangeSampleLogger by lazy { RangeSampleLogger(context) }
 }

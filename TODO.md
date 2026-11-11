@@ -326,9 +326,9 @@ Operations hub" section.
       chase that have not given their beacon back, this finish mode should be able to detect
       connect to, read the battery, power-off and record the battery level and date and
       send that to the racemaster app so it can record beacon usage in its beacon log, that
-      log should record beacon id, mac, last read battery level and date and also update
-      an accumulator for how many hours the beacon has been active for, for each race assume
-      it was turned on 2 hours before the start
+      log should record beacon id, last read battery level,
+      there also needs to be finished/retired/disqualified flags, default finished, that the 
+      user enters for each beacon scanned
       — Beacons > Close (`CloseBeaconsScreen`) is a placeholder for this; not yet implemented.
 - [ ] during the race when the app is in bibs mode it needs to detect a passing beacon as
       described elsewhere, BUT... to do that reliably the phone must NOT also be in mule mode
@@ -350,3 +350,12 @@ calculating more accurate distances. There are several contexts:
         beacons in range.
   - [ ] at a CP out in thw wild, few people, no buildings, only a few beacons in range
   - [ ] at the finish line, lots of people, no buildings, lots of nearby beacons
+
+This facility should be accessible as part of the programming system.
+
+— **done**: Beacons > Range Calibration (`ui/beaconops/RangeCalibrationScreen.kt`) logs
+(context, measured distance, beacon, RSSI stats, phone model) samples to a shareable CSV for
+offline analysis — see docs/beacon-detection-plan.md's "Range calibration data collection"
+section for the research behind it and candidate next steps. The three checkboxes above are
+field-data-collection sessions, not code, and stay unchecked until someone's actually gone and
+run one in each context.

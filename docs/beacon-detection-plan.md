@@ -487,6 +487,58 @@ through the exact same `BibsModeRepository.recordEntry` → `EntryLogModeEngine.
 every downstream consumer except via `note` and (now) a historically-accurate `timestampMillis`.
 Confirm this holds during phase 2 testing rather than adding new plumbing.
 
+## Range calibration data collection — new, 2026-11-11
+
+TODO.md's "Bluetooth Beacon range estimation" section (a separate ask from phase 3 step 12's own
+"tune path-loss exponent" item above) asks for a facility to record real RSSI-vs-distance data
+across three field contexts — indoor/crowded registration, outdoor/sparse CP, outdoor/crowded
+finish — because the shipped `BeaconScanDecoder.estimateDistanceMeters` formula (fixed
+`PATH_LOSS_EXPONENT = 2.0`) is "grossly inaccurate." Built as **Beacons > Range Calibration**
+(`ui/beaconops/RangeCalibrationScreen.kt`/`RangeCalibrationViewModel.kt`), a 4th button on the
+Beacons hub alongside Check/Close/Program — it needs the same passive advertisement scanning as
+Check (no GATT connect), not Program's connect/write flow, and TODO.md asks for it to be "part of
+the programming system."
+
+**Research behind this, worth keeping for whoever actually fits a replacement model later**:
+- **AltBeacon (Android Beacon Library) / Apple iBeacon** don't use a theoretical path-loss formula
+  at all — an empirically curve-fitted piecewise function (`ratio = rssi/txPower`; `ratio^10`
+  below 1.0, else `0.89976×ratio^7.7095+0.111`), fitted against real measured (RSSI, distance)
+  pairs on real hardware (originally Nexus 4/iPhone 4S), not derived from physics.
+- **Per-receiver-phone-model calibration is a first-class variable** in that same project — different
+  Android models receive measurably different signal levels from the same beacon at the same
+  distance (chipset/antenna/case differences); this app has never accounted for that at all, and
+  already has two very different phones in its own test fleet (XCover 4, XCover 7).
+- **Nobody trusts a single raw RSSI sample** — AltBeacon/iOS both smooth over a ~20s window,
+  discarding the top/bottom 10% before averaging (a trimmed mean), not a plain EMA. Academic
+  indoor-positioning work applies a Kalman/extended-Kalman filter directly to the raw RSSI stream
+  (before the nonlinear RSSI→distance conversion) for a reported ~20-30% mean-error reduction
+  versus naive conversion.
+- **Human bodies are a huge RSSI attenuator at 2.4GHz** — measured studies put a single body
+  blocking the direct path at roughly 20-40dB of loss, which at `n=2` alone is a ~10-100x distance
+  error. This is almost certainly why TODO's three contexts matter as much as they do: crowd
+  density is likely the *dominant* error source at registration/finish, separate from and much
+  larger than distance-related decay alone.
+- **Industry consensus is that RSSI-only ranging is inherently noisy** — commercial beacon
+  vendors generally market RSSI for coarse proximity buckets, not precise metres; Apple's own
+  "accuracy" field is documented as a 1-sigma estimate, not true distance. The real modern fix
+  (BLE Channel Sounding / UWB phase-based ranging) needs hardware this project's £3-7 beacons and
+  budget phones don't have — a ceiling, not a bug to chase.
+
+**What this facility actually logs** (`data/beacon/RangeSampleLogger.kt`, CSV, append-only,
+internal storage, shared off-device via `FileProvider` — this app's first use of that pattern):
+timestamp, context (`RangeContext`: `INDOOR_CROWDED`/`OUTDOOR_SPARSE_CP`/`OUTDOOR_CROWDED_FINISH`),
+operator-entered real distance, beacon number, the beacon's own `measuredPowerDbm`, and
+median/min/max/count of a short recent-history burst of *raw* (unsmoothed) RSSI readings — plus
+`Build.MODEL`/`Build.VERSION.SDK_INT`, captured automatically per the per-device-variance finding
+above. **Deliberately does not fit or replace the formula itself** — that's left for later,
+informed by whatever this produces: (a) fit a separate path-loss exponent `n` per context
+(simplest, same formula shape, just contextually tuned), (b) or fit an AltBeacon/iBeacon-style
+two-segment empirical power curve against *this app's own* collected data instead of borrowed
+Nexus 4/iPhone 4S constants, (c) check whether XCover 4 vs XCover 7 need separate receiver-side
+coefficients too, (d) treat crowd/body-shadowing as a likely dominant, largely irreducible error
+source given the ~20-40dB-per-body literature figures — context-based thresholds probably matter
+more here than a cleverer formula alone.
+
 ## Phased build-out
 
 **Phase 1 — parsing + distance estimation + identify tool (no auto-record yet) — done except step 6**
@@ -606,3 +658,6 @@ test payload.
   `CloseBeaconsScreen.kt` (2026-11-05, new — see "Beacon Operations hub" above)
 - `app/src/main/java/mobile/racemaster/ui/modepicker/SetupDeviceScreen.kt` (no longer has a
   beacon-related button — moved to the hub above)
+- `app/src/main/java/mobile/racemaster/data/beacon/RangeSampleLogger.kt`,
+  `app/src/main/java/mobile/racemaster/ui/beaconops/RangeCalibrationScreen.kt`/
+  `RangeCalibrationViewModel.kt` (2026-11-11, new — see "Range calibration data collection" above)

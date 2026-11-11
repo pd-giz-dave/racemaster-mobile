@@ -24,6 +24,7 @@ import mobile.racemaster.ui.beacon.BeaconProgrammerScreen
 import mobile.racemaster.ui.beaconidentify.IdentifyFobScreen
 import mobile.racemaster.ui.beaconops.BeaconOperationsScreen
 import mobile.racemaster.ui.beaconops.CloseBeaconsScreen
+import mobile.racemaster.ui.beaconops.RangeCalibrationScreen
 import mobile.racemaster.ui.bibsmode.BibsModeScreen
 import mobile.racemaster.ui.editentry.EditEntryScreen
 import mobile.racemaster.ui.help.HelpScreen
@@ -109,10 +110,17 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                         onCheck = { navController.navigate(Routes.IDENTIFY_FOB) },
                         onClose = { navController.navigate(Routes.CLOSE_BEACONS) },
                         onProgram = { navController.navigate(Routes.PROGRAM_BEACONS) },
+                        onRangeCalibration = { navController.navigate(Routes.RANGE_CALIBRATION) },
                     )
                 }
                 composable(Routes.CLOSE_BEACONS) {
                     CloseBeaconsScreen(
+                        onDone = { navController.popBackStack() },
+                        onHome = { navController.navigateHome() },
+                    )
+                }
+                composable(Routes.RANGE_CALIBRATION) {
+                    RangeCalibrationScreen(
                         onDone = { navController.popBackStack() },
                         onHome = { navController.navigateHome() },
                     )

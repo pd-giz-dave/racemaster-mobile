@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Backs RangeSampleLogger.shareIntent()'s FileProvider — the only file this app ever shares
+     off-device, so this grants read access to just the app's internal files directory (where
+     beacon-range-samples.csv lives), nothing broader. -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path name="beacon-data" path="." />
+</paths>

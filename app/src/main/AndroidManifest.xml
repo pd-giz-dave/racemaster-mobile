@@ -113,6 +113,19 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice"
             android:stopWithTask="true" />
+
+        <!-- Backs RangeSampleLogger.shareIntent() — the app's only file-export path (Beacons >
+             Range Calibration's "Share" button), granting read access to just the internal
+             files directory via res/xml/file_paths.xml. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="mobile.racemaster.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

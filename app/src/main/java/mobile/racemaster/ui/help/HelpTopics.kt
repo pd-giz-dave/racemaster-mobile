@@ -167,9 +167,10 @@ object HelpTopics {
     val BeaconOperations = HelpTopic(
         title = "Beacons",
         tips = listOf(
-            "Three separate jobs share this hub: Check (confirm a beacon's on and its number " +
-                "matches its label), Close (post-race battery/power-off tidy-up — not yet " +
-                "implemented), and Program (write a beacon's number ahead of a race).",
+            "Four jobs share this hub: Check (confirm a beacon's on and its number matches its " +
+                "label), Close (post-race battery/power-off tidy-up — not yet implemented), " +
+                "Program (write a beacon's number ahead of a race), and Range Calibration (a " +
+                "data-collection tool, not a race-day job).",
         ),
     )
 
@@ -235,9 +236,26 @@ object HelpTopics {
         ),
     )
 
+    val RangeCalibration = HelpTopic(
+        title = "Range Calibration",
+        tips = listOf(
+            "A data-collection tool, not a race-day job: the shipped distance estimate shown " +
+                "elsewhere in the app is known to be inaccurate, and this records real " +
+                "(context, measured distance, beacon, signal) samples to work out a better one " +
+                "later, offline — it doesn't fix the estimate itself.",
+            "Pick the Context that matches where you're standing, enter the distance you've " +
+                "actually measured to a beacon, then tap Record on that beacon's row below. " +
+                "\"Today's estimate\" next to each beacon is the app's current (inaccurate) " +
+                "formula, shown only so you can see at a glance how far off it is right now.",
+            "Share sends every sample recorded so far — this session and every earlier one, " +
+                "the file keeps accumulating across app restarts — as a CSV you can analyse " +
+                "afterward. Clear wipes it, behind a confirmation, to start a clean session.",
+        ),
+    )
+
     val all: List<HelpTopic> = listOf(
         Overview, SetupDevice, SetupServer, SetupRace, BeaconOperations, IdentifyFob,
-        ProgramBeacons, CloseBeacons, Options, TimeMode, BibsMode, MuleMode, RaceHistory,
-        HistoryLineFormat,
+        ProgramBeacons, CloseBeacons, RangeCalibration, Options, TimeMode, BibsMode, MuleMode,
+        RaceHistory, HistoryLineFormat,
     )
 }
