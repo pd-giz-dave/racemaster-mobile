@@ -17,20 +17,16 @@ data class DetectedRaceBeacon(
     val measuredPowerDbm: Int,
     val rssi: Int,
 ) {
-    /** Log-distance path-loss estimate — the same family of formula Apple's own iBeacon ranging
-     *  uses, just fed [measuredPowerDbm] (this beacon's own 1-metre calibration reading, entered
-     *  via Setup Beacons' own Calibrate button and encoded straight into the device name) instead
-     *  of a hardcoded manufacturer constant. Uses a fixed free-space exponent
-     *  ([BeaconScanDecoder.PATH_LOSS_EXPONENT]), not one recalibrated per environment — a
-     *  reasonable starting point, not a final value; see TODO.md's own "tune path-loss exponent
-     *  against real field data" phase-3 item. */
+    /** AltBeacon/iBeacon-style empirical curve-fit estimate, fed [measuredPowerDbm] (this
+     *  beacon's own 1-metre calibration reading, entered via Setup Beacons' own Calibrate button
+     *  and encoded straight into the device name) — see [BeaconScanDecoder.estimateDistanceMeters]
+     *  for why this replaced the original fixed-exponent path-loss formula, and TODO.md's own
+     *  "tune against real field data" phase-3 item for what's still open. */
     val estimatedDistanceMeters: Double
         get() = BeaconScanDecoder.estimateDistanceMeters(measuredPowerDbm, rssi)
 }
 
 object BeaconScanDecoder {
-    const val PATH_LOSS_EXPONENT = 2.0
-
     /** Thin wrapper over [decode] for the real scan path — pulled apart from it so the actual
      *  decoding logic stays testable against plain synthetic name/rssi/address values (see
      *  [BeaconScanDecoderTest]) without needing a real or mocked Kable [Advertisement], which
@@ -52,15 +48,29 @@ object BeaconScanDecoder {
         )
     }
 
-    /** `10 ^ ((measuredPowerDbm - rssi) / (10 * n))` — equals exactly 1.0m when [rssi] matches
-     *  [measuredPowerDbm] (the beacon's own 1m calibration reading), grows as the signal weakens
-     *  further than that. */
+    /** Was a textbook log-distance path-loss formula with a fixed `n=2` free-space exponent —
+     *  confirmed grossly inaccurate in the field (see docs/beacon-detection-plan.md's "Range
+     *  calibration data collection" section, and the Beacons > Range Calibration screen built to
+     *  gather the real data needed to fit a better one). Until that data exists, this uses the
+     *  empirical curve AltBeacon/iBeacon ranging itself uses instead of a theoretical formula —
+     *  [Radius Networks' CurveFittedDistanceCalculator](https://developer.radiusnetworks.com/2014/12/04/fundamentals-of-beacon-ranging.html),
+     *  fitted against real (RSSI, distance) measurements rather than derived from physics. Still
+     *  borrowed constants (originally fitted on a Nexus 4/iPhone 4S, not this app's own hardware),
+     *  so an interim improvement, not the final model. [ratio] is `rssi / measuredPowerDbm` (both
+     *  negative dBm, so a positive ratio): below 1.0 the current reading is stronger than the
+     *  beacon's own 1m calibration reading, so distance shrinks below 1m. */
     fun estimateDistanceMeters(measuredPowerDbm: Int, rssi: Int): Double =
         estimateDistanceMeters(measuredPowerDbm, rssi.toDouble())
 
     /** [rssi] as a `Double` so a smoothed (e.g. EMA'd) reading — see
      *  [mobile.racemaster.ui.beaconidentify.IdentifyFobViewModel]'s own `smoothedRssi` — can feed
      *  this without rounding first and reintroducing the jitter the smoothing was meant to kill. */
-    fun estimateDistanceMeters(measuredPowerDbm: Int, rssi: Double): Double =
-        Math.pow(10.0, (measuredPowerDbm - rssi) / (10.0 * PATH_LOSS_EXPONENT))
+    fun estimateDistanceMeters(measuredPowerDbm: Int, rssi: Double): Double {
+        val ratio = rssi / measuredPowerDbm
+        return if (ratio < 1.0) {
+            Math.pow(ratio, 10.0)
+        } else {
+            0.89976 * Math.pow(ratio, 7.7095) + 0.111
+        }
+    }
 }

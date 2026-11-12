@@ -493,7 +493,8 @@ TODO.md's "Bluetooth Beacon range estimation" section (a separate ask from phase
 "tune path-loss exponent" item above) asks for a facility to record real RSSI-vs-distance data
 across three field contexts — indoor/crowded registration, outdoor/sparse CP, outdoor/crowded
 finish — because the shipped `BeaconScanDecoder.estimateDistanceMeters` formula (fixed
-`PATH_LOSS_EXPONENT = 2.0`) is "grossly inaccurate." Built as **Beacons > Range Calibration**
+`n=2` free-space exponent, now replaced — see "Interim formula swap" below) was "grossly
+inaccurate." Built as **Beacons > Range Calibration**
 (`ui/beaconops/RangeCalibrationScreen.kt`/`RangeCalibrationViewModel.kt`), a 4th button on the
 Beacons hub alongside Check/Close/Program — it needs the same passive advertisement scanning as
 Check (no GATT connect), not Program's connect/write flow, and TODO.md asks for it to be "part of
@@ -538,6 +539,21 @@ Nexus 4/iPhone 4S constants, (c) check whether XCover 4 vs XCover 7 need separat
 coefficients too, (d) treat crowd/body-shadowing as a likely dominant, largely irreducible error
 source given the ~20-40dB-per-body literature figures — context-based thresholds probably matter
 more here than a cleverer formula alone.
+
+### Interim formula swap — new, 2026-11-12
+
+While the three field sessions above are still pending, `BeaconScanDecoder.estimateDistanceMeters`
+has been switched from the fixed-`n=2` free-space formula to AltBeacon's own curve-fit function
+(option (b) above, minus the refit against this app's own data — still using AltBeacon's borrowed
+Nexus 4/iPhone 4S constants). Not a final model — it's still "someone else's phones, not these
+beacons" — but a curve actually fitted against real measurements beats a textbook exponent as a
+default, and it's what the app ships with while real (context, distance, RSSI) samples accumulate
+via Range Calibration. Once enough data exists, refitting the same two-segment shape (or a
+per-context exponent, option (a)) against it directly supersedes this. Note this also changes what
+a given RSSI reads as in metres — `SettingsRepository.DEFAULT_BEACON_IDENTIFY_DISTANCE_METERS`
+(Identify Fob's "close enough" registration-desk threshold, currently `0.5`) wasn't recalibrated
+against the new curve's scale and should be re-checked against real readings when the three field
+sessions happen.
 
 ## Phased build-out
 

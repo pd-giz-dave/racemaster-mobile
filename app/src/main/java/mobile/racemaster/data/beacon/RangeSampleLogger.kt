@@ -13,8 +13,9 @@ import java.util.TimeZone
  *  compare — how RSSI drops off with range differs enormously between them (a human body
  *  blocking line-of-sight can attenuate 2.4GHz by tens of dB — see
  *  docs/beacon-detection-plan.md's range-calibration section), which is itself the likely reason
- *  a single fixed exponent ([BeaconScanDecoder.PATH_LOSS_EXPONENT]) is grossly inaccurate
- *  everywhere at once rather than needing a small tweak. */
+ *  a single fixed exponent (the old formula [BeaconScanDecoder.estimateDistanceMeters] borrowed)
+ *  was grossly inaccurate everywhere at once rather than needing a small tweak — and why even
+ *  today's AltBeacon-curve interim replacement still needs per-context real data to do better. */
 enum class RangeContext(val label: String) {
     INDOOR_CROWDED("Indoor registration (crowded)"),
     OUTDOOR_SPARSE_CP("Outdoor CP (open, sparse)"),

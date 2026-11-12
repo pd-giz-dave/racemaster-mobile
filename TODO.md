@@ -359,3 +359,8 @@ offline analysis — see docs/beacon-detection-plan.md's "Range calibration data
 section for the research behind it and candidate next steps. The three checkboxes above are
 field-data-collection sessions, not code, and stay unchecked until someone's actually gone and
 run one in each context.
+
+— **done**: `BeaconScanDecoder.estimateDistanceMeters` swapped from the fixed-`n=2` formula to
+AltBeacon's own empirical curve fit as an interim improvement — see docs/beacon-detection-plan.md's
+"Interim formula swap" section. Still borrowed constants (not this app's own hardware), so the
+three field sessions above remain the real fix.

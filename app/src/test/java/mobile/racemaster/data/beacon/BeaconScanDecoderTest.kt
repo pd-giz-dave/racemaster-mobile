@@ -22,23 +22,25 @@ class BeaconScanDecoderTest {
     }
 
     @Test
-    fun estimatedDistanceIsOneMetreWhenRssiMatchesMeasuredPower() {
+    fun estimatedDistanceIsAboutOneMetreWhenRssiMatchesMeasuredPower() {
+        // AltBeacon's curve isn't pinned to exactly 1.0 at ratio=1.0 the way the old n=2 formula
+        // was — it's a fit against real measurements, not an identity.
         val beacon = DetectedRaceBeacon(address = "x", beaconNumber = 1, measuredPowerDbm = -59, rssi = -59)
-        assertEquals(1.0, beacon.estimatedDistanceMeters, 1e-9)
+        assertEquals(1.01076, beacon.estimatedDistanceMeters, 1e-5)
     }
 
     @Test
     fun estimatedDistanceGrowsAsTheSignalWeakensBeyondTheOneMetreReading() {
-        // n=2 free-space exponent: a 20dB weaker signal than the 1m reading is 10x further away.
         val beacon = DetectedRaceBeacon(address = "x", beaconNumber = 1, measuredPowerDbm = -59, rssi = -79)
-        assertEquals(10.0, beacon.estimatedDistanceMeters, 1e-9)
+        assertEquals(8.65181, beacon.estimatedDistanceMeters, 1e-5)
     }
 
     @Test
-    fun estimatedDistanceShrinksWhenTheSignalIsStrongerThanTheOneMetreReading() {
-        // 20dB stronger than the 1m reading (e.g. the beacon held right up to the phone) implies
-        // a tenth of a metre.
+    fun estimatedDistanceShrinksSharplyWhenTheSignalIsStrongerThanTheOneMetreReading() {
+        // The curve's ratio^10 branch below 1.0 falls off far more steeply than the old n=2
+        // formula did — a beacon held right up to the phone reads as a couple of centimetres,
+        // not a tenth of a metre.
         val beacon = DetectedRaceBeacon(address = "x", beaconNumber = 1, measuredPowerDbm = -59, rssi = -39)
-        assertEquals(0.1, beacon.estimatedDistanceMeters, 1e-9)
+        assertEquals(0.01593, beacon.estimatedDistanceMeters, 1e-5)
     }
 }
