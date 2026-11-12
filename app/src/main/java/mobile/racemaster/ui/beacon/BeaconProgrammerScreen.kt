@@ -24,6 +24,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -91,6 +92,21 @@ fun BeaconProgrammerScreen(
         permissionsGranted = context.hasAllPermissions(permissions)
         bluetoothEnabled = viewModel.isBluetoothEnabled()
         onPauseOrDispose {}
+    }
+
+    // Once only per screen visit (startScan() itself is idempotent while already scanning, but
+    // this flag stops it firing again every time permissionsGranted/bluetoothEnabled happen to
+    // recompute, e.g. on every LifecycleResumeEffect above) — saves the operator the extra tap
+    // that was previously needed on every entry to this screen. Deliberately not re-fired when
+    // connectionPhase later returns to IDLE (e.g. after a disconnect): that would also restart
+    // scanning mid-manual-password-retry, contending with the connect attempt over the single BLE
+    // radio (see startScan()'s own doc on that contention).
+    var autoScanStarted by remember { mutableStateOf(false) }
+    LaunchedEffect(permissionsGranted, bluetoothEnabled) {
+        if (!autoScanStarted && permissionsGranted && bluetoothEnabled) {
+            autoScanStarted = true
+            viewModel.startScan()
+        }
     }
 
     BackHandler {
@@ -196,6 +212,7 @@ private fun ScanSection(uiState: BeaconUiState, viewModel: BeaconProgrammerViewM
     // re-looks-up the live, continuously-updating scan result every recomposition rather than
     // freezing on whatever was seen at the instant of the tap.
     var decodedAdvertForAddress by remember { mutableStateOf<String?>(null) }
+    var showProgramSettings by remember { mutableStateOf(false) }
     val decodedAdvertFor = decodedAdvertForAddress?.let { address -> uiState.scanResults.firstOrNull { it.address == address } }
     decodedAdvertFor?.let { beacon ->
         AlertDialog(
@@ -247,10 +264,39 @@ private fun ScanSection(uiState: BeaconUiState, viewModel: BeaconProgrammerViewM
             confirmButton = { Button(onClick = withClickSound { decodedAdvertForAddress = null }) { Text("Close") } },
         )
     }
+    if (showProgramSettings) {
+        AlertDialog(
+            onDismissRequest = { showProgramSettings = false },
+            title = { Text("Program settings") },
+            text = {
+                // Fixed in DxCp27Protocol, not editable here — every beacon Set Program writes
+                // gets the same interval/TX power (see that object's own "every value this app
+                // writes when programming a beacon" doc). Shown as both the real dBm level and
+                // the raw index the firmware actually stores (TX_POWER_DBM_BY_RAW isn't evenly
+                // spaced, so the index alone wouldn't be meaningful on its own either).
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "These are the fixed values every beacon is written with by Set Program " +
+                            "below — not editable per-beacon.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text("Advertising interval: ${DxCp27Protocol.RACEMASTER_ADV_INTERVAL_MS}ms (raw ${DxCp27Protocol.RACEMASTER_ADV_INTERVAL_RAW})")
+                    Text(
+                        "TX power: ${DxCp27Protocol.RACEMASTER_TX_POWER_DBM}dBm " +
+                            "(index ${DxCp27Protocol.RACEMASTER_TX_POWER_RAW} of 0-${DxCp27Protocol.TX_POWER_DBM_BY_RAW.lastIndex})",
+                    )
+                }
+            },
+            confirmButton = { Button(onClick = withClickSound { showProgramSettings = false }) { Text("Close") } },
+        )
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Button(onClick = withClickSound(viewModel::startScan), enabled = !uiState.isBusy && !uiState.isScanning) { Text("Scan") }
             OutlinedButton(onClick = withClickSound(viewModel::stopScan), enabled = uiState.isScanning) { Text("Stop") }
+            IconButton(onClick = withClickSound { showProgramSettings = true }) {
+                Icon(Icons.Filled.Settings, contentDescription = "Program settings")
+            }
             if (uiState.isScanning) {
                 CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                 Text("Scanning…", style = MaterialTheme.typography.bodySmall)
