@@ -260,14 +260,16 @@ class SettingsRepositoryTest {
         val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler) + SupervisorJob())
         val repository = SettingsRepository(dataStoreOverFile(file, scope))
 
-        repository.setServerSession("https://good.example", "some-token")
+        repository.setServerSession("https://good.example", "some-token", "some-user")
         assertEquals("https://good.example", repository.serverBaseUrl.first())
         assertEquals("some-token", repository.authToken.first())
+        assertEquals("some-user", repository.authUsername.first())
 
         repository.clearServerSession()
 
         assertNull(repository.serverBaseUrl.first())
         assertNull(repository.authToken.first())
+        assertNull(repository.authUsername.first())
         scope.cancel()
     }
 
@@ -282,7 +284,7 @@ class SettingsRepositoryTest {
         val repository = SettingsRepository(dataStoreOverFile(file, scope))
 
         repository.saveServerSetupDraft("https://good.example", "good-user", "good-pass")
-        repository.setServerSession("https://good.example", "some-token")
+        repository.setServerSession("https://good.example", "some-token", "good-user")
 
         repository.clearServerSession()
 

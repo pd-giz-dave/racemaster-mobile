@@ -279,6 +279,7 @@ class PeripheralSyncService : Service() {
         startAdvertisingRetryLoop()
         startChunkWatchdogLoop()
         container.muleSyncEngine.start()
+        container.beaconScanEngine.start()
     }
 
     // Keeps the `deviceName` field genuinely live for the rest of this process's life —
@@ -494,6 +495,7 @@ class PeripheralSyncService : Service() {
         // onCreate() above, but never itself tied to this service's own lifecycle before; see
         // MuleSyncEngine.stop's own doc for why that let scanning silently outlive this service.
         container.muleSyncEngine.stop()
+        container.beaconScanEngine.stop()
         serviceJob.cancel()
         super.onDestroy()
     }

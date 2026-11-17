@@ -412,7 +412,7 @@ class MuleRepository(
     suspend fun login(baseUrl: String, username: String, password: String) {
         val normalizedUrl = normalizeBaseUrl(baseUrl)
         val response = syncClient.login(normalizedUrl, username, password)
-        settingsRepository.setServerSession(normalizedUrl, response.token)
+        settingsRepository.setServerSession(normalizedUrl, response.token, response.username)
     }
 
     // pushToServer's own last-resort recovery from a 401/403 — see ServerRequestException's own
@@ -431,7 +431,7 @@ class MuleRepository(
         val credential = settingsRepository.serverCredentialHistory.first()
             .firstOrNull { normalizeBaseUrl(it.url) == baseUrl } ?: return null
         return runCatching { syncClient.login(baseUrl, credential.username, credential.password) }
-            .onSuccess { settingsRepository.setServerSession(baseUrl, it.token) }
+            .onSuccess { settingsRepository.setServerSession(baseUrl, it.token, it.username) }
             .getOrNull()?.token
     }
 

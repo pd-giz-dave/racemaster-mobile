@@ -364,3 +364,16 @@ run one in each context.
 AltBeacon's own empirical curve fit as an interim improvement — see docs/beacon-detection-plan.md's
 "Interim formula swap" section. Still borrowed constants (not this app's own hardware), so the
 three field sessions above remain the real fix.
+
+## Some issues with the Trigs race
+
+- [ ] some CP's are visited twice (railway bridge and road crossing there)
+- [ ] some CP's are unmanned (railway bridge)
+- [ ] need to mimic SI's ability to have a time allowance between CP's (that road crossing)
+
+## Other issues
+
+- [ ] a phone at the start location needs a reverse detection,
+      the bib must be recorded as it disappears not as it arrives, 
+      hmmm... what if they wander around and come in/out of BT range
+- [ ] treat beacon 000 as a sweep and announce and report as such

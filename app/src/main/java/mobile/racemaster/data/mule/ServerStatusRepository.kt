@@ -19,19 +19,27 @@ import kotlinx.coroutines.launch
 // sync off (see AppBannerViewModel's own doc) — reachability is still polled underneath so the
 // real status is ready to show the moment sync is turned back on.
 //
-// UNAUTHORIZED sits between ONLINE and OFFLINE/INVALID: the server itself is confirmed up and
-// genuinely a Racemaster server (ping alone already says so), but this device's own saved
-// login either doesn't exist or is no longer accepted — a real, previously-invisible field
-// state (see MuleSyncClient.ServerRequestException's own doc for the "server push broken"
-// report this traces back to): every push attempt was quietly no-op'ing while the banner still
-// read a plain "Online", giving the operator nothing to act on beyond records staying
-// permanently unsynced. checkNow/interpretServerStatus below (via MuleSyncClient.checkAuth) is
-// what actually notices this apart from a genuine ONLINE — a plain reachability ping alone
-// can't tell them apart, since an expired token still gets a perfectly healthy HTTP response.
-// Self-heals the same way ONLINE already does: MuleRepository.pushToServer's own automatic
-// re-login (see its own doc) updates the saved token the moment the background sync loop next
-// runs, and the very next poll tick here picks that up and flips back to ONLINE on its own.
-enum class ServerStatus { UNKNOWN, ONLINE, OFFLINE, INVALID, UNAUTHORIZED, PAUSED }
+// UNAUTHORIZED and NOT_LOGGED_IN both sit between ONLINE and OFFLINE/INVALID: the server itself
+// is confirmed up and genuinely a Racemaster server (ping alone already says so), but this
+// device's own saved login isn't accepted — a real, previously-invisible field state (see
+// MuleSyncClient.ServerRequestException's own doc for the "server push broken" report this
+// traces back to): every push attempt was quietly no-op'ing while the banner still read a plain
+// "Online", giving the operator nothing to act on beyond records staying permanently unsynced.
+// checkNow/interpretServerStatus below (via MuleSyncClient.checkAuth) is what actually notices
+// this apart from a genuine ONLINE — a plain reachability ping alone can't tell them apart,
+// since an expired token still gets a perfectly healthy HTTP response.
+//
+// Split into two distinct states rather than one conflated UNAUTHORIZED (a field report: an
+// operator read "Online" and assumed they were logged in as the account they'd typed, when in
+// fact no explicit login had ever been confirmed for that account on this device — a stale or
+// unintended saved session, e.g. a debug build's auto-filled default account, is otherwise
+// indistinguishable from a deliberate one). NOT_LOGGED_IN is "no saved token at all" — nothing
+// has ever been confirmed; UNAUTHORIZED is "there *was* a saved token, the server just rejected
+// it" — a genuine expiry/revocation. Both self-heal the same way ONLINE already does:
+// MuleRepository.pushToServer's own automatic re-login (see its own doc) updates the saved
+// token the moment the background sync loop next runs, and the very next poll tick here picks
+// that up and flips back to ONLINE on its own.
+enum class ServerStatus { UNKNOWN, ONLINE, OFFLINE, INVALID, NOT_LOGGED_IN, UNAUTHORIZED, PAUSED }
 
 data class ServerStatusState(
     val status: ServerStatus,
@@ -44,6 +52,11 @@ data class ServerStatusState(
     // alone advancing every 15s regardless. Null until the very first successful check against
     // the currently configured server URL.
     val lastOnlineAtMillis: Long? = null,
+    // The account this device's saved token actually belongs to (SettingsRepository.authUsername),
+    // threaded through so ONLINE can report *which* account is live rather than just that some
+    // push would succeed — see this file's own ServerStatus doc for why that ambiguity matters.
+    // Null whenever there's no saved token (UNKNOWN/NOT_LOGGED_IN) — nothing to attribute.
+    val username: String? = null,
 )
 
 /** Turns a raw [PingOutcome] into what it means for the operator: unreachable is OFFLINE
@@ -62,15 +75,18 @@ fun interpretPingOutcome(outcome: PingOutcome): ServerStatus = when (outcome) {
  *  the one case a bare reachability check can't itself distinguish (see [ServerStatus.UNAUTHORIZED]'s
  *  own doc) — [pingStatus] being anything else (OFFLINE/INVALID/UNKNOWN) already fully explains
  *  why a push wouldn't succeed right now, so auth is irrelevant and left untouched.
- *  [hasToken] false (never logged in, or logged out) is treated the same as a confirmed
- *  rejection — either way there's no valid credential to push with. [authAccepted] null (the
- *  auth probe itself was inconclusive — e.g. a transient failure on the *second* of the two
- *  requests checkNow makes) deliberately does *not* downgrade to UNAUTHORIZED: that's not
- *  evidence of an actual auth problem, just noise, and ping alone already established the
+ *  [hasToken] false (never logged in, or logged out) reports [ServerStatus.NOT_LOGGED_IN] —
+ *  distinct from a rejected token ([authAccepted] false, [ServerStatus.UNAUTHORIZED]) — either
+ *  way there's no valid credential to push with, but the operator-facing fix differs (log in
+ *  for the first time vs. log back in), see this file's own ServerStatus doc. [authAccepted]
+ *  null (the auth probe itself was inconclusive — e.g. a transient failure on the *second* of
+ *  the two requests checkNow makes) deliberately does *not* downgrade to UNAUTHORIZED: that's
+ *  not evidence of an actual auth problem, just noise, and ping alone already established the
  *  server itself is healthy. */
 fun interpretServerStatus(pingStatus: ServerStatus, hasToken: Boolean, authAccepted: Boolean?): ServerStatus {
     if (pingStatus != ServerStatus.ONLINE) return pingStatus
-    if (!hasToken || authAccepted == false) return ServerStatus.UNAUTHORIZED
+    if (!hasToken) return ServerStatus.NOT_LOGGED_IN
+    if (authAccepted == false) return ServerStatus.UNAUTHORIZED
     return ServerStatus.ONLINE
 }
 
@@ -113,7 +129,12 @@ class ServerStatusRepository(private val syncClient: MuleSyncClient) {
      *  automatic re-login recovering from [ServerStatus.UNAUTHORIZED]) must be picked up by the
      *  very next tick, but must *not* restart the loop and reset lastOnlineAtMillis back to null
      *  the way a genuine server-URL change legitimately does. */
-    fun startPolling(scope: CoroutineScope, baseUrlFlow: Flow<String?>, tokenFlow: Flow<String?>) {
+    fun startPolling(
+        scope: CoroutineScope,
+        baseUrlFlow: Flow<String?>,
+        tokenFlow: Flow<String?>,
+        usernameFlow: Flow<String?>,
+    ) {
         pollingJob?.cancel()
         pollingJob = scope.launch {
             baseUrlFlow.collectLatest { baseUrl ->
@@ -130,7 +151,7 @@ class ServerStatusRepository(private val syncClient: MuleSyncClient) {
                     val status = checkNow(baseUrl, tokenFlow.first())
                     val now = System.currentTimeMillis()
                     if (status == ServerStatus.ONLINE) lastOnlineAtMillis = now
-                    _state.value = ServerStatusState(status, now, lastOnlineAtMillis)
+                    _state.value = ServerStatusState(status, now, lastOnlineAtMillis, usernameFlow.first())
                     delay(POLL_INTERVAL)
                 }
             }

@@ -43,8 +43,11 @@ class ServerStatusRepositoryTest {
     }
 
     @Test
-    fun onlinePingWithNoTokenAtAllIsUnauthorized() {
-        assertEquals(ServerStatus.UNAUTHORIZED, interpretServerStatus(ServerStatus.ONLINE, hasToken = false, authAccepted = null))
+    fun onlinePingWithNoTokenAtAllIsNotLoggedIn() {
+        // Distinct from a rejected token (UNAUTHORIZED, below) — see ServerStatus's own doc for
+        // the field report this split fixes: conflating the two let "Online" look identical
+        // whether or not any login had ever actually been confirmed for this device.
+        assertEquals(ServerStatus.NOT_LOGGED_IN, interpretServerStatus(ServerStatus.ONLINE, hasToken = false, authAccepted = null))
     }
 
     @Test

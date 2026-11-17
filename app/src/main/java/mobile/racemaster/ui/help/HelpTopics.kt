@@ -37,7 +37,9 @@ object HelpTopics {
             "Options: Mule Mode on/off, Bluetooth on/off, server sync on/off, and more — see " +
                 "\"Options\" below.",
             "Once a server's set up, every mode screen shows its own \"Server: …\" status line " +
-                "— if it looks stale, something's stopped.",
+                "— now naming which account it's logged in as (\"Online — name\"), or \"Not " +
+                "logged in\" / \"Login expired\" if it isn't; if the last-seen time looks " +
+                "stale, something's stopped.",
         ),
     )
 
@@ -110,6 +112,10 @@ object HelpTopics {
                 "any logged row afterward to fix it.",
             "A repeated bib for the same event is flagged \"dup of S…\", not blocked — a Start " +
                 "and a Finish for the same bib is normal.",
+            "At a checkpoint, a bib can also be recorded automatically from its beacon the " +
+                "moment it's reliably detected — same announce/beep as typing it in. A bib " +
+                "already in this segment's list, by beacon or by typing, won't record again " +
+                "until that entry's undone.",
             "RESET closes this segment and starts a fresh count; Undo last removes only the " +
                 "most recent entry.",
         ),

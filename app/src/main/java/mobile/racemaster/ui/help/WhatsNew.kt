@@ -10,6 +10,21 @@ data class VersionNotes(val version: String, val highlights: List<String>)
 object WhatsNew {
     val versions: List<VersionNotes> = listOf(
         VersionNotes(
+            version = "0.0.30",
+            highlights = listOf(
+                "The app banner now says plainly whether this phone is actually logged in — " +
+                    "\"Online — <account>\" names which account a saved login belongs to, and " +
+                    "\"Not logged in\" / \"Login expired\" replace what used to just show as a " +
+                    "generic \"Online\" even when no login had ever actually gone through.",
+                "Bibs Mode can now record a bib automatically from its beacon the moment it's " +
+                    "confidently detected, at a checkpoint only (not yet at the finish) — " +
+                    "announced/beeped exactly like a typed-in bib. A bib already in this " +
+                    "segment's entry list won't fire again for the rest of the race, whether it " +
+                    "got there by beacon or by typing it in — undo the entry to let it detect " +
+                    "again.",
+            ),
+        ),
+        VersionNotes(
             version = "0.0.29",
             highlights = listOf(
                 "The Mode Picker's \"Beacons\" button now opens a small menu — Check, Close, " +

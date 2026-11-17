@@ -83,23 +83,35 @@ fun AppBanner(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        ServerStatusIndicator(serverStatus.status)
+        ServerStatusIndicator(serverStatus.status, serverStatus.username)
     }
 }
 
 // Blank while UNKNOWN (no server URL configured yet — see Mule Mode's Setup Server form) so
 // the banner doesn't nag about connectivity before there's even a server to be connected to.
+//
+// ONLINE names the actual logged-in account (e.g. "Online — mercia") rather than a bare
+// "Online" — a field report: an operator read "Online" and reasonably assumed it meant "logged
+// in as the account I meant to use," when in fact the saved session could be a different,
+// unintended account (e.g. a debug build's auto-filled default) that this device never
+// explicitly logged out of. Naming the account makes that mismatch visible at a glance instead
+// of only surfacing once a feature scoped to the wrong account quietly comes up empty.
 @Composable
-private fun ServerStatusIndicator(status: ServerStatus) {
+private fun ServerStatusIndicator(status: ServerStatus, username: String?) {
     val indicator = when (status) {
         ServerStatus.UNKNOWN -> null
-        ServerStatus.ONLINE -> ServerOnlineGreen to "Online"
+        ServerStatus.ONLINE -> ServerOnlineGreen to (username?.let { "Online — $it" } ?: "Online")
         ServerStatus.OFFLINE -> ServerOfflineRed to "Offline"
         ServerStatus.INVALID -> ServerInvalidAmber to "Invalid server"
-        // Reachable, genuinely a Racemaster server, but this device's own saved login isn't
-        // accepted (or was never set up) — see ServerStatus.UNAUTHORIZED's own doc. Same amber
-        // tier as INVALID (both are "needs operator attention", not an outage) but a distinct
-        // label, since the fix is different: log back in, not fix the server URL.
+        // Reachable, genuinely a Racemaster server, but no login has ever been saved on this
+        // device for it — see ServerStatus.NOT_LOGGED_IN's own doc. Distinct from UNAUTHORIZED
+        // below (a login *was* saved, the server just rejected it) since the two are easy to
+        // conflate otherwise, and that conflation is exactly what caused the field report above.
+        ServerStatus.NOT_LOGGED_IN -> ServerInvalidAmber to "Not logged in"
+        // Reachable, genuinely a Racemaster server, but this device's saved login is no longer
+        // accepted — see ServerStatus.UNAUTHORIZED's own doc. Same amber tier as INVALID (both
+        // are "needs operator attention", not an outage) but a distinct label, since the fix is
+        // different: log back in, not fix the server URL.
         ServerStatus.UNAUTHORIZED -> ServerInvalidAmber to "Login expired"
         // Server sync deliberately turned off from Mule Mode — see AppBannerViewModel's own doc.
         ServerStatus.PAUSED -> ServerPausedGrey to "Paused"
@@ -107,6 +119,6 @@ private fun ServerStatusIndicator(status: ServerStatus) {
     val (dotColor, label) = indicator
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         Text("●", color = dotColor, fontSize = 14.sp)
-        Text(label, color = Color.White, fontSize = 13.sp)
+        Text(label, color = Color.White, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }

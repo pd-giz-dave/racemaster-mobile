@@ -63,6 +63,7 @@ class SettingsRepository(
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val SERVER_BASE_URL = stringPreferencesKey("server_base_url")
         val AUTH_TOKEN = stringPreferencesKey("auth_token")
+        val AUTH_USERNAME = stringPreferencesKey("auth_username")
         val AUTO_SYNC_STOPPED = booleanPreferencesKey("auto_sync_stopped")
         val BLUETOOTH_OFF = booleanPreferencesKey("bluetooth_off")
         val SERVER_SYNC_OFF = booleanPreferencesKey("server_sync_off")
@@ -192,10 +193,19 @@ class SettingsRepository(
     val serverBaseUrl: Flow<String?> = dataStore.data.map { prefs -> prefs[Keys.SERVER_BASE_URL] }
     val authToken: Flow<String?> = dataStore.data.map { prefs -> prefs[Keys.AUTH_TOKEN] }
 
-    suspend fun setServerSession(baseUrl: String, token: String) {
+    // The account a successful login actually confirmed, distinct from serverSetupDraft.username
+    // (what the operator last *typed*, sticky across failed attempts too) — see
+    // setServerSession's own doc for the field report this fixes: with no separately-tracked
+    // "who is this token actually for", the app banner could only ever report reachability, not
+    // which account was live, so a stale or unintended login (e.g. a debug build's auto-filled
+    // default account) looked identical to the one the operator actually meant to use.
+    val authUsername: Flow<String?> = dataStore.data.map { prefs -> prefs[Keys.AUTH_USERNAME] }
+
+    suspend fun setServerSession(baseUrl: String, token: String, username: String) {
         dataStore.edit { prefs ->
             prefs[Keys.SERVER_BASE_URL] = baseUrl
             prefs[Keys.AUTH_TOKEN] = token
+            prefs[Keys.AUTH_USERNAME] = username
         }
     }
 
@@ -210,6 +220,7 @@ class SettingsRepository(
         dataStore.edit { prefs ->
             prefs.remove(Keys.SERVER_BASE_URL)
             prefs.remove(Keys.AUTH_TOKEN)
+            prefs.remove(Keys.AUTH_USERNAME)
         }
     }
 

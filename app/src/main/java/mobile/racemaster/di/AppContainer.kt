@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.room.Room
 import mobile.racemaster.data.beacon.BeaconRepository
+import mobile.racemaster.data.beacon.BeaconScanEngine
 import mobile.racemaster.data.beacon.DxCp27Client
 import mobile.racemaster.data.beacon.RangeSampleLogger
 import mobile.racemaster.data.db.RacemasterDatabase
@@ -20,6 +21,7 @@ import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.settings.SettingsRepository
+import mobile.racemaster.util.Beeper
 import mobile.racemaster.util.BibSpeaker
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "app_settings")
@@ -31,6 +33,7 @@ interface AppContainer {
     val settingsRepository: SettingsRepository
     val muleRepository: MuleRepository
     val muleSyncEngine: MuleSyncEngine
+    val beaconScanEngine: BeaconScanEngine
     val serverStatusRepository: ServerStatusRepository
     val bluetoothStateRepository: BluetoothStateRepository
     val progressRepository: ProgressRepository
@@ -76,6 +79,10 @@ class DefaultAppContainer(context: Context) : AppContainer {
 
     override val muleSyncEngine: MuleSyncEngine by lazy {
         MuleSyncEngine(muleRepository, bluetoothStateRepository, raceRepository, timeModeRepository, bibsModeRepository, settingsRepository, progressRepository)
+    }
+
+    override val beaconScanEngine: BeaconScanEngine by lazy {
+        BeaconScanEngine(muleRepository, progressRepository, settingsRepository, raceRepository, bibsModeRepository, bibSpeaker, Beeper(context))
     }
 
     override val serverStatusRepository: ServerStatusRepository by lazy {
