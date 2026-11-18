@@ -9,13 +9,15 @@ package mobile.racemaster.data.db.entity
 // structured just like BIBS (its own current-segment/undo-stack/counters) — removed (TODO.md:
 // "A rationalisation") once Bibs became location-aware and could record everything CP did
 // itself.
-enum class HistoryMode { TIME, BIBS }
+enum class HistoryMode { TIME, BIBS, COUNT, CLOSE }
 
 // Used only by Race History's own MODE_START boundary-marker row (see HistoryAction.MODE_START's
 // own doc) to name which mode started, in place of a split number it never had.
 fun HistoryMode.displayName(): String = when (this) {
     HistoryMode.TIME -> "Time"
     HistoryMode.BIBS -> "Bibs"
+    HistoryMode.COUNT -> "Count"
+    HistoryMode.CLOSE -> "Close"
 }
 
 // Every history line is now shown in one rationalized column format regardless of mode — a

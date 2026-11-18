@@ -10,6 +10,28 @@ data class VersionNotes(val version: String, val highlights: List<String>)
 object WhatsNew {
     val versions: List<VersionNotes> = listOf(
         VersionNotes(
+            version = "0.0.31",
+            highlights = listOf(
+                "Setup Race gains two new modes, Count and Close, each a standing role a phone " +
+                    "can be dedicated to for the whole race: Count is a passive pre-start " +
+                    "headcount (a running \"unique beacons seen\" total as runners walk past, " +
+                    "ignoring the 000 sweep); Close is post-race beacon tidy-up (read battery, " +
+                    "power off, logged even if a beacon is re-presented and closed more than " +
+                    "once). Both show up in the web app's own device list under a fixed " +
+                    "location (\"Start\"/\"Close\") so an operator can tell a dedicated Count or " +
+                    "Close phone apart from everything else, since neither ever logs a Bib or " +
+                    "Time entry.",
+                "The Beacons hub now has standing \"Close\" and \"Count\" shortcuts too, usable " +
+                    "regardless of the active race's own mode — the same screens Setup Race's " +
+                    "two new modes open.",
+                "Count Mode and Close Mode's top bar now has a \"Stop\" button in place of " +
+                    "Relocate — a one-tap confirm that clears the race's mode so a different " +
+                    "one can be set up, since neither mode has a Reset of its own. This is also " +
+                    "what lets a Count or Close race be deleted afterward from Race History, " +
+                    "which previously had no way to treat either mode as finished.",
+            ),
+        ),
+        VersionNotes(
             version = "0.0.30",
             highlights = listOf(
                 "The app banner now says plainly whether this phone is actually logged in — " +

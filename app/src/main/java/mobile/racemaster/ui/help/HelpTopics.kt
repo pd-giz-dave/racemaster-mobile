@@ -173,10 +173,13 @@ object HelpTopics {
     val BeaconOperations = HelpTopic(
         title = "Beacons",
         tips = listOf(
-            "Four jobs share this hub: Check (confirm a beacon's on and its number matches its " +
-                "label), Close (post-race battery/power-off tidy-up — not yet implemented), " +
-                "Program (write a beacon's number ahead of a race), and Range Calibration (a " +
-                "data-collection tool, not a race-day job).",
+            "Five jobs share this hub: Check (confirm a beacon's on and its number matches its " +
+                "label), Close (post-race battery read + power-off) and Count (pre-start " +
+                "headcount) — both also their own Setup Race mode now, for a phone dedicated to " +
+                "that job all race long; these two buttons are just shortcuts that work " +
+                "regardless of the active race's own mode — Program (write a beacon's number " +
+                "ahead of a race), and Range Calibration (a data-collection tool, not a " +
+                "race-day job).",
         ),
     )
 
@@ -233,12 +236,44 @@ object HelpTopics {
         ),
     )
 
-    val CloseBeacons = HelpTopic(
-        title = "Close Beacons",
+    val CloseMode = HelpTopic(
+        title = "Close Mode",
         tips = listOf(
-            "Not yet implemented. Once built, this will be the post-race tidy-up: connect to " +
-                "each beacon handed out, read its battery, power it off, and log what came " +
-                "back so anyone still holding one gets chased.",
+            "Lists every beacon currently in range, nearest first. Tap one to connect, read its " +
+                "battery, and power it off — the result is logged here and syncs to the server " +
+                "the same way any other recorded entry does, so anyone still holding a beacon " +
+                "shows up in \"Outstanding\" below.",
+            "A beacon already closed this race still shows up if it's heard again (\"closed " +
+                "×N\") — e.g. a runner who went straight to this station without crossing the " +
+                "finish line first. Closing it again is fine; it just adds another record.",
+            "Set up as its own Setup Race mode, location fixed to \"Close\" — lets a dedicated " +
+                "close-station phone be told apart from every other device in the web app's own " +
+                "device list, since it never logs a Bib or Time entry of its own.",
+            "The top bar's \"Stop\" clears this race's mode (already-closed beacons stay " +
+                "recorded) so a different mode can be set up for it — the only way to leave " +
+                "Close Mode, since it has no Reset. Also reachable without a race in Close " +
+                "mode at all via the Beacons hub's own \"Close\" shortcut, in which case Stop " +
+                "stays disabled.",
+        ),
+    )
+
+    val CountMode = HelpTopic(
+        title = "Count Mode",
+        tips = listOf(
+            "A pre-start headcount: shows a running count of unique beacons seen nearby, no " +
+                "tapping required — just walk runners past the phone one at a time. Beacon 000 " +
+                "(the sweep) is never counted.",
+            "Only close-range beacons count, and each one only once — a beacon that's already " +
+                "been seen doesn't add to the total again, so lingering near the phone is " +
+                "harmless.",
+            "Set up as its own Setup Race mode, location fixed to \"Start\" — lets a dedicated " +
+                "headcount phone be told apart from every other device in the web app's own " +
+                "device list, since it never logs a Bib or Time entry of its own.",
+            "The top bar's \"Stop\" clears this race's mode (beacons already seen stay " +
+                "recorded) so a different mode can be set up for it — the only way to leave " +
+                "Count Mode, since it has no Reset. Also reachable without a race in Count " +
+                "mode at all via the Beacons hub's own \"Count\" shortcut, in which case Stop " +
+                "stays disabled.",
         ),
     )
 
@@ -261,7 +296,7 @@ object HelpTopics {
 
     val all: List<HelpTopic> = listOf(
         Overview, SetupDevice, SetupServer, SetupRace, BeaconOperations, IdentifyFob,
-        ProgramBeacons, CloseBeacons, RangeCalibration, Options, TimeMode, BibsMode, MuleMode,
-        RaceHistory, HistoryLineFormat,
+        ProgramBeacons, CloseMode, RangeCalibration, Options, TimeMode, BibsMode, CountMode,
+        MuleMode, RaceHistory, HistoryLineFormat,
     )
 }

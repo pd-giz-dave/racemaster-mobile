@@ -35,11 +35,14 @@ val CompactTopAppBarHeight: Dp = 48.dp
 fun ModeScreenTopBar(
     title: String,
     thisRaceEnabled: Boolean = false,
-    // Null omits the "Relocate" action entirely — Time Mode's own call (TODO.md's "A
-    // rationalisation": it records irrespective of where the device is, so there's nothing for
-    // it to relocate) leaves this unset rather than wiring a button to a screen that would only
-    // ever edit a location it doesn't use. Bibs still wires it, unchanged.
+    // Null omits this action entirely — Time Mode's own call (TODO.md's "A rationalisation": it
+    // records irrespective of where the device is, so there's nothing for it to relocate) leaves
+    // this unset rather than wiring a button to a screen that would only ever edit a location it
+    // doesn't use. Bibs still wires it, unchanged. Close/Count wire it too, but to a plain
+    // "Stop" action (see CloseModeScreen/CountModeScreen's own doc) rather than Relocate's
+    // full name/location/mode editor — [thisRaceLabel] is what tells the two apart on screen.
     onThisRace: (() -> Unit)? = null,
+    thisRaceLabel: String = "Relocate",
     // Always jumps straight to Mode Picker (see RacemasterNavHost.navigateHome) rather than a
     // single pop — a dashboard's own back stack is always exactly [ModePicker, this screen] (see
     // RacemasterNavHost), so a separate single-pop Back button here would always be 100% redundant
@@ -70,7 +73,7 @@ fun ModeScreenTopBar(
             // which is what this button is mostly reached for now — is the more common reason to
             // tap it than a pre-race rename.
             if (onThisRace != null) {
-                TextButton(onClick = withClickSound(onThisRace), enabled = thisRaceEnabled) { Text("Relocate") }
+                TextButton(onClick = withClickSound(onThisRace), enabled = thisRaceEnabled) { Text(thisRaceLabel) }
             }
             IconButton(onClick = withClickSound(onHome)) {
                 Icon(Icons.Filled.Home, contentDescription = "Home")

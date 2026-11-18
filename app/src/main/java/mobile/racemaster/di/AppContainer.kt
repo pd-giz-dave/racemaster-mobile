@@ -18,6 +18,8 @@ import mobile.racemaster.data.mule.MuleSyncEngine
 import mobile.racemaster.data.mule.ProgressRepository
 import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.repository.BibsModeRepository
+import mobile.racemaster.data.repository.CloseModeRepository
+import mobile.racemaster.data.repository.CountModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.settings.SettingsRepository
@@ -40,6 +42,8 @@ interface AppContainer {
     val bibSpeaker: BibSpeaker
     val beaconRepository: BeaconRepository
     val rangeSampleLogger: RangeSampleLogger
+    val closeModeRepository: CloseModeRepository
+    val countModeRepository: CountModeRepository
 }
 
 class DefaultAppContainer(context: Context) : AppContainer {
@@ -78,7 +82,10 @@ class DefaultAppContainer(context: Context) : AppContainer {
     }
 
     override val muleSyncEngine: MuleSyncEngine by lazy {
-        MuleSyncEngine(muleRepository, bluetoothStateRepository, raceRepository, timeModeRepository, bibsModeRepository, settingsRepository, progressRepository)
+        MuleSyncEngine(
+            muleRepository, bluetoothStateRepository, raceRepository, timeModeRepository, bibsModeRepository,
+            countModeRepository, closeModeRepository, settingsRepository, progressRepository,
+        )
     }
 
     override val beaconScanEngine: BeaconScanEngine by lazy {
@@ -102,4 +109,12 @@ class DefaultAppContainer(context: Context) : AppContainer {
     override val beaconRepository: BeaconRepository by lazy { BeaconRepository(DxCp27Client()) }
 
     override val rangeSampleLogger: RangeSampleLogger by lazy { RangeSampleLogger(context) }
+
+    override val closeModeRepository: CloseModeRepository by lazy {
+        CloseModeRepository(database, database.raceDao(), database.historyLineDao())
+    }
+
+    override val countModeRepository: CountModeRepository by lazy {
+        CountModeRepository(database, database.raceDao(), database.historyLineDao())
+    }
 }

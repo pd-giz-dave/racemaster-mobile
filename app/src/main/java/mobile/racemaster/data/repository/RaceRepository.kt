@@ -120,6 +120,12 @@ class RaceRepository(
             when (mode) {
                 HistoryMode.TIME -> raceDao.resetTimeMode(raceId)
                 HistoryMode.BIBS -> raceDao.resetBibsMode(raceId)
+                // Unreachable in practice — neither CountModeScreen nor CloseModeScreen has a
+                // Reset button (see CloseModeRepository/CountModeRepository's own doc: neither
+                // mode has a *StartedAtMillis/*NextSplit column or segment concept to reset in
+                // the first place) — a defensive no-op rather than a crash if this is ever
+                // reached anyway.
+                HistoryMode.COUNT, HistoryMode.CLOSE -> Unit
             }
         }
     }
@@ -222,15 +228,23 @@ class RaceRepository(
     // between (e.g. Finish -> CP1 -> Finish) is unaffected: its own visit(s) sit untouched, with
     // their own counter progressing independently of whatever Finish resumes to here.
     suspend fun recordModeStart(raceId: Long, mode: AppMode, location: String, timestampMillis: Long = System.currentTimeMillis()) {
-        // Time is never location-aware (TODO.md's "A rationalisation") — forced to "Finish" once,
-        // here, at the single place a LOCATION row/race.location is ever written, rather than
+        // Time/Count/Close are never location-aware the way Bibs is (TODO.md's "A
+        // rationalisation" for Time) — each instead gets a single fixed value, forced once here,
+        // at the single place a LOCATION row/race.location is ever written, rather than
         // overriding every later reader of it. Ignores whatever the caller actually passed (a
-        // lingering Bibs-mode value sitting in Setup Race's own hidden-for-Time draft, or free
-        // text still typed into Relocate's location field while Time is selected) — so the stored
-        // value is simply correct from the moment it's written, and everything downstream (local
-        // display, server/Mule sync) sees it exactly like any other row, with nothing special to
-        // know about Time.
-        val effectiveLocation = if (mode == AppMode.TIME) "Finish" else location
+        // lingering Bibs-mode value sitting in Setup Race's own hidden-for-these-modes draft, or
+        // free text still typed into Relocate's location field while one of them is selected).
+        // Count's and Close's own fixed values are deliberately real, distinct location names
+        // ("Start"/"Close"), not both pinned to "Finish" like Time — per direct instruction, so
+        // ~racemaster's own device list lets an operator tell a Count or Close phone apart from
+        // everything else at a glance, since neither ever writes a Bib/Time entry of its own to
+        // identify it by otherwise.
+        val effectiveLocation = when (mode) {
+            AppMode.TIME -> "Finish"
+            AppMode.COUNT -> "Start"
+            AppMode.CLOSE -> "Close"
+            AppMode.BIBS -> location
+        }
         db.withTransaction {
             val historyMode = mode.toHistoryMode()
             var race = raceDao.getById(raceId) ?: return@withTransaction
@@ -270,9 +284,13 @@ class RaceRepository(
                 raceDao.incrementLineNumber(raceId)
                 race = requireNotNull(raceDao.getById(raceId)) { "Race $raceId not found" }
             }
+            // Count/Close have no NextSplit column of their own (see CloseModeRepository/
+            // CountModeRepository's own doc — neither has a segmented split-counter concept),
+            // so there's nothing for undoMostRecent to restore for them either.
             val priorSplitCounter = when (historyMode) {
                 HistoryMode.TIME -> race.timeModeNextSplit
                 HistoryMode.BIBS -> race.bibsModeNextSplit
+                HistoryMode.COUNT, HistoryMode.CLOSE -> null
             }
             historyLineDao.insert(
                 HistoryLineEntity(
@@ -308,6 +326,7 @@ class RaceRepository(
             when (historyMode) {
                 HistoryMode.TIME -> raceDao.setTimeModeNextSplit(raceId, nextSplit)
                 HistoryMode.BIBS -> raceDao.setBibsModeNextSplit(raceId, nextSplit)
+                HistoryMode.COUNT, HistoryMode.CLOSE -> Unit
             }
             raceDao.updateModeAndLocation(raceId, mode.name, effectiveLocation)
         }
@@ -326,6 +345,22 @@ class RaceRepository(
         if (mode == AppMode.BIBS) {
             settingsRepository.setBibsAutoSaveAction(defaultActionForLocation(location))
         }
+    }
+
+    // Count/Close's own "Stop" action (CountModeScreen/CloseModeScreen's top bar — per direct
+    // feedback, Relocate's full name/location/mode editor was clunky for a mode with nothing
+    // meaningful to relocate) — clears this race's mode back to null, the exact same "race
+    // exists, no mode chosen yet" state ModePickerScreen already shows ("Race set up — mode not
+    // yet chosen") and SetupRaceViewModel's own hasActiveRace guard already treats as inactive
+    // (isRaceActive(..., mode = null) is false), re-enabling Setup Race to pick a fresh mode for
+    // this same race (startOrContinueRace resolves back to it by label, not raceId). Writes no
+    // history row of its own — unlike Reset, there's no open segment to formally close (Count/
+    // Close have none — see CloseModeRepository/CountModeRepository's own doc), so there's
+    // nothing here worth logging. A no-op if the race no longer exists.
+    suspend fun stopMode(raceId: Long) {
+        val race = raceDao.getById(raceId) ?: return
+        raceDao.updateModeAndLocation(raceId, null, race.location)
+        settingsRepository.clearAppMode()
     }
 
     // name/location genuinely can change here now — RaceDetailsScreen only locks them once the

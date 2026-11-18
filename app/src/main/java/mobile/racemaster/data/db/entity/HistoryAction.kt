@@ -86,6 +86,21 @@ enum class HistoryAction {
     // view/undo target the same way (see TimeModeRepository/EntryLogModeEngine's own
     // undoMostRecent filtering) and only ever shown in Race History's full chronology.
     NEW_RACE,
+
+    // Close Mode only — one beacon's post-race battery read + power-off. bibNumber is the
+    // resolved bib if known at the time (nullable — a beacon can be closed before its bib
+    // pairing is known), note carries "beacon=<n> battery=<pct>" (see CloseModeRepository's own
+    // doc). Deliberately NOT deduplicated/upserted: a beacon re-presented after already being
+    // closed (TODO.md/docs/beacon-detection-plan.md's Close mode checklist) just gets a second
+    // CLOSE row — the same append-only, lineNumber-keyed storage every other action already
+    // uses, so "closed ×N" is simply "how many CLOSE rows this race name this beacon."
+    CLOSE,
+
+    // Count Mode only — a beacon seen at close range, before the start, for the pre-race
+    // headcount (docs/beacon-detection-plan.md's Count mode). bibNumber is the resolved bib if
+    // known (nullable, same reasoning as CLOSE), note carries "beacon=<n>". Unlike CLOSE, a
+    // beacon is only ever recorded once per race — see CountModeRepository's own doc.
+    COUNT_SEEN,
 }
 
 /** A NEW_RACE row with this note is a deletion tombstone: the race was deleted on this device,

@@ -1,5 +1,6 @@
 package mobile.racemaster.data.repository
 
+import mobile.racemaster.data.settings.AppMode
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -11,21 +12,32 @@ class RaceProgressTest {
     // merely stopped" distinction). Time and Bibs each contribute independently via a plain
     // started-at timestamp, so a race active in only one of the two must still block a "New
     // Race" from either mode's screen — a blind spot that would otherwise let that mode's own
-    // live segment be silently orphaned.
+    // live segment be silently orphaned. Count/Close have no started-at column of their own —
+    // they're active for as long as [mode] names them instead (see isRaceActive's own doc).
 
     @Test
     fun bibsStartedAloneCountsAsActive() {
-        assertEquals(true, isRaceActive(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = 1_000L))
+        assertEquals(true, isRaceActive(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = 1_000L, mode = AppMode.BIBS.name))
     }
 
     @Test
     fun timeStartedAloneCountsAsActive() {
-        assertEquals(true, isRaceActive(timeModeStartedAtMillis = 1_000L, bibsModeStartedAtMillis = null))
+        assertEquals(true, isRaceActive(timeModeStartedAtMillis = 1_000L, bibsModeStartedAtMillis = null, mode = AppMode.TIME.name))
     }
 
     @Test
     fun nothingStartedIsNotActive() {
-        assertEquals(false, isRaceActive(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null))
+        assertEquals(false, isRaceActive(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null, mode = null))
+    }
+
+    @Test
+    fun countModeIsAlwaysActiveOnceSelected() {
+        assertEquals(true, isRaceActive(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null, mode = AppMode.COUNT.name))
+    }
+
+    @Test
+    fun closeModeIsAlwaysActiveOnceSelected() {
+        assertEquals(true, isRaceActive(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null, mode = AppMode.CLOSE.name))
     }
 
     // activeModeLabels — names which mode(s) isRaceActive is actually keying off, for
@@ -36,8 +48,8 @@ class RaceProgressTest {
 
     @Test
     fun namesOnlyTheModeThatsActuallyStarted() {
-        assertEquals(listOf("Time Mode"), activeModeLabels(timeModeStartedAtMillis = 1_000L, bibsModeStartedAtMillis = null))
-        assertEquals(listOf("Bibs Mode"), activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = 1_000L))
+        assertEquals(listOf("Time Mode"), activeModeLabels(timeModeStartedAtMillis = 1_000L, bibsModeStartedAtMillis = null, mode = AppMode.TIME.name))
+        assertEquals(listOf("Bibs Mode"), activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = 1_000L, mode = AppMode.BIBS.name))
     }
 
     @Test
@@ -46,12 +58,18 @@ class RaceProgressTest {
         // an earlier mode switch on the same race — must name Bibs, not silently drop it.
         assertEquals(
             listOf("Bibs Mode"),
-            activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = 1_000L),
+            activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = 1_000L, mode = AppMode.BIBS.name),
         )
     }
 
     @Test
     fun namesNothingWhenNoModeIsActive() {
-        assertEquals(emptyList<String>(), activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null))
+        assertEquals(emptyList<String>(), activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null, mode = null))
+    }
+
+    @Test
+    fun namesCountOrCloseWhenCurrentlySelected() {
+        assertEquals(listOf("Count Mode"), activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null, mode = AppMode.COUNT.name))
+        assertEquals(listOf("Close Mode"), activeModeLabels(timeModeStartedAtMillis = null, bibsModeStartedAtMillis = null, mode = AppMode.CLOSE.name))
     }
 }

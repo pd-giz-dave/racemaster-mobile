@@ -23,9 +23,10 @@ import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.beacon.BeaconProgrammerScreen
 import mobile.racemaster.ui.beaconidentify.IdentifyFobScreen
 import mobile.racemaster.ui.beaconops.BeaconOperationsScreen
-import mobile.racemaster.ui.beaconops.CloseBeaconsScreen
 import mobile.racemaster.ui.beaconops.RangeCalibrationScreen
 import mobile.racemaster.ui.bibsmode.BibsModeScreen
+import mobile.racemaster.ui.closemode.CloseModeScreen
+import mobile.racemaster.ui.countmode.CountModeScreen
 import mobile.racemaster.ui.editentry.EditEntryScreen
 import mobile.racemaster.ui.help.HelpScreen
 import mobile.racemaster.ui.modepicker.ModePickerScreen
@@ -109,15 +110,22 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                         onHome = { navController.navigateHome() },
                         onCheck = { navController.navigate(Routes.IDENTIFY_FOB) },
                         onClose = { navController.navigate(Routes.CLOSE_BEACONS) },
+                        onCount = { navController.navigate(Routes.COUNT_BEACONS) },
                         onProgram = { navController.navigate(Routes.PROGRAM_BEACONS) },
                         onRangeCalibration = { navController.navigate(Routes.RANGE_CALIBRATION) },
                     )
                 }
                 composable(Routes.CLOSE_BEACONS) {
-                    CloseBeaconsScreen(
-                        onDone = { navController.popBackStack() },
-                        onHome = { navController.navigateHome() },
-                    )
+                    CloseModeScreen(onHome = { navController.navigateHome() })
+                }
+                composable(Routes.CLOSE_MODE) {
+                    CloseModeScreen(onHome = { navController.navigateHome() })
+                }
+                composable(Routes.COUNT_BEACONS) {
+                    CountModeScreen(onHome = { navController.navigateHome() })
+                }
+                composable(Routes.COUNT_MODE) {
+                    CountModeScreen(onHome = { navController.navigateHome() })
                 }
                 composable(Routes.RANGE_CALIBRATION) {
                     RangeCalibrationScreen(
@@ -327,6 +335,8 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
 private fun AppMode?.toRoute(): String = when (this) {
     AppMode.TIME -> Routes.TIME_MODE
     AppMode.BIBS -> Routes.BIBS_MODE
+    AppMode.COUNT -> Routes.COUNT_MODE
+    AppMode.CLOSE -> Routes.CLOSE_MODE
     null -> Routes.MODE_PICKER
 }
 

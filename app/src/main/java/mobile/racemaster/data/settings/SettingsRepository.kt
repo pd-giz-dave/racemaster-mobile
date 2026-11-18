@@ -122,6 +122,16 @@ class SettingsRepository(
         dataStore.edit { prefs -> prefs[Keys.APP_MODE] = mode.name }
     }
 
+    // RaceRepository.stopMode's own counterpart write — clears this device-wide cached setting
+    // back to "no mode" (appMode reads null once the key is simply absent, same as a fresh
+    // install) rather than leaving it pointing at whatever mode was just stopped, which would
+    // otherwise mislead PeripheralSyncService's own advertised mode byte and
+    // AppEntryViewModel's last-mode auto-forward into still announcing/resuming a mode the race
+    // no longer has selected.
+    suspend fun clearAppMode() {
+        dataStore.edit { prefs -> prefs.remove(Keys.APP_MODE) }
+    }
+
     suspend fun setMuleSyncEnabled(enabled: Boolean) {
         dataStore.edit { prefs -> prefs[Keys.MULE_SYNC_ENABLED] = enabled }
     }

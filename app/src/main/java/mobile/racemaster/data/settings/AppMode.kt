@@ -9,11 +9,13 @@ import mobile.racemaster.data.db.entity.HistoryMode
 // be a 3rd value here too — removed (TODO.md: "A rationalisation") once Bibs became
 // location-aware and could record a CPn location (and its Pass action) itself, making CP's own
 // screen/repository a functionally-identical duplicate with nothing left to justify its own mode.
-enum class AppMode { TIME, BIBS }
+enum class AppMode { TIME, BIBS, COUNT, CLOSE }
 
 fun AppMode.toHistoryMode(): HistoryMode = when (this) {
     AppMode.TIME -> HistoryMode.TIME
     AppMode.BIBS -> HistoryMode.BIBS
+    AppMode.COUNT -> HistoryMode.COUNT
+    AppMode.CLOSE -> HistoryMode.CLOSE
 }
 
 // The explicit mode name a MODE_START record's own `note` now states (see SyncRecord's own doc
@@ -22,4 +24,6 @@ fun AppMode.toHistoryMode(): HistoryMode = when (this) {
 fun AppMode.wireName(): String = when (this) {
     AppMode.TIME -> "Time"
     AppMode.BIBS -> "Bibs"
+    AppMode.COUNT -> "Count"
+    AppMode.CLOSE -> "Close"
 }

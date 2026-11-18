@@ -180,6 +180,11 @@ object MuleGattProfile {
     private const val MODE_WIRE_TIME: Byte = 1
     private const val MODE_WIRE_BIBS: Byte = 2
 
+    // 5/6, not 3/4 — see the retired-byte doc just below for why those two stay unused rather
+    // than being reassigned to Count/Close.
+    private const val MODE_WIRE_COUNT: Byte = 5
+    private const val MODE_WIRE_CLOSE: Byte = 6
+
     // 3 was MODE_WIRE_MULE, back when Mule was a 4th value of the AppMode enum this byte
     // encodes — retired, not reassigned, now that Mule syncing is its own independent flag (see
     // SettingsRepository.muleSyncEnabled) rather than a recording mode. decodeMode's `else`
@@ -196,12 +201,16 @@ object MuleGattProfile {
     private fun encodeMode(mode: AppMode?): Byte = when (mode) {
         AppMode.TIME -> MODE_WIRE_TIME
         AppMode.BIBS -> MODE_WIRE_BIBS
+        AppMode.COUNT -> MODE_WIRE_COUNT
+        AppMode.CLOSE -> MODE_WIRE_CLOSE
         null -> 0
     }
 
     private fun decodeMode(wire: Byte): AppMode? = when (wire) {
         MODE_WIRE_TIME -> AppMode.TIME
         MODE_WIRE_BIBS -> AppMode.BIBS
+        MODE_WIRE_COUNT -> AppMode.COUNT
+        MODE_WIRE_CLOSE -> AppMode.CLOSE
         else -> null
     }
 
@@ -556,6 +565,23 @@ data class ProgressEntry(
     // programming a beacon) — null for a bib with no beacon assigned, or a payload from before
     // this field existed (mirrors updatedAt's own null-means-older-payload precedent above).
     val beaconNumber: Int? = null,
+    // Close/Count Mode's own results, computed server-side (~racemaster's own
+    // mobile-files-progress.js buildProgressRows()) from a selected device's CLOSE/COUNT_SEEN
+    // rows, matched to this entry by [beaconNumber] rather than bib (a close/count can happen
+    // before a beacon's bib pairing is known — see HistoryAction.CLOSE/COUNT_SEEN's own doc on
+    // the mobile side). null for a bib never closed/counted, or a payload from before these
+    // fields existed — but per ~racemaster's own existing wire convention for "absent" on this
+    // specific entry (mobile-files-progress.js's own beaconNumber-0-sentinel precedent),
+    // [beaconClosedAt]/[beaconCountedAt] actually arrive as "" rather than JSON null when
+    // absent; treat blank the same as null when reading them (isNullOrBlank(), same idiom
+    // PeripheralSyncService.handleProgressPayload already uses for an optional device name) —
+    // don't assume a non-blank check alone is enough. [beaconClosedAt]/[beaconCountedAt] are
+    // the phone's own "yyyy/MM/dd HH:mm:ss" timestamp string, same convention
+    // [startTime]/[finishTime] already use — not re-parsed into a Long here, since nothing on
+    // this side needs to do arithmetic on them (yet).
+    val beaconClosedAt: String? = null,
+    val beaconBatteryPercent: Int? = null,
+    val beaconCountedAt: String? = null,
 )
 
 /** Race-wide progress payload — see [ProgressEntry]'s own doc. [generatedAt] is the racemaster

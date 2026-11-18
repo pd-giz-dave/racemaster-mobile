@@ -74,6 +74,14 @@ class LocationValidationTest {
     }
 
     @Test
+    fun countAndCloseStayFreeFormLikeTime() {
+        assertTrue(isValidLocationForMode("Start", AppMode.COUNT))
+        assertFalse(isValidLocationForMode("", AppMode.COUNT))
+        assertTrue(isValidLocationForMode("Close", AppMode.CLOSE))
+        assertFalse(isValidLocationForMode("", AppMode.CLOSE))
+    }
+
+    @Test
     fun nullModeIsNeverValid() {
         assertFalse(isValidLocationForMode("Start", null))
     }

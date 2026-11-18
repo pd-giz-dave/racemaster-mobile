@@ -144,7 +144,7 @@ class TimeModeViewModel(
                         // `startedAt` above — isRaceActive asks "is this race active in ANY
                         // segment of this mode", the same race-wide question it's already asking
                         // of Bibs via race?.bibsModeStartedAtMillis, not "is THIS segment started".
-                        raceInProgress = isRaceActive(race?.timeModeStartedAtMillis, race?.bibsModeStartedAtMillis),
+                        raceInProgress = isRaceActive(race?.timeModeStartedAtMillis, race?.bibsModeStartedAtMillis, race?.mode),
                         unsyncedCount = unsyncedCount,
                         lastSyncedAtMillis = lastSyncedAtMillis,
                         splitCount = splits.count { it.action == HistoryAction.SPLIT },

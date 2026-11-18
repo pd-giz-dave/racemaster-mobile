@@ -12,8 +12,12 @@ import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.data.repository.BibsModeRepository
+import mobile.racemaster.data.repository.CloseModeRepository
+import mobile.racemaster.data.repository.CountModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
+import mobile.racemaster.data.repository.parseBeaconClose
+import mobile.racemaster.data.repository.parseBeaconCount
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
@@ -47,6 +51,8 @@ class ModePickerViewModel(
     private val raceRepository: RaceRepository,
     private val timeModeRepository: TimeModeRepository,
     private val bibsModeRepository: BibsModeRepository,
+    private val countModeRepository: CountModeRepository,
+    private val closeModeRepository: CloseModeRepository,
     private val settingsRepository: SettingsRepository,
     private val serverStatusRepository: ServerStatusRepository,
     bluetoothStateRepository: BluetoothStateRepository,
@@ -101,10 +107,14 @@ class ModePickerViewModel(
                 val unsyncedFlow: Flow<Int> = when (mode) {
                     AppMode.TIME -> timeModeRepository.observeUnsyncedCount(raceId)
                     AppMode.BIBS -> bibsModeRepository.observeUnsyncedCount(raceId)
+                    AppMode.COUNT -> countModeRepository.observeUnsyncedCount(raceId)
+                    AppMode.CLOSE -> closeModeRepository.observeUnsyncedCount(raceId)
                 }
                 val lastSyncedFlow: Flow<Long?> = when (mode) {
                     AppMode.TIME -> timeModeRepository.observeLastSyncedAtMillis(raceId)
                     AppMode.BIBS -> bibsModeRepository.observeLastSyncedAtMillis(raceId)
+                    AppMode.COUNT -> countModeRepository.observeLastSyncedAtMillis(raceId)
+                    AppMode.CLOSE -> closeModeRepository.observeLastSyncedAtMillis(raceId)
                 }
                 val progressTextFlow: Flow<String> = when (mode) {
                     // Matches TimeModeViewModel's own splitCount exactly (action == SPLIT, an
@@ -116,6 +126,12 @@ class ModePickerViewModel(
                         .map { formatTimeSplitsText(it.count { s -> s.action == HistoryAction.SPLIT }) }
                     AppMode.BIBS -> bibsModeRepository.observeCurrentSegmentEntries(raceId)
                         .map { formatBibsSoFarText(it.count { e -> e.action !in NON_ENTRY_ACTIONS }) }
+                    // Unique beacons, not total rows — a re-presented, re-closed beacon
+                    // shouldn't inflate this count (see HistoryAction.CLOSE's own doc).
+                    AppMode.COUNT -> countModeRepository.observeCounts(raceId)
+                        .map { rows -> "${rows.mapNotNull { parseBeaconCount(it.note) }.distinct().size} beacons counted" }
+                    AppMode.CLOSE -> closeModeRepository.observeCloses(raceId)
+                        .map { rows -> "${rows.mapNotNull { parseBeaconClose(it.note)?.first }.distinct().size} beacons closed" }
                 }
                 combine(
                     raceRepository.observeRace(raceId),
@@ -125,9 +141,12 @@ class ModePickerViewModel(
                     serverStatusRepository.state,
                 ) { race, unsynced, lastSynced, progressText, serverStatus ->
                     if (race == null) return@combine null
+                    // Count/Close have no NextSplit column (see showNextSplit's own doc) — this
+                    // value is never actually displayed for them, so 0 is a harmless placeholder.
                     val nextSplitNumber = when (mode) {
                         AppMode.TIME -> race.timeModeNextSplit
                         AppMode.BIBS -> race.bibsModeNextSplit
+                        AppMode.COUNT, AppMode.CLOSE -> 0
                     }
                     RaceSummaryUiState(
                         raceLabel = race.label,
@@ -151,6 +170,8 @@ class ModePickerViewModel(
                     container.raceRepository,
                     container.timeModeRepository,
                     container.bibsModeRepository,
+                    container.countModeRepository,
+                    container.closeModeRepository,
                     container.settingsRepository,
                     container.serverStatusRepository,
                     container.bluetoothStateRepository,

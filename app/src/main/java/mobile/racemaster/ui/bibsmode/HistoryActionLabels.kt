@@ -34,6 +34,11 @@ fun HistoryAction.displayName(): String = when (this) {
     // Race History is the only place this is ever shown (see HistoryAction.NEW_RACE's own doc)
     // — a pure invalidation marker for other devices/the server, never operator-interactive.
     HistoryAction.NEW_RACE -> "New Race"
+    // Close/Count Mode's own actions (see each one's own doc) — never shown on either mode's
+    // own live screen (neither CloseModeScreen nor CountModeScreen renders a row-by-row
+    // history), only here in Race History's full chronology.
+    HistoryAction.CLOSE -> "Close"
+    HistoryAction.COUNT_SEEN -> "Count Seen"
 }
 
 // Deliberately excludes every marker action (CLOCK/RESET/UNDO/PING, plus the Time-only SPLIT,

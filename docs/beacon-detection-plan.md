@@ -63,31 +63,50 @@ kept in the Reference section below, re-homed under the area it actually support
 
 ## Close mode
 
-- [ ] A new mode is required to "close" a beacon — the placeholder button already exists in the
-      Beacons hub (`CloseBeaconsScreen`, `Routes.CLOSE_BEACONS`, `HelpTopics.CloseBeacons` — not
-      yet implemented beyond the placeholder)
-  - [ ] In this mode each visible beacon is shown nearest-first; when selected and confirmed, the
+- [x] A new mode is required to "close" a beacon — **done, reworked (2026-11-18) per direct
+      feedback**: Close is now a full Setup Race mode (`CloseModeScreen`/`CloseModeViewModel`,
+      backed by `CloseModeRepository`), not a bespoke beacons.json/snapshot-table mechanism. Each
+      close lands as an ordinary `CLOSE` history row (beacon number + battery in its `note`),
+      riding the exact same device-sync pipeline every other row already uses, with no dedicated
+      server call. The Beacons hub's own "Close" button is kept as a standing shortcut to the
+      same screen, usable regardless of the active race's own mode. A Close-mode race's own
+      location is forced to `"Close"` (not shared with Time's `"Finish"`) so a dedicated
+      close-station phone — which never logs a Bib/Time entry of its own — shows up identifiably
+      in `~racemaster`'s own device list.
+  - [x] In this mode each visible beacon is shown nearest-first; when selected and confirmed, the
         beacon's battery level is read and it's then turned off, with the battery level and
-        turn-off time logged for later transfer to `~racemaster` for analysis (the transfer, via
-        BT or the server, and the analysis itself, are already implemented server-side)
-  - [ ] This mode needs to be aware of the issued beacons and show a list of the outstanding
+        turn-off time logged for later transfer to `~racemaster` for analysis — **done** on the
+        mobile side (logged via the sync pipeline above); `~racemaster`'s own `progress.json`
+        handling for `CLOSE` rows is still open (see Part E of the rework plan, superseding this
+        doc's own now-stale server-side claims below).
+  - [x] This mode needs to be aware of the issued beacons and show a list of the outstanding
         (not-yet-closed) ones in bib number order
+  - [x] allow for a beacon to be re-presented because it was turned on again (this could happen
+        if a runner went straight to the close station and forgot to cross the finish line) —
+        **done**: `CLOSE` rows are deliberately never upserted/deduplicated — a re-presented
+        beacon is just a second row, so "closed ×N" is simply "how many `CLOSE` rows this race
+        has for this beacon."
 
 ## Count mode
 
-- [ ] Another new mode is required to count beacons before the start — race-day practice is to
+- [x] Another new mode is required to count beacons before the start — race-day practice is to
       count runners into a pen before the start to ensure they're all present; the objective is to
       note the bib number as runners pass one or more phones walking into the pen, many at a time;
       the phones need to show a count of unique beacons seen and a list of bib numbers yet to be
-      seen; only close-range beacons should be counted
+      seen; only close-range beacons should be counted — **done**: Count is a full Setup Race mode
+      (`CountModeScreen`/`CountModeViewModel`, backed by `CountModeRepository`), purely passive
+      (no tap, no confirmation), deduped by beacon number rather than resolved bib (a beacon can
+      be counted before its bib pairing is known), reusing `BeaconScanEngine`'s own extracted
+      debounce functions rather than that engine itself. Its own location is forced to `"Start"`
+      for the same device-list-identifiability reason Close's is forced to `"Close"`.
 
 ## Sweep
 
 - [ ] Whenever seen, beacon number 000 is a sweep — a runner who follows on behind the pack to
       ensure nobody goes off-course; they don't count as a competitor, they're a safety feature
-  - [ ] Count mode should ignore sweeps
+  - [x] Count mode should ignore sweeps — `CountModeViewModel` ignores beacon 000 outright.
   - [ ] Other modes should record a sweep's passage but not give it a split number — its nominal
-        bib number is always 000
+        bib number is always 000 — still open, unrelated to the Count/Close mode rework.
 
 ## Reference: design detail, research, and already-implemented work
 
@@ -347,6 +366,10 @@ Still needs confirming during Finish-line dual-phone testing rather than new plu
 - `app/src/main/java/mobile/racemaster/ui/beaconidentify/IdentifyFobScreen.kt` /
   `IdentifyFobViewModel.kt`
 - `app/src/main/java/mobile/racemaster/ui/beaconops/BeaconOperationsScreen.kt` /
-  `CloseBeaconsScreen.kt` / `RangeCalibrationScreen.kt` / `RangeCalibrationViewModel.kt`
+  `RangeCalibrationScreen.kt` / `RangeCalibrationViewModel.kt`
+- `app/src/main/java/mobile/racemaster/ui/closemode/CloseModeScreen.kt` /
+  `CloseModeViewModel.kt`, `app/src/main/java/mobile/racemaster/data/repository/CloseModeRepository.kt`
+- `app/src/main/java/mobile/racemaster/ui/countmode/CountModeScreen.kt` /
+  `CountModeViewModel.kt`, `app/src/main/java/mobile/racemaster/data/repository/CountModeRepository.kt`
 - `app/src/main/java/mobile/racemaster/ui/modepicker/SetupDeviceScreen.kt` (no longer has a
   beacon-related button — moved to the Beacon Operations hub)

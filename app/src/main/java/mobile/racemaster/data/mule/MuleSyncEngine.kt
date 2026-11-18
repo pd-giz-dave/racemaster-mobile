@@ -36,6 +36,8 @@ import mobile.racemaster.data.db.dao.PulledSourceSummary
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.KnownDeviceEntity
 import mobile.racemaster.data.repository.BibsModeRepository
+import mobile.racemaster.data.repository.CloseModeRepository
+import mobile.racemaster.data.repository.CountModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.TimeModeRepository
 import mobile.racemaster.data.settings.AppMode
@@ -198,6 +200,8 @@ class MuleSyncEngine(
     private val raceRepository: RaceRepository,
     private val timeModeRepository: TimeModeRepository,
     private val bibsModeRepository: BibsModeRepository,
+    private val countModeRepository: CountModeRepository,
+    private val closeModeRepository: CloseModeRepository,
     private val settingsRepository: SettingsRepository,
     private val progressRepository: ProgressRepository,
 ) {
@@ -332,23 +336,30 @@ class MuleSyncEngine(
                     )
                 }
             } else {
-                combine(
-                    raceRepository.observeRace(raceId),
+                // Every mode is an independently-scoped count (a HistoryLineEntity row has
+                // exactly one mode), so summing them is safe here — unlike the BLE-pulled path
+                // below, there's no risk of double-counting the same line under two different
+                // reads. Combined in its own nested step first — kotlinx.coroutines' typed
+                // `combine` overloads only go up to 5 flows, and this plus race/deviceName below
+                // would be 6.
+                val unsyncedCountFlow = combine(
                     timeModeRepository.observeUnsyncedCount(raceId),
                     bibsModeRepository.observeUnsyncedCount(raceId),
+                    countModeRepository.observeUnsyncedCount(raceId),
+                    closeModeRepository.observeUnsyncedCount(raceId),
+                ) { a, b, c, d -> a + b + c + d }
+                combine(
+                    raceRepository.observeRace(raceId),
+                    unsyncedCountFlow,
                     muleRepository.deviceName,
-                ) { race, unsyncedSplits, unsyncedEntries, deviceName ->
+                ) { race, unsyncedCount, deviceName ->
                     DiscoveredDevice(
                         deviceKey = SELF_DEVICE_KEY,
                         advertisement = null,
                         deviceId = SELF_DEVICE_KEY,
                         deviceName = deviceName.orEmpty(),
                         raceLabel = race?.label.orEmpty(),
-                        // Time and Bibs are independently-scoped counts (a HistoryLineEntity row
-                        // has exactly one mode), so summing them is safe here — unlike the
-                        // BLE-pulled path below, there's no risk of double-counting the same
-                        // line under two different reads.
-                        unsyncedCount = unsyncedSplits + unsyncedEntries,
+                        unsyncedCount = unsyncedCount,
                         isSelf = true,
                     )
                 }

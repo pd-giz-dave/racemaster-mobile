@@ -321,15 +321,20 @@ Operations hub" section.
       ensure the id is shown as big as possible within the screen constraints of the phone
       — **done**: Beacons > Check (`IdentifyFobScreen`/`IdentifyFobViewModel`), field-verified
       against two real DX-CP27s side by side.
-- [ ] after the race is over this app needs to be in a 'finish' mode that shows the battery
+- [x] after the race is over this app needs to be in a 'finish' mode that shows the battery
       status and powers off the beacon and also logs what has been returned so we know who to
       chase that have not given their beacon back, this finish mode should be able to detect
       connect to, read the battery, power-off and record the battery level and date and
       send that to the racemaster app so it can record beacon usage in its beacon log, that
       log should record beacon id, last read battery level,
       there also needs to be finished/retired/disqualified flags, default finished, that the 
-      user enters for each beacon scanned
-      — Beacons > Close (`CloseBeaconsScreen`) is a placeholder for this; not yet implemented.
+      user enters for each beacon scanned - this can be implied by the lack of a finish scan
+      — **done**: Close is now a full Setup Race mode (`CloseModeScreen`/`CloseModeViewModel`,
+      backed by `CloseModeRepository`), reached from Setup Race or the Beacons hub's own standing
+      "Close" shortcut. Each close is an ordinary `CLOSE` history row (beacon + battery in its
+      note) riding the existing device-sync pipeline, not a bespoke endpoint — picked up by
+      `~racemaster`'s own device list/Update Progress like any other row. Still open: the
+      finished/retired/disqualified flag idea above — unrelated to this, not yet started.
 - [x] during the race when the app is in bibs mode it needs to detect a passing beacon as
       described elsewhere, BUT... to do that reliably the phone must NOT also be in mule mode
       (see the mitigations implemented for beacon programming around scanning)
@@ -423,23 +428,42 @@ In outline the 'beacon plan' consists of:
 
 ## Close mode
 
-- [ ] a new mode is required to 'close' a beacon - the placeholder button is already in place
-      in the beacons hub
-    - [ ] in this mode each beacon visible is shown in nearest first order, when selected
+- [x] a new mode is required to 'close' a beacon - **done**: Close is now a full Setup Race mode
+      (`CloseModeScreen`/`CloseModeViewModel`), not just the beacons hub's own placeholder button
+      — that button is kept as a standing shortcut to the same screen. A Close-mode race's own
+      location is fixed to "Close" (same reasoning Time's is fixed to "Finish") so a dedicated
+      close-station phone is identifiable in `~racemaster`'s own device list, since it never logs
+      a Bib/Time entry of its own.
+    - [x] in this mode each beacon visible is shown in nearest first order, when selected
           after confirmation, the beacons battery level is read and then its turned off,
           the battery level and turn off time is logged for later transfer to ~racemaster for
           analysis (the transfer via bt or the server and analysis is already implemented there)
-    - [ ] this mode needs to be aware of the issued beacons and show a list of outstanding ones
+          — **done**: logged as an ordinary `CLOSE` history row (`CloseModeRepository`), synced
+          to the server by the existing device-sync pipeline like any other row, not a bespoke
+          endpoint. `~racemaster`'s own `progress.json` handling for these rows is still open
+          (see docs/beacon-detection-plan.md's own Part E).
+    - [x] this mode needs to be aware of the issued beacons and show a list of outstanding ones
           in bib number order
 
 ## Count mode
 
-- [ ] another new mode is required to count beacons before the start, race day practice is to
+- [x] another new mode is required to count beacons before the start, race day practice is to
       count runners into a pen before the start to ensure they are all present, the objective
       of this mode is to note the bib number as the runners pass one or more of these phones
       as they walk into the pen, they will do this many at a time, the phones need to show a count
       of unique beacons seen and a list of bib numbers yet to be seen, only close range beacons
-      should be counted
+      should be counted — **done**: Count is a full Setup Race mode
+      (`CountModeScreen`/`CountModeViewModel`), passive/no-tap, deduped by beacon number (not
+      resolved bib — a beacon can be counted before its bib pairing is known), close-range-gated
+      the same way Bibs' own checkpoint detection is. Its own location is fixed to "Start" (same
+      reasoning Close's is fixed to "Close") so a dedicated headcount phone is identifiable in
+      `~racemaster`'s own device list. The Beacons hub also got its own standing "Count" shortcut
+      to the same screen, mirroring Close's. Both Count and Close gained a top-bar "Stop" action
+      in place of Relocate (clearing the race's own mode back to null via
+      `RaceRepository.stopMode`) — the only way to ever leave either mode once set up, since
+      neither has a Reset; it's also what unblocks Race History's delete action for that race,
+      which was otherwise permanently guarded against deletion while `race.mode` stayed Count or
+      Close (see `isRaceActive`'s own doc).
 
 ## Sweep
 
@@ -447,9 +471,19 @@ In outline the 'beacon plan' consists of:
       pack for the purposes of ensuring nobody goes off-course, they do not count as competitors,
       they are a safety feature, so count mode should ignore them, other modes should record them
       but not give them a split number, their nominal bib number is always 000
+      — **count mode's own half done**: `CountModeViewModel` ignores beacon 000 outright. The
+      "other modes should record but not split-number it" half is still open — unrelated to the
+      Count/Close mode rework, a separate item.
 
 # Samsung XCover 4 setup
 
 Need a script/checklist of everything that can be turned off to 'lock-down' the phone to be as
 specific as possible to just running this app. In particular to minimise network and BLE traffic
 and minimise battery drain from 'irrelevant' services.
+
+# Network issue question
+
+In the context of a weak mobile signal where connections can drop out, how is a re-send handled?
+If a message is long the probability of a drop-out is much higher than for a short message.
+Should we mitigate for this by breaking up long messages into shorter ones that can be 
+re-constructed at the destination as pieces arrive? Or is this auto by the TCP/IP protocol?

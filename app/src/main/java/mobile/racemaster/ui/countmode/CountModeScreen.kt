@@ -1,0 +1,119 @@
+package mobile.racemaster.ui.countmode
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.ui.components.ModeScreenTopBar
+import mobile.racemaster.ui.help.HelpTopics
+import mobile.racemaster.util.withClickSound
+
+/** Pre-start headcount — see [CountModeViewModel]'s own doc. Structurally the simplest of the
+ *  four mode screens: one running count, one list of issued-but-not-yet-seen bibs — no per-
+ *  beacon dialog or result banner, since counting has no fallible action to report on the way a
+ *  BLE connect/power-off does. The top bar's own secondary action is "Stop" (per direct
+ *  feedback: Relocate's full name/location/mode editor was clunky for a mode with nothing
+ *  meaningful to relocate) — clears the race's mode back to null ([mobile.racemaster.data.repository.RaceRepository.stopMode])
+ *  rather than opening a separate screen, since Count has no Reset of its own (see
+ *  [CountModeViewModel]'s own doc): it's the only way to ever move this race out of Count mode
+ *  once it's set up. Reached via Routes.COUNT_MODE (Setup Race) and Routes.COUNT_BEACONS (the
+ *  Beacons hub's own standing shortcut) alike — Stop is disabled on the latter path unless the
+ *  active race's own current mode genuinely is Count (see
+ *  [CountModeUiState.canStopCountMode]'s own doc). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CountModeScreen(
+    onHome: () -> Unit,
+    viewModel: CountModeViewModel = viewModel(factory = CountModeViewModel.Factory),
+) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    var showStopConfirm by remember { mutableStateOf(false) }
+
+    if (showStopConfirm) {
+        AlertDialog(
+            onDismissRequest = { showStopConfirm = false },
+            title = { Text("Stop Count Mode?") },
+            text = { Text("This clears the mode so a different one can be set up for this race. Beacons already seen stay recorded.") },
+            confirmButton = {
+                Button(onClick = withClickSound {
+                    showStopConfirm = false
+                    viewModel.stopMode()
+                    onHome()
+                }) { Text("Stop") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = withClickSound { showStopConfirm = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    Scaffold(
+        topBar = {
+            ModeScreenTopBar(
+                title = "Count Mode",
+                thisRaceEnabled = uiState.canStopCountMode,
+                thisRaceLabel = "Stop",
+                onThisRace = { showStopConfirm = true },
+                onHome = onHome,
+                helpTopic = HelpTopics.CountMode,
+            )
+        },
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+    ) { padding ->
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                item {
+                    Text(
+                        "${uiState.uniqueBeaconsSeen} unique beacons seen",
+                        style = MaterialTheme.typography.headlineSmall,
+                    )
+                    Text(
+                        "${uiState.outstanding.size} of ${uiState.totalIssued} yet to be seen",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+                }
+                if (uiState.outstanding.isEmpty()) {
+                    item {
+                        Text(
+                            "None — every issued beacon has been seen.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                } else {
+                    items(uiState.outstanding, key = { it.beaconNumber }) { outstanding ->
+                        Text(
+                            "Bib ${outstanding.bibNumber} — beacon %03d".format(outstanding.beaconNumber),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}

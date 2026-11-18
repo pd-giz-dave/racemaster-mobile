@@ -97,6 +97,11 @@ private fun HistoryAction.toServerAction(): String = when (this) {
     // (server, a Mule's own pull cache, the web app) must recognize and act on: discard
     // whatever's already held for this exact race+device identity before applying what follows.
     HistoryAction.NEW_RACE -> "NewRace"
+    // Close Mode / Count Mode — see each action's own doc. Plain, distinct wire strings; the
+    // beacon number/battery payload travels in `note`, same as every other action that needs
+    // more than bib/split can carry.
+    HistoryAction.CLOSE -> "Close"
+    HistoryAction.COUNT_SEEN -> "CountSeen"
 }
 
 /**
@@ -128,6 +133,8 @@ fun SyncRecord.toHistoryAction(): HistoryAction = when (action) {
     "Location" -> HistoryAction.LOCATION
     "NewRace" -> HistoryAction.NEW_RACE
     "Ping" -> HistoryAction.PING
+    "Close" -> HistoryAction.CLOSE
+    "CountSeen" -> HistoryAction.COUNT_SEEN
     // An unrecognized wire value — includes a legacy "Stop" from a not-yet-upgraded peer or an
     // old server-side file (STOP was removed — see HistoryAction's own doc); should otherwise
     // not get here.

@@ -28,12 +28,13 @@ import mobile.racemaster.data.db.entity.TargetedProgressEntity
         ProgressEntity::class,
         TargetedProgressEntity::class,
     ],
-    // Bumped for the cpModeNextSplit/cpModeStartedAtMillis column removal, once CP Mode itself
-    // was removed (TODO.md: "A rationalisation" — Bibs became location-aware instead). No
-    // explicit Migration needed, same as the last several bumps — AppContainer's
-    // fallbackToDestructiveMigration(dropAllTables = true) already wipes and recreates the whole
-    // local DB on any version mismatch.
-    version = 35,
+    // Bumped past the short-lived beacon_close table (added and removed in the same session —
+    // Close Beacons' reporting moved to ordinary HistoryLineEntity rows instead, ridding the
+    // existing sync pipeline rather than a bespoke table/endpoint). No explicit Migration needed,
+    // same as the last several bumps — AppContainer's fallbackToDestructiveMigration(
+    // dropAllTables = true) already wipes and recreates the whole local DB on any version
+    // mismatch.
+    version = 38,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

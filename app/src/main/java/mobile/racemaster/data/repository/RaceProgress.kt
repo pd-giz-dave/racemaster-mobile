@@ -24,24 +24,35 @@ fun List<HistoryLineEntity>.hasRealEntries(): Boolean = any { it.action !in NON_
  * once started, a mode stays active until Reset, which is the only thing that ever clears the
  * relevant started-at field back to null — same as a race that was never started at all, which
  * is the one case this is meant to *not* protect.
+ *
+ * Count/Close have no started-at column of their own (see CloseModeRepository/
+ * CountModeRepository's own doc for why — neither has a segment/Reset concept to track): a race
+ * set up in either mode is simply active for as long as [mode] names it, the whole time it's the
+ * race's current mode — the only way to stop being active in Count/Close is Relocate switching
+ * the race to a different mode entirely, which [mode] already reflects.
  */
-fun isRaceActive(timeModeStartedAtMillis: Long?, bibsModeStartedAtMillis: Long?): Boolean =
-    timeModeStartedAtMillis != null || bibsModeStartedAtMillis != null
+fun isRaceActive(timeModeStartedAtMillis: Long?, bibsModeStartedAtMillis: Long?, mode: String?): Boolean =
+    timeModeStartedAtMillis != null || bibsModeStartedAtMillis != null ||
+        mode == AppMode.COUNT.name || mode == AppMode.CLOSE.name
 
 /**
  * Which mode(s) are actually keeping [isRaceActive] true for this race — i.e. which of Time/Bibs
- * still have a non-null startedAtMillis for the current segment. A race can be active in a mode
- * entirely different from whichever one the operator is currently looking at (nothing stops
- * switching AppMode without starting a new race — see RaceDetailsScreen's own doc): Time Mode's
- * own screen looks fully idle right after its own Stop+Reset, with no hint that Bibs was also
- * started for this same race at some point and never separately reset. Surfaced directly so
- * RaceHistoryScreen's "can't be deleted" caption can name the actual culprit instead of leaving
- * the operator to guess which of two screens to go reset.
+ * still have a non-null startedAtMillis for the current segment, plus Count/Close whenever
+ * [mode] currently names either (see [isRaceActive]'s own doc on why those two have no
+ * started-at field to check instead). A race can be active in a mode entirely different from
+ * whichever one the operator is currently looking at (nothing stops switching AppMode without
+ * starting a new race — see RaceDetailsScreen's own doc): Time Mode's own screen looks fully idle
+ * right after its own Stop+Reset, with no hint that Bibs was also started for this same race at
+ * some point and never separately reset. Surfaced directly so RaceHistoryScreen's "can't be
+ * deleted" caption can name the actual culprit instead of leaving the operator to guess which
+ * screen to go reset.
  */
-fun activeModeLabels(timeModeStartedAtMillis: Long?, bibsModeStartedAtMillis: Long?): List<String> =
+fun activeModeLabels(timeModeStartedAtMillis: Long?, bibsModeStartedAtMillis: Long?, mode: String?): List<String> =
     listOfNotNull(
         "Time Mode".takeIf { timeModeStartedAtMillis != null },
         "Bibs Mode".takeIf { bibsModeStartedAtMillis != null },
+        "Count Mode".takeIf { mode == AppMode.COUNT.name },
+        "Close Mode".takeIf { mode == AppMode.CLOSE.name },
     )
 
 /**
@@ -53,7 +64,7 @@ fun activeModeLabels(timeModeStartedAtMillis: Long?, bibsModeStartedAtMillis: Lo
  */
 suspend fun isRaceCurrentlyActive(raceId: Long, raceRepository: RaceRepository): Boolean {
     val race = raceRepository.getRace(raceId) ?: return false
-    return isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis)
+    return isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.mode)
 }
 
 // The one place an AppMode's recording-mode name is spelled out, so the wording can't drift
@@ -61,4 +72,6 @@ suspend fun isRaceCurrentlyActive(raceId: Long, raceRepository: RaceRepository):
 fun AppMode.displayName(): String = when (this) {
     AppMode.TIME -> "Time Mode"
     AppMode.BIBS -> "Bibs Mode"
+    AppMode.COUNT -> "Count Mode"
+    AppMode.CLOSE -> "Close Mode"
 }

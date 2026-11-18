@@ -235,16 +235,22 @@ fun SetupRaceScreen(
                 ModeChoiceButton("Time", mode == AppMode.TIME, !hasActiveRace, Modifier.weight(1f)) { mode = AppMode.TIME }
                 ModeChoiceButton("Bibs", mode == AppMode.BIBS, !hasActiveRace, Modifier.weight(1f)) { mode = AppMode.BIBS }
             }
-            // Hidden for Time (TODO.md's "A rationalisation" — it records irrespective of where
-            // the device is, so there's nothing here worth prompting for). `location` itself stays
-            // whatever the draft last held (defaulting to "Finish" — see draftSeeded's own LaunchedEffect)
-            // so isValidLocationForMode's Time branch (non-blank) is always satisfied without the
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ModeChoiceButton("Count", mode == AppMode.COUNT, !hasActiveRace, Modifier.weight(1f)) { mode = AppMode.COUNT }
+                ModeChoiceButton("Close", mode == AppMode.CLOSE, !hasActiveRace, Modifier.weight(1f)) { mode = AppMode.CLOSE }
+            }
+            // Bibs is the only mode this field is ever shown for now — Time/Count/Close each get
+            // their own fixed value instead (RaceRepository.recordModeStart's own
+            // `effectiveLocation`: "Finish"/"Start"/"Close" respectively), with nothing here
+            // worth prompting for. `location` itself stays whatever the draft last held
+            // (defaulting to "Finish" — see draftSeeded's own LaunchedEffect) so
+            // isValidLocationForMode's permissive non-Bibs branch is always satisfied without the
             // operator ever having to see or touch this field.
-            if (mode != AppMode.TIME) {
+            if (mode == AppMode.BIBS) {
                 HistoryTextField(
                     value = location,
                     onValueChange = { location = it },
-                    label = if (mode == AppMode.BIBS) "Location (e.g. Start, Finish, CP1, CP2-Bridge)" else "Location (e.g. Finish, CP1, CP2, et al)",
+                    label = "Location (e.g. Start, Finish, CP1, CP2-Bridge)",
                     history = locationHistory,
                     enabled = !hasActiveRace,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -66,6 +67,9 @@ fun RaceProgressSummary(
     progressText: String,
     nextRowTrailingContent: @Composable RowScope.() -> Unit = {},
     showLocation: Boolean = true,
+    // False for Count/Close (see CloseModeRepository/CountModeRepository's own doc) — neither
+    // has a segmented split-counter concept, so [nextSplitNumber] is meaningless for them.
+    showNextSplit: Boolean = true,
     otherOpenLocations: List<String> = emptyList(),
     onGoToLocation: ((String) -> Unit)? = null,
 ) {
@@ -98,10 +102,14 @@ fun RaceProgressSummary(
         }
     }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(
-            text = "Next: ${formatSplitRef(nextSplitNumber)}",
-            style = MaterialTheme.typography.labelMedium,
-        )
+        if (showNextSplit) {
+            Text(
+                text = "Next: ${formatSplitRef(nextSplitNumber)}",
+                style = MaterialTheme.typography.labelMedium,
+            )
+        } else {
+            Spacer(modifier = Modifier)
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             nextRowTrailingContent()
             SyncStatusLine(unsyncedCount, lastSyncedAtMillis)

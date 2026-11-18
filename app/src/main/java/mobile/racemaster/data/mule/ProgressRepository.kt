@@ -139,6 +139,12 @@ class ProgressRepository(
     suspend fun getBibForBeacon(raceId: Long, beaconNumber: Int): Int? =
         existingEntries(raceId).firstOrNull { it.beaconNumber == beaconNumber }?.bibNumber
 
+    /** Every entry issued a beacon for [raceId] — backs Close Beacons' "outstanding" list.
+     *  Reads the same Room-persisted copy as [getBibForBeacon], just unfiltered by a specific
+     *  beacon number. */
+    suspend fun issuedBeacons(raceId: Long): List<ProgressEntry> =
+        existingEntries(raceId).filter { it.beaconNumber != null }
+
     // Upserts [changed] into [existing] by bibNumber — a changed bib replaces its old entry, a
     // new bib is added, everything else is left exactly as it was. Mirrors racemaster's own
     // server/mobile.js mergeProgress (the write-side counterpart), just with no equivalent of its

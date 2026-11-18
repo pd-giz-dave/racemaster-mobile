@@ -24,7 +24,9 @@ fun isValidLocationForMode(location: String, mode: AppMode?): Boolean = when (mo
         val trimmed = location.trim()
         trimmed.equals("Start", ignoreCase = true) || trimmed.equals("Finish", ignoreCase = true) || isValidCpLocation(location)
     }
-    AppMode.TIME -> location.isNotBlank()
+    // Count/Close have no course-position meaning (see CloseModeRepository/CountModeRepository's
+    // own doc) — same permissive, free-text treatment as Time.
+    AppMode.TIME, AppMode.COUNT, AppMode.CLOSE -> location.isNotBlank()
 }
 
 /** Bibs mode's location-driven default action (TODO.md: "A rationalisation") — "Start"/"Finish"

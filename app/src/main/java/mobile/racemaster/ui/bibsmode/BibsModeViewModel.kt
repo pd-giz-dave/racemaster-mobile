@@ -291,7 +291,7 @@ class BibsModeViewModel(
                 )
             },
             canUndo = entries.hasRealEntries(),
-            raceInProgress = isRaceActive(race?.timeModeStartedAtMillis, race?.bibsModeStartedAtMillis),
+            raceInProgress = isRaceActive(race?.timeModeStartedAtMillis, race?.bibsModeStartedAtMillis, race?.mode),
             unsyncedCount = unsyncedCount,
             lastSyncedAtMillis = lastSyncedAtMillis,
             expectedCount = expectedBibs.size,
