@@ -455,7 +455,7 @@ In outline the 'beacon plan' consists of:
       should be counted — **done**: Count is a full Setup Race mode
       (`CountModeScreen`/`CountModeViewModel`), passive/no-tap, deduped by beacon number (not
       resolved bib — a beacon can be counted before its bib pairing is known), close-range-gated
-      the same way Bibs' own checkpoint detection is. Its own location is fixed to "Start" (same
+      the same way Bibs' own checkpoint detection is. Its own location is fixed to "Pen" (same
       reasoning Close's is fixed to "Close") so a dedicated headcount phone is identifiable in
       `~racemaster`'s own device list. The Beacons hub also got its own standing "Count" shortcut
       to the same screen, mirroring Close's. Both Count and Close gained a top-bar "Stop" action
@@ -464,6 +464,9 @@ In outline the 'beacon plan' consists of:
       neither has a Reset; it's also what unblocks Race History's delete action for that race,
       which was otherwise permanently guarded against deletion while `race.mode` stayed Count or
       Close (see `isRaceActive`'s own doc).
+- [ ] a means to eject one or all seen beacons is required to facilitate runners going away from
+      the start and returning later (e.g they forgot their compulsory kit) or to re-start the count
+      due to errors/confusion
 
 ## Sweep
 
@@ -487,3 +490,27 @@ In the context of a weak mobile signal where connections can drop out, how is a 
 If a message is long the probability of a drop-out is much higher than for a short message.
 Should we mitigate for this by breaking up long messages into shorter ones that can be 
 re-constructed at the destination as pieces arrive? Or is this auto by the TCP/IP protocol?
+
+# Tweaks/Bugs
+
+- [x] use location 'Pen' for count mode — **done**: `RaceRepository.recordModeStart`'s
+      `effectiveLocation` for `AppMode.COUNT` is now `"Pen"`, not `"Start"`.
+- [x] in the history view collapse consecutive ping lines in the same state (eg. all sync'd) into 
+      one with "Lnnn - Lmmm" in the line number column where nnn is the first line and mmm is the 
+      last and "hh:ss - hh:ss" in the time column to show the time span of the collapse — **done**:
+      `collapseConsecutivePings` (`ui/components/HistoryLineRow.kt`), applied inside `historyLines`
+      so both Race History's own detail screen and Mule source detail get it automatically. A run
+      of two-or-more consecutive Ping rows sharing the same sync-state colour collapses into one
+      row; any other row, or a state change, breaks the run. Used the existing time column's own
+      "HH:mm" format for both ends of the span rather than "hh:ss" literally (no seconds are
+      otherwise shown anywhere in this view).
+- [x] attempting to delete a history file when the race is active in close mode, it offers to
+      reset the mode, but selecting it does not do it — **done**: `RaceRepository
+      .forceResetActiveModes` only ever checked `timeModeStartedAtMillis`/`bibsModeStartedAtMillis`
+      — Count/Close have neither (see `isRaceActive`'s own doc), so the dialog's "Reset" button
+      silently no-opped for either. Now also calls `stopMode` when `race.mode` is Count or Close.
+- [x] count mode should not do anything if there are no beacon expectations — **done**:
+      `CountModeViewModel.handleBeacon` now returns immediately when `bibByBeaconNumber` is empty
+      (progress.json hasn't synced down an issued-beacon list for this race yet, or the course
+      isn't using Beacons at all), instead of debounce-tracking and recording every nearby beacon
+      as a `COUNT_SEEN` row against a total of 0 with a null bib.

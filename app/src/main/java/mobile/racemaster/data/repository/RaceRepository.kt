@@ -235,13 +235,15 @@ class RaceRepository(
         // lingering Bibs-mode value sitting in Setup Race's own hidden-for-these-modes draft, or
         // free text still typed into Relocate's location field while one of them is selected).
         // Count's and Close's own fixed values are deliberately real, distinct location names
-        // ("Start"/"Close"), not both pinned to "Finish" like Time — per direct instruction, so
+        // ("Pen"/"Close"), not both pinned to "Finish" like Time — per direct instruction, so
         // ~racemaster's own device list lets an operator tell a Count or Close phone apart from
         // everything else at a glance, since neither ever writes a Bib/Time entry of its own to
-        // identify it by otherwise.
+        // identify it by otherwise. Count's own value is "Pen" (TODO.md's "Tweaks": the holding
+        // pen runners walk through pre-start, not "Start" itself — distinct wording avoids
+        // reading like the race's actual start line).
         val effectiveLocation = when (mode) {
             AppMode.TIME -> "Finish"
-            AppMode.COUNT -> "Start"
+            AppMode.COUNT -> "Pen"
             AppMode.CLOSE -> "Close"
             AppMode.BIBS -> location
         }
@@ -429,21 +431,25 @@ class RaceRepository(
     // never mirrored into pulled_records at all, so there's nothing left behind to purge; see
     // PulledRecordEntity's own doc for why that mirroring was removed.
     //
-    // Also clears settingsRepository.activeRaceId if it still points at this race (see
-    // SettingsRepository.clearActiveRaceId's own doc) — a race is deletable here precisely
-    // when it's stopped-and-Reset (or never started), which is exactly the state a race can
-    // sit in while still being the operator's own selected one. Left uncleared, Time/Bibs
-    // Mode's own activeRaceId-driven state keeps rendering a "race" with blank details (label
-    // defaults to "") that still looks active enough to show Start/Log — and the moment an
-    // action tries to write to it (e.g. TimeModeRepository.startStopwatch's own
-    // requireNotNull(raceDao.getById(raceId))), it crashes (confirmed in the field).
+    // Also clears settingsRepository.activeRaceId (and appMode alongside it — see
+    // clearStaleSessionState's own doc) if it still points at this race — a race is deletable
+    // here precisely when it's stopped-and-Reset (or never started), which is exactly the state
+    // a race can sit in while still being the operator's own selected one. Left uncleared,
+    // Time/Bibs Mode's own activeRaceId-driven state keeps rendering a "race" with blank details
+    // (label defaults to "") that still looks active enough to show Start/Log — and the moment
+    // an action tries to write to it (e.g. TimeModeRepository.startStopwatch's own
+    // requireNotNull(raceDao.getById(raceId))), it crashes (confirmed in the field). Clearing
+    // activeRaceId alone (the original fix) left appMode itself stale — confirmed in the field
+    // as a second, related bug: AppEntryViewModel's own startup check only validates a NON-null
+    // activeRaceId that points nowhere, not a null activeRaceId with a leftover appMode, so the
+    // app launched straight into that stale mode's own screen with no race ever set up.
     suspend fun deleteRace(raceId: Long) {
         if (isRaceCurrentlyActive(raceId, this)) return
         if (raceDao.getById(raceId) == null) return
         lineSyncDao.deleteForRace(raceId)
         raceDao.deleteById(raceId)
         if (settingsRepository.activeRaceId.first() == raceId) {
-            settingsRepository.clearActiveRaceId()
+            settingsRepository.clearStaleSessionState()
         }
     }
 
@@ -476,7 +482,9 @@ class RaceRepository(
             )
             raceDao.setNextLineNumber(raceId, 2L)
         }
-        if (settingsRepository.activeRaceId.first() == raceId) settingsRepository.clearActiveRaceId()
+        // See deleteRace's own doc on why this clears appMode too (clearStaleSessionState), not
+        // just activeRaceId.
+        if (settingsRepository.activeRaceId.first() == raceId) settingsRepository.clearStaleSessionState()
     }
 
     fun observePendingDeleteRaceIds(): Flow<List<Long>> = historyLineDao.observePendingDeleteRaceIds()
@@ -547,10 +555,18 @@ class RaceRepository(
     // itself, matching deleteRace's own two-step design: this only clears whatever's blocking
     // isRaceActive, leaving the operator to explicitly delete afterward via the normal
     // confirmation dialog.
+    //
+    // Count/Close have no *StartedAtMillis of their own to check (see isRaceActive's own doc) —
+    // they're the one case where `race.mode` itself, not a started flag, is what's keeping
+    // isRaceActive true, so the in-context equivalent isn't Reset but Stop (see stopMode's own
+    // doc) — confirmed bug otherwise: this fell through as a silent no-op for a race stuck
+    // active in either mode, leaving Race History's own "Reset before deleting" button looking
+    // like it did nothing.
     suspend fun forceResetActiveModes(raceId: Long) {
         val race = raceDao.getById(raceId) ?: return
         if (race.timeModeStartedAtMillis != null) closeCurrentSegment(raceId, HistoryMode.TIME)
         if (race.bibsModeStartedAtMillis != null) closeCurrentSegment(raceId, HistoryMode.BIBS)
+        if (race.mode == AppMode.COUNT.name || race.mode == AppMode.CLOSE.name) stopMode(raceId)
     }
 
     // Resolves a race label back to this device's own local race — see

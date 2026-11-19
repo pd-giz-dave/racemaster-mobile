@@ -33,7 +33,17 @@ class AppEntryViewModel(
         // active mode/race (and reset any Mule Mode session state pinned to it) rather than
         // resuming into a phantom one that crashes the moment an action button touches it.
         val raceId = settingsRepository.activeRaceId.first()
-        if (raceId != null && raceRepository.getRace(raceId) == null) {
+        val raceMissing = raceId != null && raceRepository.getRace(raceId) == null
+        // A second, narrower case of the same drift: no race selected at all (raceId null,
+        // not merely pointing nowhere), yet a leftover appMode from one that's since been
+        // deleted — confirmed in the field (RaceRepository.deleteRace/requestDeleteRace used to
+        // clear only activeRaceId, never appMode, see their own doc). Without this, the app
+        // launches straight into that stale mode's own screen with no race ever set up, which no
+        // mode screen actually guards against (RaceContext.race lands null, but nothing routes
+        // back to Mode Picker). Those two call sites are fixed now too, but this check also
+        // repairs a phone already stuck in the state (DataStore persists past any app update).
+        val modeWithNoRace = raceId == null && settingsRepository.appMode.first() != null
+        if (raceMissing || modeWithNoRace) {
             settingsRepository.clearStaleSessionState()
         }
         emitAll(settingsRepository.appMode.map { mode -> StartDestinationState.Ready(mode) as StartDestinationState })

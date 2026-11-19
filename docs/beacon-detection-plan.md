@@ -97,7 +97,7 @@ kept in the Reference section below, re-homed under the area it actually support
       (`CountModeScreen`/`CountModeViewModel`, backed by `CountModeRepository`), purely passive
       (no tap, no confirmation), deduped by beacon number rather than resolved bib (a beacon can
       be counted before its bib pairing is known), reusing `BeaconScanEngine`'s own extracted
-      debounce functions rather than that engine itself. Its own location is forced to `"Start"`
+      debounce functions rather than that engine itself. Its own location is forced to `"Pen"`
       for the same device-list-identifiability reason Close's is forced to `"Close"`.
 
 ## Sweep

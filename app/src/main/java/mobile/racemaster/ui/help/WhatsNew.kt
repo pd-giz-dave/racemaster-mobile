@@ -18,7 +18,7 @@ object WhatsNew {
                     "ignoring the 000 sweep); Close is post-race beacon tidy-up (read battery, " +
                     "power off, logged even if a beacon is re-presented and closed more than " +
                     "once). Both show up in the web app's own device list under a fixed " +
-                    "location (\"Start\"/\"Close\") so an operator can tell a dedicated Count or " +
+                    "location (\"Pen\"/\"Close\") so an operator can tell a dedicated Count or " +
                     "Close phone apart from everything else, since neither ever logs a Bib or " +
                     "Time entry.",
                 "The Beacons hub now has standing \"Close\" and \"Count\" shortcuts too, usable " +

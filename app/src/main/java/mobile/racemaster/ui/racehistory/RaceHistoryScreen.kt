@@ -304,8 +304,10 @@ fun RaceHistoryScreen(
                 Text(
                     "\"${race.label}\" is still active in ${race.activeModeLabels.joinToString(" + ")} " +
                         "— that mode's own screen may no longer show this race at all if you've since " +
-                        "moved on to another one. Resetting clears its unfinished segment only; the " +
-                        "rest of its history is kept, and you can then delete it separately.",
+                        "moved on to another one. Resetting clears whatever's keeping it active (an " +
+                        "unfinished segment, or — for Count/Close, which have no segment of their own " +
+                        "— the mode itself); the rest of its history is kept, and you can then delete " +
+                        "it separately.",
                 )
             },
             confirmButton = {

@@ -241,7 +241,7 @@ fun SetupRaceScreen(
             }
             // Bibs is the only mode this field is ever shown for now — Time/Count/Close each get
             // their own fixed value instead (RaceRepository.recordModeStart's own
-            // `effectiveLocation`: "Finish"/"Start"/"Close" respectively), with nothing here
+            // `effectiveLocation`: "Finish"/"Pen"/"Close" respectively), with nothing here
             // worth prompting for. `location` itself stays whatever the draft last held
             // (defaulting to "Finish" — see draftSeeded's own LaunchedEffect) so
             // isValidLocationForMode's permissive non-Bibs branch is always satisfied without the

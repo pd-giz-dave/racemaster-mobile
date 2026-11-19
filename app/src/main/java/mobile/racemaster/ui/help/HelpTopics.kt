@@ -167,6 +167,9 @@ object HelpTopics {
                 "that undid an earlier one), \"dup of S…\" for a repeated bib, \"Edited from " +
                 "L…\" for a correction, and \"Synced to: …\" naming exactly which device(s) " +
                 "this one row has reached.",
+            "A run of consecutive Pings that all share the same colour collapses into one row " +
+                "spanning the whole run — \"L010 - L014\" and the first and last Ping's own " +
+                "times — rather than listing every identical heartbeat separately.",
         ),
     )
 
@@ -263,10 +266,13 @@ object HelpTopics {
             "A pre-start headcount: shows a running count of unique beacons seen nearby, no " +
                 "tapping required — just walk runners past the phone one at a time. Beacon 000 " +
                 "(the sweep) is never counted.",
+            "Does nothing at all until this race has an actual beacon expectation list (from " +
+                "progress.json) — with none yet, nearby beacons are simply ignored rather than " +
+                "being counted against a total of 0.",
             "Only close-range beacons count, and each one only once — a beacon that's already " +
                 "been seen doesn't add to the total again, so lingering near the phone is " +
                 "harmless.",
-            "Set up as its own Setup Race mode, location fixed to \"Start\" — lets a dedicated " +
+            "Set up as its own Setup Race mode, location fixed to \"Pen\" — lets a dedicated " +
                 "headcount phone be told apart from every other device in the web app's own " +
                 "device list, since it never logs a Bib or Time entry of its own.",
             "The top bar's \"Stop\" clears this race's mode (beacons already seen stay " +

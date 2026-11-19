@@ -140,26 +140,25 @@ class SettingsRepository(
         dataStore.edit { prefs -> prefs[Keys.ACTIVE_RACE_ID] = id }
     }
 
-    // Unlike clearStaleSessionState below (a startup-only, whole-DB-wipe backstop), this is
-    // the in-session counterpart: called by RaceRepository.deleteRace when the race it just
-    // deleted was the operator's own selected one, so Time/Bibs Mode's own activeRaceId-driven
-    // state doesn't keep dangling on a now-nonexistent raceId for the rest of this process's
-    // life. appMode is deliberately left alone here (unlike clearStaleSessionState, which
-    // clears both) — the operator is still legitimately in whichever mode they were in, just
-    // without a race selected anymore, exactly the state a race deleted before ever picking a
-    // mode already renders correctly.
-    suspend fun clearActiveRaceId() {
-        dataStore.edit { prefs -> prefs.remove(Keys.ACTIVE_RACE_ID) }
-    }
-
-    // A destructive Room migration (schema version bump with no explicit Migration, see
-    // RacemasterDatabase) wipes every race — and every Mule-pulled record — but leaves all of
-    // this DataStore-backed state untouched, since it's an entirely separate storage
-    // mechanism. Without this, the app would silently resume into a mode screen referencing a
-    // race that no longer exists (crashing the moment any action button hits it). Called once
-    // at startup after validating the referenced race is actually gone (see
-    // AppEntryViewModel). Login state (server URL, auth token) is deliberately left alone —
-    // a local data wipe doesn't invalidate who you're logged in as.
+    // Also the in-session counterpart RaceRepository.deleteRace/requestDeleteRace call when the
+    // race they just deleted was the operator's own selected one, so Time/Bibs Mode's own
+    // activeRaceId-driven state doesn't keep dangling on a now-nonexistent raceId for the rest
+    // of this process's life — clears appMode right alongside it, not just activeRaceId: a mode
+    // with no race behind it is never meaningful (every mode is chosen via Setup Race, always
+    // in the context of a specific race — see RaceRepository.recordModeStart, the only place
+    // appMode is ever set), so leaving it set is always stale, never "legitimately still in that
+    // mode." A previous version of this function left appMode alone on the theory that the
+    // operator was "still legitimately in whichever mode they were in" — confirmed in the field
+    // to be wrong: no mode screen actually handles a null race, so the app launched straight
+    // into a blank, non-functional one with no race ever set up (see AppEntryViewModel's own
+    // startup check, which also repairs a phone already stuck in that state from before this
+    // fix). A destructive Room migration (schema version bump with no explicit Migration, see
+    // RacemasterDatabase) wipes every race the same way but leaves all of this DataStore-backed
+    // state untouched, since it's an entirely separate storage mechanism — without this, the app
+    // would silently resume into a mode screen referencing a race that no longer exists
+    // (crashing the moment any action button hits it) in that case too. Login state (server URL,
+    // auth token) is deliberately left alone — neither a deleted race nor a local data wipe
+    // invalidates who you're logged in as.
     suspend fun clearStaleSessionState() {
         dataStore.edit { prefs ->
             prefs.remove(Keys.ACTIVE_RACE_ID)
