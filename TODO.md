@@ -536,3 +536,10 @@ re-constructed at the destination as pieces arrive? Or is this auto by the TCP/I
       (`Routes.CLOSE_BEACONS`). Removed the now-unreachable `Routes.COUNT_BEACONS` route/
       composable and the `onCount` nav callback, replacing it with a plain `onSetupRace`
       callback the dialog's action button uses.
+- [x] when speaking bib numbers that arrive on mass later ones truncate earlier ones, can they be
+      queued so all are fully spoken (racemaster's own ToDo.MD) — **done**: `BibSpeaker.speakNow`
+      called `tts.speak()` with `QUEUE_FLUSH`, which cuts off whatever's currently being read the
+      moment the next bib commits — both `BibsModeViewModel`'s own rapid manual entry and
+      `BeaconScanEngine`'s own automatic checkpoint detections (several runners passing close
+      together) can genuinely out-pace one utterance's reading time. Switched to `QUEUE_ADD` so
+      every bib is read in full, in arrival order, instead of truncating whatever was still playing.

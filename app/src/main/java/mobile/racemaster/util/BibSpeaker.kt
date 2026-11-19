@@ -144,10 +144,17 @@ class BibSpeaker(private val context: Context) {
                 putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_ALARM)
             }
             val words = digitsString.toSpokenDigits()
+            // QUEUE_ADD, not QUEUE_FLUSH (TODO.md: "when speaking bib numbers that arrive on
+            // mass later ones truncate earlier ones, can they be queued so all are fully spoken")
+            // — bibs genuinely can arrive faster than one utterance takes to read, both from
+            // BibsModeViewModel's own rapid manual entry and BeaconScanEngine's own automatic
+            // checkpoint detections (several runners passing close together) — QUEUE_FLUSH used
+            // to cut the previous bib's announcement off mid-word the moment the next one
+            // committed, rather than ever letting an operator hear either one in full.
             // speak() itself never throws on failure — it returns ERROR instead (e.g. engine
             // busy, or a rejected utterance), which runCatching alone can't see — log it
             // explicitly or a silent failure here is otherwise undiagnosable from outside.
-            val result = tts.speak(words, TextToSpeech.QUEUE_FLUSH, params, "bib_$digitsString")
+            val result = tts.speak(words, TextToSpeech.QUEUE_ADD, params, "bib_$digitsString")
             Log.i(TAG, "speak(\"$words\") result=$result (SUCCESS=${TextToSpeech.SUCCESS})")
         }.onFailure { Log.w(TAG, "speakNow threw", it) }
     }
