@@ -31,6 +31,11 @@ fun HistoryMode.displayName(): String = when (this) {
 /** Column form — always 3+ digits, overflowing rather than truncating past 999 (e.g. "L1000"). */
 fun formatLineColumn(lineNumber: Long): String = "L${lineNumber.toString().padStart(3, '0')}"
 
+/** A collapsed run's own line-number column — see HistoryLineRow's own doc on collapsing
+ *  consecutive Ping rows. */
+fun formatLineRange(fromLineNumber: Long, toLineNumber: Long): String =
+    "${formatLineColumn(fromLineNumber)} - ${formatLineColumn(toLineNumber)}"
+
 /** Column form — always 3+ digits, overflowing rather than truncating past 999 (e.g. "S1000").
  *  Null (a RETIRE row, or a Stop/Reset marker — see HistoryLineEntity.splitNumber's own doc)
  *  shows as "S–", never a fake/reused number. */
