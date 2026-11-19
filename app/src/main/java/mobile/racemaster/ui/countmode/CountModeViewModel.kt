@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -120,11 +121,13 @@ class CountModeViewModel(
                     _uiState.update { it.copy(outstanding = emptyList(), totalIssued = 0, uniqueBeaconsSeen = 0) }
                     return@collectLatest
                 }
-                val issued = progressRepository.issuedBeacons(raceId)
-                bibByBeaconNumber = issued.associate { it.beaconNumber!! to it.bibNumber }
-                _uiState.update { it.copy(totalIssued = issued.size) }
-                countModeRepository.observeCounts(raceId).collect { rows ->
+                combine(
+                    progressRepository.observeIssuedBeacons(raceId),
+                    countModeRepository.observeCounts(raceId),
+                ) { issued, rows -> issued to rows }.collect { (issued, rows) ->
+                    bibByBeaconNumber = issued.associate { it.beaconNumber!! to it.bibNumber }
                     seenBeaconNumbers = rows.mapNotNull { parseBeaconCount(it.note) }.toSet()
+                    _uiState.update { it.copy(totalIssued = issued.size) }
                     recomputeOutstanding()
                 }
             }
@@ -155,6 +158,11 @@ class CountModeViewModel(
     private fun handleBeacon(beaconNumber: Int, distanceMeters: Double) {
         // Beacon 000 is the sweep — never counted (TODO.md).
         if (beaconNumber == 0) return
+        // Nothing issued for this race yet (progress.json hasn't synced, or this course isn't
+        // using Beacons at all) — recording COUNT_SEEN rows against a total of 0 only produced a
+        // confusing "0 of 0" with every beacon logged under a null bib, so Count mode is a no-op
+        // until there's an actual expectation list to count against.
+        if (bibByBeaconNumber.isEmpty()) return
         if (distanceMeters > COUNT_MAX_DISTANCE_METERS) return
         val now = System.currentTimeMillis()
         val updated = detectionTracking.compute(beaconNumber) { _, existing -> updatedDetectionTracking(existing, now, DEBOUNCE_GAP_MILLIS) }!!
@@ -168,15 +176,26 @@ class CountModeViewModel(
         if (beaconNumber in seenBeaconNumbers) return
         val raceId = raceIdFlow.value ?: return
         val bib = progressRepository.getBibForBeacon(raceId, beaconNumber)
-        countModeRepository.recordCount(raceId, beaconNumber, bib)
+        // The seen tally itself is deliberately not computed here from seenBeaconNumbers — see
+        // CountModeRepository.recordCount's own doc for why that used to race when two beacons
+        // committed close together.
+        countModeRepository.recordCount(raceId, beaconNumber, bib, bibByBeaconNumber.size)
     }
 
     /** "Stop" — see [CountModeUiState.canStopCountMode]'s own doc for why this is gated on the
-     *  race's own current mode actually being Count. */
+     *  race's own current mode actually being Count. Writes a COUNT_STOPPED row first when
+     *  beacons are still outstanding (see [HistoryAction.COUNT_STOPPED]'s own doc) — nothing to
+     *  say if every issued beacon was already seen, since COUNT_COMPLETE already said so. */
     fun stopMode() {
         if (!_uiState.value.canStopCountMode) return
         val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch { raceRepository.stopMode(raceId) }
+        val outstandingCount = _uiState.value.outstanding.size
+        viewModelScope.launch {
+            if (outstandingCount > 0) {
+                countModeRepository.recordStopped(raceId, outstandingCount)
+            }
+            raceRepository.stopMode(raceId)
+        }
     }
 
     companion object {

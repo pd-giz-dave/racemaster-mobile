@@ -139,11 +139,18 @@ class ProgressRepository(
     suspend fun getBibForBeacon(raceId: Long, beaconNumber: Int): Int? =
         existingEntries(raceId).firstOrNull { it.beaconNumber == beaconNumber }?.bibNumber
 
-    /** Every entry issued a beacon for [raceId] — backs Close Beacons' "outstanding" list.
-     *  Reads the same Room-persisted copy as [getBibForBeacon], just unfiltered by a specific
-     *  beacon number. */
-    suspend fun issuedBeacons(raceId: Long): List<ProgressEntry> =
-        existingEntries(raceId).filter { it.beaconNumber != null }
+    /** Every entry issued a beacon for [raceId] — backs Count/Close Mode's own "expected total"
+     *  and outstanding lists. Emits a fresh list whenever Room's progress row for [raceId]
+     *  actually changes (a progress.json poll, a BLE delivery), not just once at subscription
+     *  time — Count/Close Mode must read this reactively, not with a one-shot snapshot: a
+     *  one-shot read taken at screen-open can race a progress pull landing a moment later
+     *  (confirmed in the field — opening Count Mode right after Setup Race can beat the next poll
+     *  tick), leaving totalIssued stuck at 0 for the rest of that ViewModel's life with nothing
+     *  afterward ever noticing the data actually arrived. */
+    fun observeIssuedBeacons(raceId: Long): Flow<List<ProgressEntry>> =
+        progressDao.observeByRaceId(raceId).map { entity ->
+            entity?.toStoredProgress()?.entries.orEmpty().filter { it.beaconNumber != null }
+        }
 
     // Upserts [changed] into [existing] by bibNumber — a changed bib replaces its old entry, a
     // new bib is added, everything else is left exactly as it was. Mirrors racemaster's own

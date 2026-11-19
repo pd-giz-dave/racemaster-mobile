@@ -2,6 +2,8 @@ package mobile.racemaster.ui.bibsmode
 
 import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
 import mobile.racemaster.data.db.entity.HistoryAction
+import mobile.racemaster.data.repository.parseCountCompleteTotal
+import mobile.racemaster.data.repository.parseCountOutstanding
 
 fun HistoryAction.displayName(): String = when (this) {
     HistoryAction.SPLIT -> "Split"
@@ -38,7 +40,28 @@ fun HistoryAction.displayName(): String = when (this) {
     // own live screen (neither CloseModeScreen nor CountModeScreen renders a row-by-row
     // history), only here in Race History's full chronology.
     HistoryAction.CLOSE -> "Close"
-    HistoryAction.COUNT_SEEN -> "Count Seen"
+    HistoryAction.CLOSE_REOPENED -> "Reopened"
+    // Deliberately just "Seen", not "Seen N of M" — the row's own note line already shows that
+    // tally (see HistoryAction.COUNT_SEEN's own doc on its "beacon=<n> seen=<n> of=<m>" note),
+    // so repeating it in the label was redundant (direct feedback).
+    HistoryAction.COUNT_SEEN -> "Seen"
+    // "Seen all", not "Count Complete" (direct feedback) — matches COUNT_SEEN's own "Seen" above.
+    HistoryAction.COUNT_COMPLETE -> "Seen all"
+    HistoryAction.COUNT_STOPPED -> "Count Stopped"
+}
+
+/** The secondary note text a history row should actually show, in place of the raw
+ *  [HistoryLineEntity.note][mobile.racemaster.data.db.entity.HistoryLineEntity] value — only
+ *  [HistoryAction.COUNT_COMPLETE]/[HistoryAction.COUNT_STOPPED] ever differ, turning their own
+ *  terse "of=<m>"/"outstanding=<n>" encoding into the human-readable sentence those two actions'
+ *  own doc describes. Falls back to the raw [note] for every other action, and for either of
+ *  these two if [note] doesn't parse. */
+fun HistoryAction.displayNote(note: String?): String? = when (this) {
+    HistoryAction.COUNT_COMPLETE -> parseCountCompleteTotal(note)?.let { "All $it beacons seen" } ?: note
+    HistoryAction.COUNT_STOPPED -> parseCountOutstanding(note)?.let {
+        if (it == 1) "1 beacon outstanding" else "$it beacons outstanding"
+    } ?: note
+    else -> note
 }
 
 // Deliberately excludes every marker action (CLOCK/RESET/UNDO/PING, plus the Time-only SPLIT,

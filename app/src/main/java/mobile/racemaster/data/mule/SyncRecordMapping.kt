@@ -101,7 +101,10 @@ private fun HistoryAction.toServerAction(): String = when (this) {
     // beacon number/battery payload travels in `note`, same as every other action that needs
     // more than bib/split can carry.
     HistoryAction.CLOSE -> "Close"
+    HistoryAction.CLOSE_REOPENED -> "CloseReopened"
     HistoryAction.COUNT_SEEN -> "CountSeen"
+    HistoryAction.COUNT_COMPLETE -> "CountComplete"
+    HistoryAction.COUNT_STOPPED -> "CountStopped"
 }
 
 /**
@@ -134,7 +137,10 @@ fun SyncRecord.toHistoryAction(): HistoryAction = when (action) {
     "NewRace" -> HistoryAction.NEW_RACE
     "Ping" -> HistoryAction.PING
     "Close" -> HistoryAction.CLOSE
+    "CloseReopened" -> HistoryAction.CLOSE_REOPENED
     "CountSeen" -> HistoryAction.COUNT_SEEN
+    "CountComplete" -> HistoryAction.COUNT_COMPLETE
+    "CountStopped" -> HistoryAction.COUNT_STOPPED
     // An unrecognized wire value — includes a legacy "Stop" from a not-yet-upgraded peer or an
     // old server-side file (STOP was removed — see HistoryAction's own doc); should otherwise
     // not get here.

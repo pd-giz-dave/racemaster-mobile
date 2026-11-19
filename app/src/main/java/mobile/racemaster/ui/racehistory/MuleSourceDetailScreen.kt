@@ -18,7 +18,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.ui.bibsmode.displayName
+import mobile.racemaster.ui.bibsmode.displayNote
 import mobile.racemaster.ui.components.HistoryLineDisplay
 import mobile.racemaster.ui.components.historyLines
 import mobile.racemaster.ui.components.ScreenTopBar
@@ -72,12 +74,13 @@ fun MuleSourceDetailScreen(
                         bibNumber = it.bibNumber,
                         elapsedMillis = it.elapsedMillis,
                         timestampMillis = it.timestampMillis,
-                        note = it.note,
+                        note = it.action.displayNote(it.note),
                         syncState = it.syncState,
                         syncedToLabel = it.syncedToLabel,
                         dupSplitRefs = it.dupSplitRefs,
                         isUndoMarker = it.isUndoMarker,
                         editedFromLineNumber = it.editedFromLineNumber,
+                        isPing = it.action == HistoryAction.PING,
                     )
                 },
                 emptyMessage = "No records",

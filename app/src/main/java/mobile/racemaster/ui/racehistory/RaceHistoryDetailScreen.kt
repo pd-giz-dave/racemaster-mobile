@@ -20,6 +20,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.ui.bibsmode.displayName
+import mobile.racemaster.ui.bibsmode.displayNote
 import mobile.racemaster.data.db.entity.displayName as modeDisplayName
 import mobile.racemaster.ui.components.HistoryLineDisplay
 import mobile.racemaster.ui.components.historyLines
@@ -87,13 +88,14 @@ fun RaceHistoryDetailScreen(
                         bibNumber = it.bibNumber,
                         elapsedMillis = it.elapsedMillis,
                         timestampMillis = it.timestampMillis,
-                        note = it.note,
+                        note = it.action.displayNote(it.note),
                         syncState = it.syncState,
                         syncedToLabel = syncedToLabel(it.syncedTo),
                         dupSplitRefs = it.dupSplitRefs,
                         editedFromLineNumber = it.editedFromLineNumber,
                         isUndoMarker = it.isUndoMarker,
                         splitLabelOverride = if (it.action == HistoryAction.MODE_START) it.mode.modeDisplayName() else null,
+                        isPing = it.action == HistoryAction.PING,
                     )
                 },
                 emptyMessage = "No history recorded",

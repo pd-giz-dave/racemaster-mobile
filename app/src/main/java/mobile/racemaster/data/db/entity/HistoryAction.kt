@@ -96,11 +96,39 @@ enum class HistoryAction {
     // uses, so "closed ×N" is simply "how many CLOSE rows this race name this beacon."
     CLOSE,
 
+    // Close Mode only — written once a beacon already marked closed (its most recent CLOSE-mode
+    // row is a CLOSE) is heard advertising again — i.e. it's been powered back on and therefore
+    // needs closing again. note carries "beacon=<n>" (see CloseModeRepository's own
+    // recordReopenedIfClosed, which checks the beacon's latest CLOSE-mode row fresh inside its own
+    // write transaction before writing this, the same race-avoidance CountModeRepository.
+    // recordCount's own doc explains). A beacon's current closed/outstanding status is always
+    // "whichever of CLOSE/CLOSE_REOPENED is its most recent row by lineNumber" — never "has it
+    // ever had a CLOSE row" — which is also how the web app's own progress.json computation must
+    // read it (see docs/beacon-detection-plan.md and the mirrored server-side change).
+    CLOSE_REOPENED,
+
     // Count Mode only — a beacon seen at close range, before the start, for the pre-race
     // headcount (docs/beacon-detection-plan.md's Count mode). bibNumber is the resolved bib if
-    // known (nullable, same reasoning as CLOSE), note carries "beacon=<n>". Unlike CLOSE, a
-    // beacon is only ever recorded once per race — see CountModeRepository's own doc.
+    // known (nullable, same reasoning as CLOSE), note carries "beacon=<n> seen=<n> of=<m>" — the
+    // running/expected tally at the moment this beacon was seen, written once by
+    // CountModeRepository.recordCount (counted fresh inside its own write transaction, not
+    // computed by the ViewModel from its own reactive cache — see that function's own doc for
+    // the race this avoids) rather than re-derived by whatever later displays this row. Unlike
+    // CLOSE, a beacon is only ever recorded once per race.
     COUNT_SEEN,
+
+    // Count Mode only — written once, immediately after the COUNT_SEEN row for whichever beacon
+    // brings the running count up to the expected total (see CountModeRepository.recordCount,
+    // same transaction, next line number). note carries "of=<m>", the same expected total that
+    // row's own COUNT_SEEN siblings carry. Never written if no beacons were ever issued for this
+    // race (an expected total of zero can't "complete").
+    COUNT_COMPLETE,
+
+    // Count Mode only — written once if Stop (CountModeViewModel.stopMode) is pressed while at
+    // least one issued beacon hasn't been seen yet; note carries "outstanding=<n>". Never written
+    // if every issued beacon had already been seen (COUNT_COMPLETE already said so) — Stop after
+    // a genuine completion needs no second marker.
+    COUNT_STOPPED,
 }
 
 /** A NEW_RACE row with this note is a deletion tombstone: the race was deleted on this device,

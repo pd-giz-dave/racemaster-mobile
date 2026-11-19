@@ -25,6 +25,34 @@ class HistoryActionLabelsTest {
         assertEquals("Location", HistoryAction.LOCATION.displayName())
         assertEquals("New Race", HistoryAction.NEW_RACE.displayName())
         assertEquals("Ping", HistoryAction.PING.displayName())
+        assertEquals("Close", HistoryAction.CLOSE.displayName())
+        assertEquals("Reopened", HistoryAction.CLOSE_REOPENED.displayName())
+        // "Seen"/"Seen all", not "Count Seen"/"Count Complete" (direct feedback) — the row's own
+        // note line already carries the "seen=<n> of=<m>"/"of=<m>" tally, so repeating it in the
+        // label was redundant.
+        assertEquals("Seen", HistoryAction.COUNT_SEEN.displayName())
+        assertEquals("Seen all", HistoryAction.COUNT_COMPLETE.displayName())
+        assertEquals("Count Stopped", HistoryAction.COUNT_STOPPED.displayName())
+    }
+
+    @Test
+    fun countCompleteDisplayNoteIsHumanReadable() {
+        assertEquals("All 10 beacons seen", HistoryAction.COUNT_COMPLETE.displayNote("of=10"))
+        // Falls back to the raw note if it doesn't parse.
+        assertEquals("garbage", HistoryAction.COUNT_COMPLETE.displayNote("garbage"))
+    }
+
+    @Test
+    fun countStoppedDisplayNoteIsHumanReadableAndPluralizes() {
+        assertEquals("1 beacon outstanding", HistoryAction.COUNT_STOPPED.displayNote("outstanding=1"))
+        assertEquals("3 beacons outstanding", HistoryAction.COUNT_STOPPED.displayNote("outstanding=3"))
+        assertEquals("garbage", HistoryAction.COUNT_STOPPED.displayNote("garbage"))
+    }
+
+    @Test
+    fun otherActionsDisplayNoteIsJustTheRawNote() {
+        assertEquals("a note", HistoryAction.FINISH.displayNote("a note"))
+        assertEquals(null, HistoryAction.FINISH.displayNote(null))
     }
 
     @Test

@@ -26,6 +26,8 @@ private class FakeProgressDao : ProgressDao {
 
     override suspend fun getByRaceId(raceId: Long): ProgressEntity? = rows.value[raceId]
 
+    override fun observeByRaceId(raceId: Long): Flow<ProgressEntity?> = rows.map { it[raceId] }
+
     override fun observeAll(): Flow<List<ProgressEntity>> = rows.map { it.values.sortedByDescending { e -> e.storedAtMillis } }
 
     override suspend fun deleteByRaceId(raceId: Long) {
@@ -318,5 +320,37 @@ class ProgressRepositoryTest {
     @Test
     fun getBibForBeaconReturnsNullWhenNothingStoredForThatRace() = runTest {
         assertNull(repository.getBibForBeacon(raceId = 5L, beaconNumber = 7))
+    }
+
+    // observeIssuedBeacons — Count/Close Mode's own reactive counterpart to a one-shot
+    // issuedBeacons read (see that function's own doc for the race this closes: a progress.json
+    // pull landing after a subscriber's already-taken snapshot must still be noticed).
+
+    @Test
+    fun observeIssuedBeaconsEmitsAFreshListAfterAProgressPullLandsLaterThanTheInitialSubscription() = runTest {
+        val subscription = repository.observeIssuedBeacons(raceId = 1L)
+        assertTrue(subscription.first().isEmpty())
+
+        val payload = ProgressPayload(
+            raceName = "Test Race", raceDate = "23/08/2026", generatedAt = "2026-08-23T10:00:00.000Z",
+            entries = listOf(ProgressEntry(bibNumber = 101, name = "Dave", course = "Seniors", beaconNumber = 7)),
+        )
+        repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = payload)
+
+        assertEquals(listOf(7), subscription.first().map { it.beaconNumber })
+    }
+
+    @Test
+    fun observeIssuedBeaconsExcludesEntriesWithNoBeaconNumber() = runTest {
+        val payload = ProgressPayload(
+            raceName = "Test Race", raceDate = "23/08/2026", generatedAt = "2026-08-23T10:00:00.000Z",
+            entries = listOf(
+                ProgressEntry(bibNumber = 101, name = "Dave", course = "Seniors", beaconNumber = 7),
+                ProgressEntry(bibNumber = 102, name = "Amy", course = "Juniors"),
+            ),
+        )
+        repository.storeFromBle(raceId = 1L, raceLabel = "race-a", payload = payload)
+
+        assertEquals(listOf(101), repository.observeIssuedBeacons(raceId = 1L).first().map { it.bibNumber })
     }
 }

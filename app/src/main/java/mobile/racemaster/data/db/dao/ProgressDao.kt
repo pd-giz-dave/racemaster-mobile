@@ -18,6 +18,12 @@ interface ProgressDao {
     @Query("SELECT * FROM progress WHERE raceId = :raceId")
     suspend fun getByRaceId(raceId: Long): ProgressEntity?
 
+    // Reactive counterpart to getByRaceId — backs ProgressRepository.observeIssuedBeacons, which
+    // Count/Close Mode need so a progress.json pull landing after the screen opens isn't silently
+    // missed (see that function's own doc).
+    @Query("SELECT * FROM progress WHERE raceId = :raceId")
+    fun observeByRaceId(raceId: Long): Flow<ProgressEntity?>
+
     // Ordered most-recently-stored-first, matching RaceDao.observeAll's own ordering for the
     // same list (Race History shows both, and a consistent newest-first order across every
     // section there is what makes the page read as one coherent list rather than three

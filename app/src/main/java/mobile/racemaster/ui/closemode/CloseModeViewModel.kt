@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -25,12 +26,17 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import mobile.racemaster.data.beacon.BeaconRepository
 import mobile.racemaster.data.beacon.BeaconScanDecoder
+import mobile.racemaster.data.beacon.DetectionTracking
 import mobile.racemaster.data.beacon.DxCp27Protocol
+import mobile.racemaster.data.beacon.shouldCommit
+import mobile.racemaster.data.beacon.updatedDetectionTracking
+import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.ProgressRepository
 import mobile.racemaster.data.repository.CloseModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.parseBeaconClose
+import mobile.racemaster.data.repository.parseBeaconReopened
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
@@ -132,17 +138,31 @@ class CloseModeViewModel(
 
     private val trackingByAddress = ConcurrentHashMap<String, Tracking>()
 
-    /** One CLOSE row, decoded from [mobile.racemaster.data.db.entity.HistoryLineEntity.note] via
-     *  [parseBeaconClose]. [lineNumber] breaks ties for "the latest one" — ascending and
-     *  immutable per row, so it's a cleaner ordering key than [timestampMillis] alone. */
-    private data class CloseRecord(val batteryPercent: Int, val timestampMillis: Long, val lineNumber: Long)
+    // Debounces "this already-closed beacon is advertising again" the same way BeaconScanEngine/
+    // CountModeViewModel debounce their own passive detections — a few consecutive readings, not
+    // one stray packet, before concluding it's genuinely back on (reusing their already-tested
+    // pure helpers, keyed by beacon number like CountModeViewModel's own detectionTracking, not
+    // address — the same beacon can hop advertiser addresses and this still shouldn't double-fire).
+    private val reopenDetectionTracking = ConcurrentHashMap<Int, DetectionTracking>()
+
+    /** One CLOSE/CLOSE_REOPENED row, decoded from
+     *  [mobile.racemaster.data.db.entity.HistoryLineEntity.note] via [parseBeaconClose]/
+     *  [parseBeaconReopened]. [batteryPercent] is null for a CLOSE_REOPENED row (it carries no
+     *  battery reading — see [HistoryAction.CLOSE_REOPENED]'s own doc). [lineNumber] breaks ties
+     *  for "the latest one" — ascending and immutable per row, so it's a cleaner ordering key than
+     *  [timestampMillis] alone. */
+    private data class CloseEvent(val action: HistoryAction, val batteryPercent: Int?, val timestampMillis: Long, val lineNumber: Long)
 
     // Snapshots of ProgressRepository/CloseModeRepository, refreshed as raceIdFlow/
     // closeModeRepository's own Flow change — read from recompute() below without a suspend
-    // call per tick. Grouped by beacon number (not a single latest row) so closeCount reflects
-    // every CLOSE row for that beacon, not just the most recent.
+    // call per tick. eventsByBeaconNumber is grouped by beacon number (not a single latest row)
+    // so closeCount can still reflect every CLOSE row for that beacon; closedBeaconNumbers is
+    // derived from it separately — a beacon's current closed/outstanding status is always
+    // "whichever of CLOSE/CLOSE_REOPENED is its most recent event," never "has it ever had a
+    // CLOSE row" (see HistoryAction.CLOSE_REOPENED's own doc).
     private var bibByBeaconNumber: Map<Int, Int> = emptyMap()
-    private var closesByBeaconNumber: Map<Int, List<CloseRecord>> = emptyMap()
+    private var eventsByBeaconNumber: Map<Int, List<CloseEvent>> = emptyMap()
+    private var closedBeaconNumbers: Set<Int> = emptySet()
 
     init {
         viewModelScope.launch { collectAdvertisements() }
@@ -156,24 +176,37 @@ class CloseModeViewModel(
         }
         viewModelScope.launch {
             raceIdFlow.collectLatest { raceId ->
+                reopenDetectionTracking.clear()
                 _uiState.update { it.copy(raceId = raceId) }
                 if (raceId == null) {
                     bibByBeaconNumber = emptyMap()
-                    closesByBeaconNumber = emptyMap()
+                    eventsByBeaconNumber = emptyMap()
+                    closedBeaconNumbers = emptySet()
                     _uiState.update { it.copy(outstanding = emptyList(), totalIssued = 0) }
                     return@collectLatest
                 }
-                val issued = progressRepository.issuedBeacons(raceId)
-                bibByBeaconNumber = issued.associate { it.beaconNumber!! to it.bibNumber }
-                _uiState.update { it.copy(totalIssued = issued.size) }
-                closeModeRepository.observeCloses(raceId).collect { rows ->
-                    closesByBeaconNumber = rows
+                combine(
+                    progressRepository.observeIssuedBeacons(raceId),
+                    closeModeRepository.observeCloses(raceId),
+                ) { issued, rows -> issued to rows }.collect { (issued, rows) ->
+                    bibByBeaconNumber = issued.associate { it.beaconNumber!! to it.bibNumber }
+                    _uiState.update { it.copy(totalIssued = issued.size) }
+                    eventsByBeaconNumber = rows
                         .mapNotNull { row ->
-                            parseBeaconClose(row.note)?.let { (beaconNumber, battery) ->
-                                beaconNumber to CloseRecord(battery, row.timestampMillis, row.lineNumber)
+                            when (row.action) {
+                                HistoryAction.CLOSE -> parseBeaconClose(row.note)?.let { (beaconNumber, battery) ->
+                                    beaconNumber to CloseEvent(HistoryAction.CLOSE, battery, row.timestampMillis, row.lineNumber)
+                                }
+                                HistoryAction.CLOSE_REOPENED -> parseBeaconReopened(row.note)?.let { beaconNumber ->
+                                    beaconNumber to CloseEvent(HistoryAction.CLOSE_REOPENED, null, row.timestampMillis, row.lineNumber)
+                                }
+                                else -> null
                             }
                         }
                         .groupBy({ it.first }, { it.second })
+                    closedBeaconNumbers = eventsByBeaconNumber
+                        .filterValues { events -> events.maxByOrNull { it.lineNumber }?.action == HistoryAction.CLOSE }
+                        .keys
                     recomputeOutstanding()
                 }
             }
@@ -182,7 +215,7 @@ class CloseModeViewModel(
 
     private fun recomputeOutstanding() {
         val outstanding = bibByBeaconNumber.entries
-            .filter { (beaconNumber, _) -> beaconNumber !in closesByBeaconNumber }
+            .filter { (beaconNumber, _) -> beaconNumber !in closedBeaconNumbers }
             .map { (beaconNumber, bibNumber) -> OutstandingBeaconUi(bibNumber, beaconNumber) }
             .sortedBy { it.bibNumber }
         _uiState.update { it.copy(outstanding = outstanding) }
@@ -192,6 +225,7 @@ class CloseModeViewModel(
         try {
             muleRepository.scanForAdvertisements().collect { advertisement ->
                 val beacon = BeaconScanDecoder.decodeFromAdvertisement(advertisement) ?: return@collect
+                handleReopenDetection(beacon.beaconNumber)
                 val now = System.currentTimeMillis()
                 trackingByAddress.compute(beacon.address) { _, existing ->
                     if (existing == null) {
@@ -218,6 +252,25 @@ class CloseModeViewModel(
         }
     }
 
+    /** Auto-reinstates an already-closed beacon as outstanding once it's heard advertising
+     *  again — see [CloseModeRepository.recordReopenedIfClosed]'s own doc. [handleReopenDetection]
+     *  itself is a cheap, no-suspend guard (skip entirely if this beacon isn't currently flagged
+     *  closed) before even touching the debounce map, so the common "every other beacon" case
+     *  costs nothing extra per advertisement. */
+    private fun handleReopenDetection(beaconNumber: Int) {
+        if (beaconNumber !in closedBeaconNumbers) return
+        val now = System.currentTimeMillis()
+        val updated = reopenDetectionTracking.compute(beaconNumber) { _, existing ->
+            updatedDetectionTracking(existing, now, REOPEN_DEBOUNCE_GAP_MILLIS)
+        }!!
+        if (shouldCommit(updated, REOPEN_REQUIRED_CONSECUTIVE_READINGS)) {
+            reopenDetectionTracking.remove(beaconNumber)
+            val raceId = raceIdFlow.value ?: return
+            val bibNumber = bibByBeaconNumber[beaconNumber]
+            viewModelScope.launch { closeModeRepository.recordReopenedIfClosed(raceId, beaconNumber, bibNumber) }
+        }
+    }
+
     private suspend fun recomputeLoop() {
         while (viewModelScope.isActive) {
             recompute()
@@ -236,16 +289,21 @@ class CloseModeViewModel(
                 rssi = tracking.smoothedRssi.toInt(),
                 distanceMeters = distanceMeters,
                 bibNumber = bibByBeaconNumber[tracking.beaconNumber],
-                closeCount = closesByBeaconNumber[tracking.beaconNumber]?.size ?: 0,
+                closeCount = eventsByBeaconNumber[tracking.beaconNumber]?.count { it.action == HistoryAction.CLOSE } ?: 0,
             ) to distanceMeters
         }.sortedBy { (_, distanceMeters) -> distanceMeters }.map { (beacon, _) -> beacon }
         _uiState.update { it.copy(nearbyBeacons = nearby) }
     }
 
+    /** Null whenever this beacon isn't currently closed — including right after it's been
+     *  auto-reinstated as outstanding (see [handleReopenDetection]) — so selecting it shows a
+     *  plain "close" prompt, not a misleading "already closed, close again?" one. */
     private fun priorCloseFor(beaconNumber: Int): PriorCloseUi? {
-        val closes = closesByBeaconNumber[beaconNumber] ?: return null
-        val latest = closes.maxByOrNull { it.lineNumber } ?: return null
-        return PriorCloseUi(closedAtMillis = latest.timestampMillis, batteryPercent = latest.batteryPercent, closeCount = closes.size)
+        val events = eventsByBeaconNumber[beaconNumber] ?: return null
+        val latest = events.maxByOrNull { it.lineNumber } ?: return null
+        if (latest.action != HistoryAction.CLOSE) return null
+        val closeCount = events.count { it.action == HistoryAction.CLOSE }
+        return PriorCloseUi(closedAtMillis = latest.timestampMillis, batteryPercent = latest.batteryPercent!!, closeCount = closeCount)
     }
 
     fun selectBeacon(beacon: NearbyBeaconUi) {
@@ -321,6 +379,12 @@ class CloseModeViewModel(
         private const val STALE_AFTER_MILLIS = 8_000L
         private const val RSSI_SMOOTHING_ALPHA = 0.15
         private const val RESULT_DISPLAY_MILLIS = 5_000L
+
+        // Same debounce shape CountModeViewModel uses for its own passive detection — a few
+        // consecutive readings, not one stray packet, before concluding a closed beacon is
+        // genuinely back on.
+        private const val REOPEN_DEBOUNCE_GAP_MILLIS = 5_000L
+        private const val REOPEN_REQUIRED_CONSECUTIVE_READINGS = 3
 
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
