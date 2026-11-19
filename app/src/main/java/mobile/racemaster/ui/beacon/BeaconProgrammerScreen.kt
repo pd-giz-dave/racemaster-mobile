@@ -94,19 +94,23 @@ fun BeaconProgrammerScreen(
         onPauseOrDispose {}
     }
 
-    // Once only per screen visit (startScan() itself is idempotent while already scanning, but
-    // this flag stops it firing again every time permissionsGranted/bluetoothEnabled happen to
-    // recompute, e.g. on every LifecycleResumeEffect above) — saves the operator the extra tap
-    // that was previously needed on every entry to this screen. Deliberately not re-fired when
-    // connectionPhase later returns to IDLE (e.g. after a disconnect): that would also restart
-    // scanning mid-manual-password-retry, contending with the connect attempt over the single BLE
-    // radio (see startScan()'s own doc on that contention).
-    var autoScanStarted by remember { mutableStateOf(false) }
-    LaunchedEffect(permissionsGranted, bluetoothEnabled) {
-        if (!autoScanStarted && permissionsGranted && bluetoothEnabled) {
-            autoScanStarted = true
-            viewModel.startScan()
-        }
+    // Fires on every transition into "idle and ready to scan," not just the screen's very first
+    // one — so returning to the scan list after a disconnect, a power-off, a factory reset, or
+    // finishing a program-and-disconnect all auto-restart scanning too, the same as opening the
+    // screen fresh does, rather than leaving the operator to tap Scan by hand each time. Keyed on
+    // readyToAutoScan itself (not e.g. Unit) so this only re-fires on a genuine state change, not
+    // every recomposition while already scanning — startScan() is also itself idempotent while a
+    // scan is already running, so a stray extra firing is harmless either way.
+    //
+    // Checks connectionPhase == IDLE specifically, not just "!= CONNECTED" — CONNECTING and
+    // ERROR both need excluding too: ERROR is the manual-password-retry state
+    // (BeaconProgrammerViewModel.connect's own onFailure sets showManualPasswordField
+    // alongside it), and restarting the scan while that retry — or any other connect attempt,
+    // still CONNECTING — is in flight would contend with it over the single BLE radio (confirmed
+    // on real hardware; see startScan()'s own doc on that contention).
+    val readyToAutoScan = permissionsGranted && bluetoothEnabled && uiState.connectionPhase == BeaconConnectionPhase.IDLE
+    LaunchedEffect(readyToAutoScan) {
+        if (readyToAutoScan) viewModel.startScan()
     }
 
     BackHandler {
