@@ -179,10 +179,12 @@ object HelpTopics {
             "Five jobs share this hub: Check (confirm a beacon's on and its number matches its " +
                 "label), Close (post-race battery read + power-off) and Count (pre-start " +
                 "headcount) — both also their own Setup Race mode now, for a phone dedicated to " +
-                "that job all race long; these two buttons are just shortcuts that work " +
-                "regardless of the active race's own mode — Program (write a beacon's number " +
-                "ahead of a race), and Range Calibration (a data-collection tool, not a " +
-                "race-day job).",
+                "that job all race long; Close's own button here is a shortcut straight to it " +
+                "that works regardless of the active race's own mode, since it may genuinely be " +
+                "needed outside a race context, while Count's button just points you to Setup " +
+                "Race instead, since Count only ever makes sense against a race already set up " +
+                "for it — Program (write a beacon's number ahead of a race), and Range " +
+                "Calibration (a data-collection tool, not a race-day job).",
         ),
     )
 
@@ -276,10 +278,13 @@ object HelpTopics {
                 "headcount phone be told apart from every other device in the web app's own " +
                 "device list, since it never logs a Bib or Time entry of its own.",
             "The top bar's \"Stop\" clears this race's mode (beacons already seen stay " +
-                "recorded) so a different mode can be set up for it — the only way to leave " +
-                "Count Mode, since it has no Reset. Also reachable without a race in Count " +
-                "mode at all via the Beacons hub's own \"Count\" shortcut, in which case Stop " +
-                "stays disabled.",
+                "recorded, and still count if Count is set up again later) so a different mode " +
+                "can be set up for it. \"Reset\", at the bottom of the screen, also clears the " +
+                "running tally itself — restarting Count genuinely starts from zero rather than " +
+                "resuming it — and leaves this screen the same way Stop does.",
+            "Unlike Close, there's no standing shortcut to this screen from the Beacons hub — " +
+                "Count only ever makes sense against a race already set up for it, so the " +
+                "Beacons hub's own \"Count\" button just points you back to Setup Race instead.",
         ),
     )
 

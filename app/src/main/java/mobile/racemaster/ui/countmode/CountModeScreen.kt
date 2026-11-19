@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.ui.components.ModeScreenTopBar
+import mobile.racemaster.ui.components.ResetButton
 import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.util.withClickSound
 
@@ -35,12 +36,20 @@ import mobile.racemaster.util.withClickSound
  *  BLE connect/power-off does. The top bar's own secondary action is "Stop" (per direct
  *  feedback: Relocate's full name/location/mode editor was clunky for a mode with nothing
  *  meaningful to relocate) — clears the race's mode back to null ([mobile.racemaster.data.repository.RaceRepository.stopMode])
- *  rather than opening a separate screen, since Count has no Reset of its own (see
- *  [CountModeViewModel]'s own doc): it's the only way to ever move this race out of Count mode
- *  once it's set up. Reached via Routes.COUNT_MODE (Setup Race) and Routes.COUNT_BEACONS (the
- *  Beacons hub's own standing shortcut) alike — Stop is disabled on the latter path unless the
- *  active race's own current mode genuinely is Count (see
- *  [CountModeUiState.canStopCountMode]'s own doc). */
+ *  rather than opening a separate screen: it's the only way to ever move this race out of Count
+ *  mode once it's set up. A separate, body-level "Reset" button (reusing the shared
+ *  [ResetButton] composable Bibs/Time already use) additionally closes out the current Count
+ *  segment (see [CountModeViewModel.resetCountMode]'s own doc) so a restarted count genuinely
+ *  starts from zero, rather than resuming whatever was already seen — Stop alone deliberately
+ *  does not do this, since pausing without losing the running tally is still useful on its own.
+ *  Reset calls [onHome] itself immediately after, same reasoning as Stop's own dialog: this
+ *  screen's scan loop would otherwise immediately re-detect and re-record the very beacons just
+ *  reset. Reached only via Routes.COUNT_MODE (Setup Race) — unlike Close, the Beacons hub's own
+ *  "Count" button is no longer a standing shortcut straight to this screen (TODO.md: Count only
+ *  ever makes sense against a race already set up for it, unlike Close — see
+ *  [mobile.racemaster.ui.beaconops.BeaconOperationsScreen]'s own doc), so both Stop and Reset's
+ *  [CountModeUiState.canStopCountMode] gating is now effectively always true in practice, kept
+ *  as a defensive guard rather than removed outright. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CountModeScreen(
@@ -114,6 +123,15 @@ fun CountModeScreen(
                     }
                 }
             }
+            ResetButton(
+                resetDescription = "Stops Count Mode and clears the running tally so it can be restarted from zero. Nothing is deleted — every beacon seen stays recorded in Race History.",
+                onReset = {
+                    viewModel.resetCountMode()
+                    onHome()
+                },
+                enabled = uiState.canStopCountMode,
+                modifier = Modifier.padding(16.dp),
+            )
         }
     }
 }

@@ -25,6 +25,7 @@ import mobile.racemaster.data.beacon.BeaconScanDecoder
 import mobile.racemaster.data.beacon.DetectionTracking
 import mobile.racemaster.data.beacon.shouldCommit
 import mobile.racemaster.data.beacon.updatedDetectionTracking
+import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.ProgressRepository
 import mobile.racemaster.data.repository.CountModeRepository
@@ -40,15 +41,19 @@ data class CountModeUiState(
     val uniqueBeaconsSeen: Int = 0,
     val outstanding: List<OutstandingBeaconUi> = emptyList(),
     val totalIssued: Int = 0,
-    // For the top bar's own "Stop" button — same reasoning as CloseModeUiState.raceId/
-    // canStopCloseMode: Count has no Reset of its own, so Stop (clearing the race's mode back
-    // to null — see RaceRepository.stopMode) is the only way to ever move this race out of
-    // Count mode once it's set up. canStopCountMode additionally requires the race's own
-    // CURRENT mode to actually be Count — reached via the Beacons hub's own standing shortcut
-    // (Routes.COUNT_BEACONS) as well as Setup Race's (Routes.COUNT_MODE), this screen can be
-    // open while the active race is genuinely in Bibs/Time/Close mode instead, and Stop must
-    // never clear a mode this screen had nothing to do with (same reasoning
-    // CloseModeUiState.canStopCloseMode documents).
+    // Gates both the top bar's "Stop" button and the body's "Reset" button (see
+    // CountModeViewModel.resetCountMode's own doc) — same reasoning as
+    // CloseModeUiState.raceId/canStopCloseMode: Stop (clearing the race's mode back to null —
+    // see RaceRepository.stopMode) is the only way to move this race out of Count mode once it's
+    // set up, and Reset does that same thing before additionally resetting the tally.
+    // canStopCountMode additionally requires the race's own CURRENT mode to actually be Count —
+    // this screen is only reached via Routes.COUNT_MODE now (Setup Race), which is itself only
+    // navigated to once the race's mode already is Count (see
+    // mobile.racemaster.ui.beaconops.BeaconOperationsScreen's own doc for why the Beacons hub's
+    // old standing "Count" shortcut, which could reach this screen while some other mode was
+    // active, was dropped), so this is effectively always true in practice now — kept as a
+    // defensive guard (same reasoning CloseModeUiState.canStopCloseMode documents) rather than
+    // removed outright.
     val raceId: Long? = null,
     val canStopCountMode: Boolean = false,
 )
@@ -70,13 +75,14 @@ data class CountModeUiState(
  * the gating mode, and the write target (COUNT_SEEN rows via [CountModeRepository], not Bibs
  * entries) all differ from Bibs' own checkpoint detection.
  *
- * Reached two ways — Setup Race's own Count mode (`Routes.COUNT_MODE`) and the Beacons hub's
- * standing "Count" shortcut (`Routes.COUNT_BEACONS`), same pairing
- * [mobile.racemaster.ui.closemode.CloseModeViewModel] already has. Recording a count itself
- * never branches on `race.mode` — it just records COUNT_SEEN rows against whatever
- * `activeRaceId` is — so both routes resolve to the exact same screen/ViewModel with no
- * special-casing; only the top bar's own Stop button (see [CountModeUiState.canStopCountMode])
- * cares what the race's current mode actually is.
+ * Reached only via Setup Race's own Count mode (`Routes.COUNT_MODE`) — unlike
+ * [mobile.racemaster.ui.closemode.CloseModeViewModel], there is no standing Beacons-hub shortcut
+ * to this screen any more (TODO.md: Count only ever makes sense against a race already set up
+ * for it, unlike Close — see [mobile.racemaster.ui.beaconops.BeaconOperationsScreen]'s own doc).
+ * Recording a count itself never branches on `race.mode` — it just records COUNT_SEEN rows
+ * against whatever `activeRaceId` is; the top bar's own Stop button (see
+ * [CountModeUiState.canStopCountMode]) still checks the race's current mode, mostly as a
+ * defensive guard now that the mismatched-mode path is unreachable.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class CountModeViewModel(
@@ -195,6 +201,32 @@ class CountModeViewModel(
                 countModeRepository.recordStopped(raceId, outstandingCount)
             }
             raceRepository.stopMode(raceId)
+        }
+    }
+
+    /** "Reset" — TODO.md's own "the count screen needs a reset option, so it can be restarted"
+     *  entry. Does what [stopMode] does first (same outstanding-count/gating/COUNT_STOPPED
+     *  write), then additionally closes out the current Count segment via
+     *  [RaceRepository.closeCurrentSegment] — the same generic, mode-agnostic RESET-row write
+     *  every other mode's own Reset button already uses (see [HistoryAction.RESET]'s own doc),
+     *  which the web app's own `buildSegmentView()`/`currentSegment()` already treats like any
+     *  other Reset with zero server-side changes needed. Unlike [stopMode] alone — which leaves
+     *  the segment open, so a beacon already seen still counts as seen if Count is started again
+     *  later — this makes [CountModeRepository.observeCounts]/[CountModeRepository.recordCount]
+     *  (both already HistoryFold.currentSegmentRows-scoped) see a genuinely empty tally next
+     *  time. [CountModeScreen] itself must exit right after calling this (same as it already does
+     *  for Stop) — this ViewModel keeps scanning for as long as it's alive, and would otherwise
+     *  immediately re-detect and re-record the very beacons just reset. */
+    fun resetCountMode() {
+        if (!_uiState.value.canStopCountMode) return
+        val raceId = raceIdFlow.value ?: return
+        val outstandingCount = _uiState.value.outstanding.size
+        viewModelScope.launch {
+            if (outstandingCount > 0) {
+                countModeRepository.recordStopped(raceId, outstandingCount)
+            }
+            raceRepository.stopMode(raceId)
+            raceRepository.closeCurrentSegment(raceId, HistoryMode.COUNT)
         }
     }
 

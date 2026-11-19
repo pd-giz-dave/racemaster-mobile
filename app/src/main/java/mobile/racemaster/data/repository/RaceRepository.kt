@@ -120,11 +120,15 @@ class RaceRepository(
             when (mode) {
                 HistoryMode.TIME -> raceDao.resetTimeMode(raceId)
                 HistoryMode.BIBS -> raceDao.resetBibsMode(raceId)
-                // Unreachable in practice — neither CountModeScreen nor CloseModeScreen has a
-                // Reset button (see CloseModeRepository/CountModeRepository's own doc: neither
-                // mode has a *StartedAtMillis/*NextSplit column or segment concept to reset in
-                // the first place) — a defensive no-op rather than a crash if this is ever
-                // reached anyway.
+                // Neither has a *StartedAtMillis/*NextSplit column of its own to reset (see
+                // CloseModeRepository/CountModeRepository's own doc) — the RESET row(s) written
+                // above are the only thing either needs: CountModeRepository's own
+                // observeCounts/recordCount already read them back (via currentSegmentRows) to
+                // scope the seen-tally to the current segment. CloseModeScreen still has no Reset
+                // button of its own (TODO.md's Reset item was Count-only) — this branch stays
+                // reachable for it only via forceResetActiveModes, which never fires for Count/
+                // Close in practice either (see that function's own doc), so this remains a
+                // defensive no-op for CLOSE specifically.
                 HistoryMode.COUNT, HistoryMode.CLOSE -> Unit
             }
         }

@@ -110,7 +110,7 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                         onHome = { navController.navigateHome() },
                         onCheck = { navController.navigate(Routes.IDENTIFY_FOB) },
                         onClose = { navController.navigate(Routes.CLOSE_BEACONS) },
-                        onCount = { navController.navigate(Routes.COUNT_BEACONS) },
+                        onSetupRace = { navController.navigate(Routes.SETUP_RACE) },
                         onProgram = { navController.navigate(Routes.PROGRAM_BEACONS) },
                         onRangeCalibration = { navController.navigate(Routes.RANGE_CALIBRATION) },
                     )
@@ -120,9 +120,6 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                 }
                 composable(Routes.CLOSE_MODE) {
                     CloseModeScreen(onHome = { navController.navigateHome() })
-                }
-                composable(Routes.COUNT_BEACONS) {
-                    CountModeScreen(onHome = { navController.navigateHome() })
                 }
                 composable(Routes.COUNT_MODE) {
                     CountModeScreen(onHome = { navController.navigateHome() })

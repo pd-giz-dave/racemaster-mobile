@@ -436,20 +436,6 @@ class BibsModeRepositoryTest {
     }
 
     @Test
-    fun resumeBibsModeIsANoOpNowThatThereIsNoStoppedStateToClear() = runTest {
-        setupRace()
-        repository.startBibsMode(raceId)
-        repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
-        val before = db.historyLineDao().observeAllForRace(raceId).first()
-        val raceBefore = db.raceDao().getById(raceId)
-
-        repository.resumeBibsMode(raceId)
-
-        assertEquals(before, db.historyLineDao().observeAllForRace(raceId).first())
-        assertEquals(raceBefore, db.raceDao().getById(raceId))
-    }
-
-    @Test
     fun resetBibsModeInsertsMarkerAndLeavesPriorEntriesIntact() = runTest {
         setupRace()
         repository.startBibsMode(raceId)
@@ -457,9 +443,7 @@ class BibsModeRepositoryTest {
         repository.recordEntry(raceId, HistoryAction.FINISH, 101, note = null)
 
         val locationRow = db.historyLineDao().observeAllForRace(raceId).first().single { it.action == HistoryAction.LOCATION }
-        val abandoned = repository.resetBibsMode(raceId, resetAtMillis = 9_000L)
-
-        assertTrue(abandoned) // the race's own first-ever segment
+        repository.resetBibsMode(raceId, resetAtMillis = 9_000L)
 
         // Nothing is deleted — NEW_RACE, LOCATION, MODE_START, Clock, Start, Finish, and the
         // new Reset marker are all present in the full-history query.

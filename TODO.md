@@ -514,3 +514,25 @@ re-constructed at the destination as pieces arrive? Or is this auto by the TCP/I
       (progress.json hasn't synced down an issued-beacon list for this race yet, or the course
       isn't using Beacons at all), instead of debounce-tracking and recording every nearby beacon
       as a `COUNT_SEEN` row against a total of 0 with a null bib.
+- [x] the count screen needs a reset option, so it can be restarted, a reset does a stop first
+      and the screen must exit (so as to not immediately start counting again), this must be
+      treated like any other reset by the web-app — **done**: `CountModeViewModel.resetCountMode`
+      does what Stop does (writing `COUNT_STOPPED` first if beacons are still outstanding, then
+      clearing the race's mode), then additionally calls the same generic
+      `RaceRepository.closeCurrentSegment` every other mode's own Reset already writes a `RESET`
+      row through — the web app's `buildSegmentView()`/`currentSegment()` already treats any
+      mode's `Reset` row this way, so no server-side change was needed. `CountModeRepository
+      .observeCounts`/`recordCount` are now scoped to the current (not-yet-reset) segment via
+      `HistoryFold.currentSegmentRows`, so a beacon seen before a Reset is counted again once
+      Count is restarted. `CountModeScreen` gained a body-level Reset button (the shared
+      `ResetButton` composable) that calls `onHome()` right after, so the still-running scan loop
+      can't immediately re-record the beacons just reset.
+- [x] the shortcut from the beacon hub to the count screen should be replaced by a dialog that
+      directs the user to setup count mode from the race setup screen, leave the close shortcut
+      as is (this may be required outside a race context) — **done**: `BeaconOperationsScreen`'s
+      "Count" button now shows an explanatory `AlertDialog` ("Count only makes sense for a
+      race's own issued-beacon list...") with a "Go to Setup Race" action instead of navigating
+      straight to `CountModeScreen`; "Close" is untouched, still a direct shortcut
+      (`Routes.CLOSE_BEACONS`). Removed the now-unreachable `Routes.COUNT_BEACONS` route/
+      composable and the `onCount` nav callback, replacing it with a plain `onSetupRace`
+      callback the dialog's action button uses.

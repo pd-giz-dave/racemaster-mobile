@@ -36,10 +36,6 @@ object Routes {
     // of the active race's own mode, alongside CLOSE_MODE's Setup-Race-driven path; both resolve
     // to the same CloseModeScreen (see that screen's own doc).
     const val CLOSE_BEACONS = "close_beacons"
-    // Pre-start headcount — same reasoning/pairing as CLOSE_BEACONS above: an ad-hoc shortcut
-    // usable regardless of the active race's own mode, alongside COUNT_MODE's Setup-Race-driven
-    // path; both resolve to the same CountModeScreen (see that screen's own doc).
-    const val COUNT_BEACONS = "count_beacons"
     // TODO.md's "Bluetooth Beacon range estimation" section — see RangeCalibrationScreen's own
     // doc; a data-collection tool, not a race-day operation.
     const val RANGE_CALIBRATION = "range_calibration"

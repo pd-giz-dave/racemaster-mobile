@@ -5,13 +5,19 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import mobile.racemaster.ui.components.ScreenTopBar
@@ -28,11 +34,14 @@ import mobile.racemaster.util.withClickSound
  *    post-race battery read + power-off. Also its own Setup Race mode now (for a phone
  *    dedicated to this job all race long) — this button is a standing shortcut to the same
  *    screen, usable regardless of the active race's own mode (see Routes.CLOSE_BEACONS's own
- *    doc for why both entry points stay).
- *  - **Count** — [mobile.racemaster.ui.countmode.CountModeScreen], docs/beacon-detection-plan.md's
- *    Count mode: pre-start headcount. Same pairing as Close above — also its own Setup Race
- *    mode, this button a standing shortcut to the same screen regardless of the active race's
- *    own mode (see Routes.COUNT_BEACONS's own doc).
+ *    doc for why both entry points stay — per direct instruction, Close may genuinely be needed
+ *    outside a race context, unlike Count below).
+ *  - **Count** — no longer a standing shortcut to [mobile.racemaster.ui.countmode.CountModeScreen]
+ *    (TODO.md: unlike Close, Count only ever makes sense against a race's own issued-beacon
+ *    list, so reaching it from here regardless of the active race's mode produced a screen that
+ *    was correctly disabled — see [mobile.racemaster.ui.countmode.CountModeUiState
+ *    .canStopCountMode]'s own doc — but gave no indication why). Tapping it now shows
+ *    [showCountSetupHint] instead, directing the operator to Setup Race.
  *  - **Program** — [mobile.racemaster.ui.beacon.BeaconProgrammerScreen]: writes a beacon's number
  *    and measured power ahead of a race.
  *  - **Range Calibration** — [RangeCalibrationScreen], TODO.md's "Bluetooth Beacon range
@@ -47,10 +56,35 @@ fun BeaconOperationsScreen(
     onHome: () -> Unit,
     onCheck: () -> Unit,
     onClose: () -> Unit,
-    onCount: () -> Unit,
+    onSetupRace: () -> Unit,
     onProgram: () -> Unit,
     onRangeCalibration: () -> Unit,
 ) {
+    var showCountSetupHint by remember { mutableStateOf(false) }
+
+    if (showCountSetupHint) {
+        AlertDialog(
+            onDismissRequest = { showCountSetupHint = false },
+            title = { Text("Count Mode") },
+            text = {
+                Text(
+                    "Count only makes sense for a race's own issued-beacon list, so it's no " +
+                        "longer a standing shortcut here. Set it up as this race's mode from " +
+                        "Setup Race instead.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = withClickSound {
+                    showCountSetupHint = false
+                    onSetupRace()
+                }) { Text("Go to Setup Race") }
+            },
+            dismissButton = {
+                TextButton(onClick = withClickSound { showCountSetupHint = false }) { Text("Cancel") }
+            },
+        )
+    }
+
     Scaffold(
         topBar = {
             ScreenTopBar(
@@ -83,7 +117,7 @@ fun BeaconOperationsScreen(
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Close") }
             Button(
-                onClick = withClickSound(onCount),
+                onClick = withClickSound { showCountSetupHint = true },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.secondary,
                     contentColor = MaterialTheme.colorScheme.onSecondary,

@@ -2,6 +2,7 @@ package mobile.racemaster.data.repository
 
 import androidx.room.withTransaction
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import mobile.racemaster.data.db.RacemasterDatabase
 import mobile.racemaster.data.db.dao.HistoryLineDao
 import mobile.racemaster.data.db.dao.RaceDao
@@ -34,30 +35,53 @@ fun parseCountOutstanding(note: String?): Int? =
     note?.let { COUNT_OUTSTANDING_NOTE_REGEX.matchEntire(it)?.groupValues?.get(1)?.toIntOrNull() }
 
 /** Count Mode's own write path — same shape as [CloseModeRepository]. A beacon is only ever
- *  counted once per race (unlike Close, re-presentation isn't a concern here — nothing turns a
- *  beacon back into "not yet counted"), so [recordCount] is only ever called once per beacon per
- *  race, gated by the caller's own "already seen" check (see [HistoryAction.COUNT_SEEN]'s own
- *  doc) — this repository itself does not dedupe. */
+ *  counted once per race *since the last Reset* (unlike Close, re-presentation isn't a concern
+ *  here — nothing turns a beacon back into "not yet counted" within the same segment), so
+ *  [recordCount] is only ever called once per beacon per segment, gated by the caller's own
+ *  "already seen" check (see [HistoryAction.COUNT_SEEN]'s own doc) — this repository itself does
+ *  not dedupe. */
 class CountModeRepository(
     private val db: RacemasterDatabase,
     private val raceDao: RaceDao,
     private val historyLineDao: HistoryLineDao,
 ) {
+    // Scopes [raw] down to the current, not-yet-Reset segment — same generic, LOCATION-anchored
+    // mechanism Bibs/Time's own live view uses (see HistoryFold.currentSegmentRows' own doc), so
+    // [CountModeViewModel.resetCountMode]'s RESET row (written via
+    // RaceRepository.closeCurrentSegment) genuinely zeroes the tally rather than it silently
+    // resuming the pre-reset count the next time Count Mode is started. Not location-aware (same
+    // as Time, not Bibs — see EntryLogModeEngine's own `locationAware = mode == HistoryMode.BIBS`):
+    // Count's own location is always the fixed "Pen" (RaceRepository.recordModeStart), so there's
+    // no per-location partitioning to do, only "has this visit been reset or not."
+    private fun currentSegment(raw: List<HistoryLineEntity>): List<HistoryLineEntity> =
+        currentSegmentRows(
+            raw,
+            { it.lineNumber },
+            { it.refLineNumber },
+            { it.note },
+            { it.action == HistoryAction.LOCATION },
+            { it.action == HistoryAction.RESET },
+            { it.action == HistoryAction.UNDO },
+            { it.action == HistoryAction.MODE_START || it.action == HistoryAction.NEW_RACE || it.action == HistoryAction.RESET || it.action == HistoryAction.PING },
+            locationAware = false,
+        )
+
     /** [totalCount] is the race's own expected total (static for the whole count, so the
      *  caller's own cached value — see [CountModeViewModel.commitDetection] — is safe to pass
      *  straight through); the *seen* tally is deliberately NOT a caller-supplied param — it's
-     *  counted fresh from this race's own COUNT_SEEN rows, inside this same transaction, right
-     *  before the insert. Two beacons committing close together used to both read the
-     *  ViewModel's own reactive seenBeaconNumbers snapshot before either write had fed back
-     *  through it (that Flow only catches up after the DB write below commits and re-queries),
-     *  landing the same seenCount on both and then skipping one once the Flow did catch up —
-     *  confirmed in the field: "1 of 5" shown for two different beacons, then jumping straight to
-     *  "3 of 5". A DB transaction already serializes against any other recordCount call for this
-     *  race, so counting here instead is always exactly "how many distinct beacons this race has
-     *  already recorded" at the instant this row is written — no two calls can ever see the same
-     *  count. When this beacon brings the count up to the total, a [HistoryAction.COUNT_COMPLETE]
-     *  row follows immediately after, in the same transaction (so it always lands on the very
-     *  next line number, right behind the beacon that completed it). */
+     *  counted fresh from this race's own current-segment COUNT_SEEN rows (see [currentSegment]),
+     *  inside this same transaction, right before the insert. Two beacons committing close
+     *  together used to both read the ViewModel's own reactive seenBeaconNumbers snapshot before
+     *  either write had fed back through it (that Flow only catches up after the DB write below
+     *  commits and re-queries), landing the same seenCount on both and then skipping one once the
+     *  Flow did catch up — confirmed in the field: "1 of 5" shown for two different beacons, then
+     *  jumping straight to "3 of 5". A DB transaction already serializes against any other
+     *  recordCount call for this race, so counting here instead is always exactly "how many
+     *  distinct beacons this segment has already recorded" at the instant this row is written —
+     *  no two calls can ever see the same count. When this beacon brings the count up to the
+     *  total, a [HistoryAction.COUNT_COMPLETE] row follows immediately after, in the same
+     *  transaction (so it always lands on the very next line number, right behind the beacon that
+     *  completed it). */
     suspend fun recordCount(
         raceId: Long,
         beaconNumber: Int,
@@ -67,7 +91,7 @@ class CountModeRepository(
     ) {
         db.withTransaction {
             val race = raceDao.getById(raceId) ?: return@withTransaction
-            val alreadySeen = historyLineDao.getAllForRaceAndMode(raceId, HistoryMode.COUNT)
+            val alreadySeen = currentSegment(historyLineDao.getAllForRaceAndMode(raceId, HistoryMode.COUNT))
                 .count { it.action == HistoryAction.COUNT_SEEN }
             val seenCount = alreadySeen + 1
             historyLineDao.insert(
@@ -127,8 +151,11 @@ class CountModeRepository(
         }
     }
 
+    /** The live, current-segment view — see [currentSegment]'s own doc. Everything before the
+     *  most recent Reset is excluded, the same way Bibs/Time's own live views already exclude
+     *  whatever an in-context Reset closed out. */
     fun observeCounts(raceId: Long): Flow<List<HistoryLineEntity>> =
-        historyLineDao.observeAllForRaceAndMode(raceId, HistoryMode.COUNT)
+        historyLineDao.observeAllForRaceAndMode(raceId, HistoryMode.COUNT).map(::currentSegment)
 
     fun observeUnsyncedCount(raceId: Long): Flow<Int> =
         historyLineDao.observeUnsyncedCountForRace(raceId, HistoryMode.COUNT)

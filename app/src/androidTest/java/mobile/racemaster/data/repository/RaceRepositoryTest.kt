@@ -222,8 +222,10 @@ class RaceRepositoryTest {
         val first = repository.startOrContinueRace("unknown-26-09-23", "Finish", maxAgeDays = 7)
         repository.switchActiveRace(first)
         repository.recordModeStart(first, AppMode.TIME, "Finish")
-        assertEquals(true, repository.closeCurrentSegment(first, HistoryMode.TIME))
-        assertNull(settingsRepository.activeRaceId.first())
+        repository.closeCurrentSegment(first, HistoryMode.TIME)
+        // Resetting the race's own very first segment no longer abandons it back to "no race set
+        // up" (see closeCurrentSegment's own doc) — activeRaceId stays exactly as it was.
+        assertEquals(first, settingsRepository.activeRaceId.first())
 
         val second = repository.startOrContinueRace("unknown-26-09-23", "Finish", maxAgeDays = 7)
         repository.switchActiveRace(second)
@@ -237,7 +239,7 @@ class RaceRepositoryTest {
     }
 
     @Test
-    fun resettingAContinuedRaceBackToTheBeginningStillRevertsToNoRaceSetup() = runTest {
+    fun resettingAContinuedRaceBackToTheBeginningAgainLeavesItStillSetUp() = runTest {
         val id = repository.startOrContinueRace("again", "Finish", maxAgeDays = 7)
         repository.switchActiveRace(id)
         repository.recordModeStart(id, AppMode.TIME, "Finish")
@@ -246,8 +248,11 @@ class RaceRepositoryTest {
         repository.switchActiveRace(id)
         repository.recordModeStart(id, AppMode.TIME, "Finish")
 
-        assertEquals(true, repository.closeCurrentSegment(id, HistoryMode.TIME))
-        assertNull(settingsRepository.activeRaceId.first())
+        repository.closeCurrentSegment(id, HistoryMode.TIME)
+        // Resetting it back to the beginning again still leaves activeRaceId exactly as it was —
+        // Start always self-heals back to "START @location" instead (see closeCurrentSegment's
+        // own doc), rather than this device reverting to "no race set up".
+        assertEquals(id, settingsRepository.activeRaceId.first())
     }
 
     @Test
@@ -558,6 +563,11 @@ class RaceRepositoryTest {
         when (mode) {
             HistoryMode.TIME -> db.raceDao().setTimeModeStartedAt(raceId, startedAtMillis)
             HistoryMode.BIBS -> db.raceDao().setBibsModeStartedAt(raceId, startedAtMillis)
+            // Count/Close have no *StartedAtMillis column of their own (see
+            // RaceRepository.forceResetActiveModes' own doc — neither is ever reachable from
+            // there), so there's nothing for this fixture to set for them either; never actually
+            // called with these in practice, listed for exhaustiveness only.
+            HistoryMode.COUNT, HistoryMode.CLOSE -> Unit
         }
         val race = db.raceDao().getById(raceId)!!
         db.historyLineDao().insert(
