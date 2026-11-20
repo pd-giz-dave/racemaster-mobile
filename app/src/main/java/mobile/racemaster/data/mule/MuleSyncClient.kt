@@ -2,7 +2,7 @@ package mobile.racemaster.data.mule
 
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
-import io.ktor.client.engine.android.Android
+import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.expectSuccess
 import io.ktor.client.request.bearerAuth
@@ -173,9 +173,16 @@ sealed interface PingOutcome {
 }
 
 /** HTTP client for the racemaster server's existing bearer-token API, plus the new
- *  mobile-append endpoint this feature adds server-side. */
+ *  mobile-append endpoint this feature adds server-side. OkHttp, not the legacy Ktor `Android`
+ *  engine (HttpURLConnection-backed) that engine used to use: that engine's cancellation cleanup
+ *  runs inline, synchronously, on whatever thread calls `Job.cancel()` — which crashed the app
+ *  with a NetworkOnMainThreadException whenever [ServerStatusRepository.startPolling]'s
+ *  `collectLatest` cancelled an in-flight ping/checkAuth call exactly as the operator saved a
+ *  new server URL on Setup Server (confirmed in the field: "attempting the log-in crashes the
+ *  app"). OkHttp runs every call, including its own cancellation teardown, on its own internal
+ *  dispatcher thread pool regardless of which thread calls cancel(), so this can't happen. */
 class MuleSyncClient {
-    private val client = HttpClient(Android) {
+    private val client = HttpClient(OkHttp) {
         install(ContentNegotiation) {
             json(Json { ignoreUnknownKeys = true })
         }
