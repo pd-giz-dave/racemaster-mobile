@@ -1,4 +1,4 @@
-# ToDo
+# Done
 
 ## Setup Race screen
 
@@ -176,10 +176,9 @@ looking in the folder for the arbitrary initial name they gave the race, and its
 
 I would like a proposal that allows a bibs mode phone to have a setting that specifies what the
 event type is when 3 digits are entered, default is 'Finish'. That setting must be visually
-obvious in the bibs mode screen and its options are start, finish retire. A single press of
+obvious in the bibs mode screen and its options are start, finish, retire. A single press of
 something must be all that is required to change the default, the option should not make the
-screen bigger - one suggestion: have 3 small buttons at the left of the number area and right
-align the number input area.
+screen bigger.
  - [x] done
 
 ## A rationalisation
@@ -194,25 +193,12 @@ Treat any location that is not 'Start' or 'Finish' as a CP location and enforce 
 a location is compulsory in race setup, its not allowed to be blank.
  - [x] done
 
-## Update help
-
-- [ ] The Claude.AI generated help is confusing, re-do it manually.
-
-## An idea
-
-Develop an app that is run on runners phones (many runners carry smartphones) when it passes
-near a CP mode phone and auto communication happens that records their number and time. That
-app could also provide GPS tracking. It then could be used for the Hike to both know where
-competitors are and when they passed a CP.
-
-See racemaster-tracker for more on this.
-
 ## Another idea
 
 Extend this app to recognise bluetooth beacons worn by runners.
 Such trackers can be had for £3 each for 1 yr use (before battery dies), 
 or £7 each for a 6 year battery life that is replaceable.
-See alibaba express for examples.
+See Alibaba or examples.
 
 ### Implementation notes
 
@@ -224,11 +210,11 @@ phase 1 (parsing + distance estimation + the Identify Fob registration-desk scre
 implemented — see the plan doc's own 2026-11-05 updates. Phase 2 (`BeaconScanEngine`'s actual
 auto-record-on-pass detection) is not yet built.
 
-- [ ] detection timed at peak signal strength (closest approach), not first/last-seen — the fob
+- [x] detection timed at peak signal strength (closest approach), not first/last-seen — the fob
       doubles as a timing device (photo-finish resolution), not just bib ID
-- [ ] use measured-power to estimate distance; enforce a max-range threshold, tighter at
+- [x] use measured-power to estimate distance; enforce a max-range threshold, tighter at
       registration than during race detection
-- [ ] bib-beacon pairing happens at registration in the Racemaster web-app (not on the phone),
+- [x] bib-beacon pairing happens at registration in the Racemaster web-app (not on the phone),
       broadcast to phones piggy-backed on the existing bib/name propagation system; each fob has
       a short-code known to the web-app, similar to the dibber number allocation scheme (see
       ~/racemaster)
@@ -338,23 +324,15 @@ Operations hub" section.
 - [x] during the race when the app is in bibs mode it needs to detect a passing beacon as
       described elsewhere, BUT... to do that reliably the phone must NOT also be in mule mode
       (see the mitigations implemented for beacon programming around scanning)
-- [ ] a beacon with an id of 0 is not allowed for a runner, its reserved for the sweep
-
-## Location Maps
-
-Modify all modes to relay their physical location, via GPS, back to the server/racemaster app.
-Modify the racemaster web-app to show mobile locations on a map tagging the location with the
-location code reported by the phone. The best place for the map is another tab on the Mobile
-Files page. Ideally an OS map if available for free, else the best OpenStreetMap variant.
 
 ## Bluetooth Beacon range estimation
 
 A facility is required to get a handle on how the RSSI drops off with range with a view to
 calculating more accurate distances. There are several contexts: 
-  - [ ] during registration inside a building with lots of people milling about and lots of 
+  -  during registration inside a building with lots of people milling about and lots of 
         beacons in range.
-  - [ ] at a CP out in thw wild, few people, no buildings, only a few beacons in range
-  - [ ] at the finish line, lots of people, no buildings, lots of nearby beacons
+  - at a CP out in thw wild, few people, no buildings, only a few beacons in range
+  - at the finish line, lots of people, no buildings, lots of nearby beacons
 
 This facility should be accessible as part of the programming system.
 
@@ -370,19 +348,6 @@ AltBeacon's own empirical curve fit as an interim improvement — see docs/beaco
 "Interim formula swap" section. Still borrowed constants (not this app's own hardware), so the
 three field sessions above remain the real fix.
 
-## Some issues with the Trigs race
-
-- [ ] some CP's are visited twice (railway bridge and road crossing there)
-- [ ] some CP's are unmanned (railway bridge)
-- [ ] need to mimic SI's ability to have a time allowance between CP's (that road crossing)
-
-## Other issues
-
-- [ ] a phone at the start location needs a reverse detection,
-      the bib must be recorded as it disappears not as it arrives, 
-      hmmm... what if they wander around and come in/out of BT range
-- [ ] treat beacon 000 as a sweep and announce and report as such
-
 # Update beacon plan
 
 The beacon-detection-plan.md has got into a bit of a confusing mess, it needs rationalizing.
@@ -394,38 +359,6 @@ In outline the 'beacon plan' consists of:
       (bibs mode at a CP location)
   - [x] at a checkpoint the detection algorithm is 'first seen'
 
-## Finish line
-
-- [ ] mobile app detects, records and times beacons crossing the finish line
-      (bibs mode at the finish location)
-  - [ ] timing is critical so two co-ordinated phones are required
-  - [ ] finish time needs to be set when the strongest signal is seen (on either phone)
-  - [ ] runners will mill about in-range after finishing so a means of knowing they have finished
-        is required - how? the finish line will typically be 3 metres wide, the finish funnel
-        typically 5 metres long, with a phone either side of the finish line the runner will pass
-        within 1.5 metres of a phone, 3 times nearer than the end of the finish funnel, this
-        should create a characteristic and detectable power curve (bell curve?), but false local
-        peaks need to be allowed for
-
-## Start line
-
-- [ ] mobile app needs to be able to record the mass start time as well as individual start times
-      (bibs mode at a start location)
-  - [ ] at the start location the mass start time is a manual action
-  - [ ] at the start location an individual start time is also a manual action
-  - [ ] this is the same as the current bibs mode at the start location with the addition that it
-        knows the runners beacon number, the operator needs feedback that the beacon is visible
-        for the runner being started, it not being visible could mean the runner is not wearing
-        the beacon and if so should not be allowed to start
-  - [ ] when bibs mode is at the start location the operator needs to be able to 'prepare' a
-        bib for starting by entering it's number, but it must not be committed until the operator
-        confirms it, this is so the actual start time can be recorded with sub-second accuracy
-  - [ ] also, the operator needs to be able to 'prepare' for the mass start - by selecting the
-        'seniors' event - but it must not be committed until the operator confirms it, for the
-        same reason as above
-  - [ ] the confirm action should be available by volume up/down, et al, like time mode
-  - [ ] this behaviour change needs to be gated against an option in Setup Race - "Using beacons"
-
 ## Close mode
 
 - [x] a new mode is required to 'close' a beacon - **done**: Close is now a full Setup Race mode
@@ -434,7 +367,7 @@ In outline the 'beacon plan' consists of:
       location is fixed to "Close" (same reasoning Time's is fixed to "Finish") so a dedicated
       close-station phone is identifiable in `~racemaster`'s own device list, since it never logs
       a Bib/Time entry of its own.
-    - [x] in this mode each beacon visible is shown in nearest first order, when selected
+- [x] in this mode each beacon visible is shown in nearest first order, when selected
           after confirmation, the beacons battery level is read and then its turned off,
           the battery level and turn off time is logged for later transfer to ~racemaster for
           analysis (the transfer via bt or the server and analysis is already implemented there)
@@ -442,7 +375,7 @@ In outline the 'beacon plan' consists of:
           to the server by the existing device-sync pipeline like any other row, not a bespoke
           endpoint. `~racemaster`'s own `progress.json` handling for these rows is still open
           (see docs/beacon-detection-plan.md's own Part E).
-    - [x] this mode needs to be aware of the issued beacons and show a list of outstanding ones
+- [x] this mode needs to be aware of the issued beacons and show a list of outstanding ones
           in bib number order
 
 ## Count mode
@@ -464,32 +397,6 @@ In outline the 'beacon plan' consists of:
       neither has a Reset; it's also what unblocks Race History's delete action for that race,
       which was otherwise permanently guarded against deletion while `race.mode` stayed Count or
       Close (see `isRaceActive`'s own doc).
-- [ ] a means to eject one or all seen beacons is required to facilitate runners going away from
-      the start and returning later (e.g they forgot their compulsory kit) or to re-start the count
-      due to errors/confusion
-
-## Sweep
-
-- [ ] whenever seen, beacon number 000 is a sweep, a sweep is a runner that follows on behind the
-      pack for the purposes of ensuring nobody goes off-course, they do not count as competitors,
-      they are a safety feature, so count mode should ignore them, other modes should record them
-      but not give them a split number, their nominal bib number is always 000
-      — **count mode's own half done**: `CountModeViewModel` ignores beacon 000 outright. The
-      "other modes should record but not split-number it" half is still open — unrelated to the
-      Count/Close mode rework, a separate item.
-
-# Samsung XCover 4 setup
-
-Need a script/checklist of everything that can be turned off to 'lock-down' the phone to be as
-specific as possible to just running this app. In particular to minimise network and BLE traffic
-and minimise battery drain from 'irrelevant' services.
-
-# Network issue question
-
-In the context of a weak mobile signal where connections can drop out, how is a re-send handled?
-If a message is long the probability of a drop-out is much higher than for a short message.
-Should we mitigate for this by breaking up long messages into shorter ones that can be 
-re-constructed at the destination as pieces arrive? Or is this auto by the TCP/IP protocol?
 
 # Tweaks/Bugs
 
@@ -543,3 +450,94 @@ re-constructed at the destination as pieces arrive? Or is this auto by the TCP/I
       `BeaconScanEngine`'s own automatic checkpoint detections (several runners passing close
       together) can genuinely out-pace one utterance's reading time. Switched to `QUEUE_ADD` so
       every bib is read in full, in arrival order, instead of truncating whatever was still playing.
+
+# ToDo
+
+## Count mode
+
+- [ ] a means to eject one or all seen beacons is required to facilitate runners going away from
+      the start and returning later (e.g they forgot their compulsory kit) or to re-start the count
+      due to errors/confusion
+- [ ] when ejected the beacon must not be re-counted while it remains in range, and must go out
+      of range for at least N minutes before allowed to be re-counted, if it comes back sooner
+      the operator must be allowed to confirm or deny it 
+
+## Start line
+
+- [ ] mobile app needs to be able to record the mass start time as well as individual start times
+      (bibs mode at a start location)
+- [ ] at the start location the mass start time is a manual action
+- [ ] at the start location an individual start time is also a manual action
+- [ ] this is the same as the current bibs mode at the start location with the addition that it
+        knows the runners beacon number, the operator needs feedback that the beacon is visible
+        for the runner being started, it not being visible could mean the runner is not wearing
+        the beacon and if so should not be allowed to start
+- [ ] when bibs mode is at the start location the operator needs to be able to 'prepare' a
+        bib for starting by entering it's number, but it must not be committed until the operator
+        confirms it, this is so the actual start time can be recorded with sub-second accuracy
+- [ ] also, the operator needs to be able to 'prepare' for the mass start - by selecting the
+        'seniors' event - but it must not be committed until the operator confirms it, for the
+        same reason as above
+- [ ] the confirm action should be available by volume up/down, et al, like time mode
+- [ ] this behaviour change needs to be gated against an option in Setup Race - "Using beacons"
+
+## Finish line
+
+- [ ] mobile app detects, records and times beacons crossing the finish line
+      (bibs mode at the finish location)
+- [ ] timing is critical so two co-ordinated phones are required
+- [ ] finish time needs to be set when the strongest signal is seen (on either phone)
+- [ ] runners will mill about in-range after finishing so a means of knowing they have finished
+        is required - how? the finish line will typically be 3 metres wide, the finish funnel
+        typically 5 metres long, with a phone either side of the finish line the runner will pass
+        within 1.5 metres of a phone, 3 times nearer than the end of the finish funnel, this
+        should create a characteristic and detectable power curve (bell curve?), but false local
+        peaks need to be allowed for
+
+## Sweep
+
+- [ ] whenever seen, beacon number 000 is a sweep, a sweep is a runner that follows on behind the
+      pack for the purposes of ensuring nobody goes off-course, they do not count as competitors,
+      they are a safety feature, so count mode should ignore them, other modes should record them
+      but not give them a split number, their nominal bib number is always 000
+      — **count mode's own half done**: `CountModeViewModel` ignores beacon 000 outright. The
+      "other modes should record but not split-number it" half is still open — unrelated to the
+      Count/Close mode rework, a separate item.
+
+## Some issues with the Trigs race
+
+- [ ] some CP's are visited twice (railway bridge and road crossing there)
+- [ ] some CP's are unmanned (railway bridge)
+- [ ] need to mimic SI's ability to have a time allowance between CP's (that road crossing)
+      (that's a web-app issue - see ToDo.md there)
+
+# Samsung XCover 4 setup
+
+Need a script/checklist of everything that can be turned off to 'lock-down' the phone to be as
+specific as possible to just running this app. In particular to minimise network and BLE traffic
+and minimise battery drain from 'irrelevant' services.
+
+# Network issue question
+
+In the context of a weak mobile signal where connections can drop out, how is a re-send handled?
+If a message is long the probability of a drop-out is much higher than for a short message.
+Should we mitigate for this by breaking up long messages into shorter ones that can be
+re-constructed at the destination as pieces arrive? Or is this auto by the TCP/IP protocol?
+
+# Do a range calibration test (when got new beacons)
+
+- [ ] indoors, cluttered
+- [ ] outdoors, open space
+- [ ] use results to work out a better range estimation algorithm
+- [ ] do tests an XCover 4 and 7
+
+## Update help
+
+- [ ] The Claude.AI generated help is confusing, re-do it manually.
+
+## Location Maps
+
+Modify all modes to relay their physical location, via GPS, back to the server/racemaster app.
+Modify the racemaster web-app to show mobile locations on a map tagging the location with the
+location code reported by the phone. The best place for the map is another tab on the Mobile
+Files page. Ideally an OS map if available for free, else the best OpenStreetMap variant.
