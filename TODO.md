@@ -450,8 +450,22 @@ In outline the 'beacon plan' consists of:
       `BeaconScanEngine`'s own automatic checkpoint detections (several runners passing close
       together) can genuinely out-pace one utterance's reading time. Switched to `QUEUE_ADD` so
       every bib is read in full, in arrival order, instead of truncating whatever was still playing.
+- [x] when relocating in bibs mode from cp1 to cp2 the "start @cp2" screen was shown but beacons
+      already visible there where announced before start was selected, that is actually correct,
+      but what is not is the start screen being shown, it should go straight into bibs mode
+      screen, this only applies when relocating, the start screen should still be shown for the
+      initial location — **done**: `BibsModeViewModel`'s own location-change hydration now
+      auto-writes the real Clock marker (`startBibsMode`) the moment a segment opens with its own
+      fresh LOCATION row and no Clock yet, but only once this race's Bibs mode has had more than
+      one visit ever (`EntryLogModeEngine.observeHasMultipleVisitsEver`, keyed off LOCATION-row
+      count rather than `bibsModeStartedAtMillis`, which Reset clears back to null and so can't
+      tell "never started" apart from "started before, now reset" on its own) — so a genuine
+      Relocate goes straight into the keypad, while the race's first-ever Bibs setup still shows
+     the manual Start button.
 
 # ToDo
+
+## Bugs
 
 ## Count mode
 

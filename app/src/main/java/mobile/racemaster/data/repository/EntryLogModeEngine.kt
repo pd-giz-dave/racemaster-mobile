@@ -102,6 +102,19 @@ internal class EntryLogModeEngine(
     fun observeCurrentSegmentEntries(raceId: Long): Flow<List<HistoryLineEntity>> =
         historyLineDao.observeAllForRaceAndMode(raceId, mode).map { raw -> currentSegment(raw) }
 
+    // More than this race's very first-ever LOCATION marker for [mode] — i.e. this isn't the
+    // first time [mode] has ever been set up for this race (TODO.md: Bibs' own Start screen
+    // should only ever show for that genuinely first visit, never again once the operator has
+    // already relocated — or switched back into this mode — at least once before). A Reset
+    // never writes a new LOCATION row (only the RESET marker that excludes the old one from the
+    // current segment — see HistoryFold's own doc), so this count is unaffected by how many
+    // times a given visit has been reset, unlike RaceEntity.bibsModeStartedAtMillis, which Reset
+    // clears back to null and so can't tell "never started" apart from "started before, now
+    // reset" on its own.
+    fun observeHasMultipleVisitsEver(raceId: Long): Flow<Boolean> =
+        historyLineDao.observeAllForRaceAndMode(raceId, mode)
+            .map { raw -> raw.count { it.action == HistoryAction.LOCATION } > 1 }
+
     private fun currentSegment(raw: List<HistoryLineEntity>): List<HistoryLineEntity> =
         currentSegmentRows(
             raw,

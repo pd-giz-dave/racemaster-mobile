@@ -89,6 +89,12 @@ data class BibsModeUiState(
     // insert a second, redundant Clock row into a segment that already has one; conversely
     // Relocating to a genuinely new segment must never inherit "started" from whichever segment
     // happened to set that race-wide field last.
+    //
+    // A genuine Relocate (as opposed to the race's first-ever Bibs setup) never actually shows
+    // this false for long — see the init block's own auto-start doc (TODO.md's "Bugs": relocating
+    // mid-race used to show "START @cp2" before the keypad; it should go straight in) — this
+    // field itself is unchanged, the Clock row for a relocated segment is now just written
+    // automatically instead of waiting on a manual Start tap.
     val started: Boolean = false,
     val currentDigits: String = "",
     // Which options the Event button's picker should offer — EVENT_PICKER_OPTIONS while there's
@@ -205,7 +211,26 @@ class BibsModeViewModel(
                 raceRepository.observeRace(raceId).map { it?.location }.distinctUntilChanged()
                     .map { raceId }
             }.collectLatest { raceId ->
-                val topEntry = bibsModeRepository.observeCurrentSegmentEntries(raceId).first().firstOrNull()
+                val entries = bibsModeRepository.observeCurrentSegmentEntries(raceId).first()
+                // A fresh segment opened by its own LOCATION row (so NOT one a Reset just
+                // emptied out — that leaves no LOCATION row in the current segment at all, see
+                // HistoryFold's own doc), with no Clock marker of its own yet, on a race whose
+                // Bibs mode has been visited more than this once ever (so NOT the race's first-
+                // ever Bibs setup, which must still show the manual Start button) — i.e. a
+                // genuine Relocate (or a later mode-switch back into Bibs). TODO.md's "Bugs":
+                // relocating mid-race used to show "START @cp2" before the keypad, when beacons
+                // already visible there were correctly being announced in the background; the
+                // Start screen itself was the only thing wrong. Auto-writes the real Clock
+                // marker the operator would otherwise have to tap Start for, same effect as
+                // startBibsMode() below, just triggered automatically instead of manually — it's
+                // still a real logged row, not a UI-only fake "already started".
+                if (entries.any { it.action == HistoryAction.LOCATION } &&
+                    entries.none { it.action == HistoryAction.CLOCK } &&
+                    bibsModeRepository.observeHasMultipleVisitsEver(raceId).first()
+                ) {
+                    bibsModeRepository.startBibsMode(raceId)
+                }
+                val topEntry = entries.firstOrNull()
                 digitsFlow.value = topEntry?.bibNumber?.let { it.toString().padStart(MAX_BIB_DIGITS, '0') }.orEmpty()
                 digitsFrozenFlow.value = topEntry?.bibNumber != null
                 canRetagFlow.value = topEntry?.bibNumber != null

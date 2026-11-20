@@ -491,4 +491,36 @@ class BibsModeRepositoryTest {
             assertTrue(lineNumbersInInsertionOrder[i] > lineNumbersInInsertionOrder[i - 1])
         }
     }
+
+    // BibsModeViewModel's own init block uses this to auto-start a Relocate-opened segment
+    // (TODO.md's "Bugs": the manual Start screen should only ever show for a race's genuinely
+    // first-ever Bibs visit) — these pin the underlying signal's own three cases independent of
+    // any ViewModel/Compose plumbing.
+
+    @Test
+    fun hasMultipleVisitsEverIsFalseForTheRacesFirstEverBibsSetup() = runTest {
+        setupRace("CP1")
+        assertTrue(repository.observeHasMultipleVisitsEver(raceId).first().not())
+    }
+
+    @Test
+    fun hasMultipleVisitsEverIsTrueOnceRelocatedToAGenuinelyNewLocation() = runTest {
+        setupRace("CP1")
+        raceRepository.recordModeStart(raceId, AppMode.BIBS, "CP2")
+        assertTrue(repository.observeHasMultipleVisitsEver(raceId).first())
+    }
+
+    @Test
+    fun hasMultipleVisitsEverStaysTrueAfterAResetUnlikeBibsModeStartedAtMillis() = runTest {
+        setupRace("CP1")
+        raceRepository.recordModeStart(raceId, AppMode.BIBS, "CP2")
+        repository.startBibsMode(raceId)
+        repository.resetBibsMode(raceId)
+
+        // bibsModeStartedAtMillis alone can't distinguish "relocated before" from "never
+        // started" once Reset clears it back to null (see BibsModeUiState.started's own doc) —
+        // hasMultipleVisitsEver, keyed off LOCATION rows instead, is unaffected by Reset.
+        assertNull(db.raceDao().getById(raceId)?.bibsModeStartedAtMillis)
+        assertTrue(repository.observeHasMultipleVisitsEver(raceId).first())
+    }
 }

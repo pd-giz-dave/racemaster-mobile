@@ -38,6 +38,8 @@ class BibsModeRepository(
 
     fun observeCurrentSegmentEntries(raceId: Long): Flow<List<HistoryLineEntity>> = engine.observeCurrentSegmentEntries(raceId)
 
+    fun observeHasMultipleVisitsEver(raceId: Long): Flow<Boolean> = engine.observeHasMultipleVisitsEver(raceId)
+
     fun observeUnsyncedCount(raceId: Long): Flow<Int> = engine.observeUnsyncedCount(raceId)
 
     fun observeLastSyncedAtMillis(raceId: Long): Flow<Long?> = engine.observeLastSyncedAtMillis(raceId)
