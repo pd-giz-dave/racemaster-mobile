@@ -110,7 +110,18 @@ fun CountModeScreen(
                 if (uiState.outstanding.isEmpty()) {
                     item {
                         Text(
-                            "None — every issued beacon has been seen.",
+                            // Both an empty outstanding list AND totalIssued == 0 look identical
+                            // here (there's nothing to show either way) — but they mean opposite
+                            // things: the former is genuine completion, the latter is "no beacon
+                            // expectations loaded for this race at all yet" (e.g. the server's
+                            // own progress.json for it hasn't synced down yet), which the old
+                            // single "every issued beacon has been seen" text claimed regardless,
+                            // confirmed in the field as actively misleading in that second case.
+                            if (uiState.totalIssued == 0) {
+                                "No beacon expectations loaded for this race yet."
+                            } else {
+                                "None — every issued beacon has been seen."
+                            },
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
