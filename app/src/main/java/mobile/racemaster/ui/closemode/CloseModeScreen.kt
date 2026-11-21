@@ -28,7 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import mobile.racemaster.ui.components.ModeScreenTopBar
+import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.util.withClickSound
 import java.text.SimpleDateFormat
@@ -41,19 +41,27 @@ private fun formatClosedAt(millis: Long): String = SimpleDateFormat("HH:mm", Loc
  *  list to connect, read its battery, and power it off; a beacon already closed this race is
  *  still listed (tagged "closed ×N") rather than disappearing, since it may genuinely be
  *  re-presented (TODO.md: a runner going straight to the close station without crossing the
- *  finish line first) — closing it again is a normal action, not an error.
+ *  finish line first) — closing it again is a normal action, not an error. Below the live list
+ *  sits a "Closed" list in bib order (direct feedback: the old "Outstanding" list here was
+ *  redundant with the nearby list's own status tags) — reactively derived from the same
+ *  CLOSE/CLOSE_REOPENED rows [CloseModeViewModel.closedBeaconNumbers] already tracks, so a
+ *  closed beacon re-presenting (auto-reinstated via [CloseModeViewModel.handleReopenDetection])
+ *  drops back out of this list the moment that happens, same as it already did for the list this
+ *  replaced.
  *
- *  Uses the same [ModeScreenTopBar] (Home + a secondary action, no separate Back) every
- *  recording-mode screen uses, not the plain back/home [mobile.racemaster.ui.components.ScreenTopBar]
- *  this screen used back when it was only the Beacons hub's own utility — that secondary action
- *  is "Stop" here (per direct feedback: Relocate's full name/location/mode editor was clunky for
- *  a mode with nothing meaningful to relocate), clearing the race's mode back to null
- *  ([RaceRepository.stopMode]) rather than opening a separate screen — it's the *only* way to
- *  ever move this race out of Close mode once it's set up, since Close has no Reset of its own
- *  (see [CloseModeViewModel]'s own doc). Reached via Routes.CLOSE_MODE (Setup Race) and
- *  Routes.CLOSE_BEACONS (the Beacons hub's own standing shortcut) alike — see
- *  Routes.CLOSE_BEACONS's own doc for why both stay; Stop is disabled on the latter path unless
- *  the active race's own current mode genuinely is Close (see
+ *  "Stop" is a body-level button at the foot of the page, below the list (direct feedback, same
+ *  move [mobile.racemaster.ui.countmode.CountModeScreen] made for its own Stop/Reset pair) — the
+ *  top bar itself is the same [mobile.racemaster.ui.components.ScreenTopBar] every non-mode
+ *  screen uses (Help/Back/Home, direct feedback: this screen used to be the odd one out with
+ *  only a Home icon), not [mobile.racemaster.ui.components.ModeScreenTopBar] (Bibs/Time's own
+ *  secondary-action shape) — Back and Home both just navigate home, same reasoning
+ *  [mobile.racemaster.ui.countmode.CountModeScreen]'s own doc gives for its identical pair. Stop
+ *  clears the race's mode back to null
+ *  ([RaceRepository.stopMode]) — it's the *only* way to ever move this race out of Close mode once
+ *  it's set up, since Close has no Reset of its own (see [CloseModeViewModel]'s own doc). Reached
+ *  via Routes.CLOSE_MODE (Setup Race) and Routes.CLOSE_BEACONS (the Beacons hub's own standing
+ *  shortcut) alike — see Routes.CLOSE_BEACONS's own doc for why both stay; Stop is disabled on the
+ *  latter path unless the active race's own current mode genuinely is Close (see
  *  [CloseModeUiState.canStopCloseMode]'s own doc). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,6 +70,7 @@ fun CloseModeScreen(
     viewModel: CloseModeViewModel = viewModel(factory = CloseModeViewModel.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     var showStopConfirm by remember { mutableStateOf(false) }
 
     if (showStopConfirm) {
@@ -108,11 +117,9 @@ fun CloseModeScreen(
 
     Scaffold(
         topBar = {
-            ModeScreenTopBar(
-                title = "Close Mode",
-                thisRaceEnabled = uiState.canStopCloseMode,
-                thisRaceLabel = "Stop",
-                onThisRace = { showStopConfirm = true },
+            ScreenTopBar(
+                title = { Text("Close Mode") },
+                onBack = onHome,
                 onHome = onHome,
                 helpTopic = HelpTopics.CloseMode,
             )
@@ -144,11 +151,19 @@ fun CloseModeScreen(
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                // Tight by default (TODO.md: "tighten the vertical spacing of the close list") —
+                // section headers below add their own extra top padding instead, matching Count
+                // Mode's own LazyColumn convention.
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 item {
+                    // Echoed under the title (TODO.md) — same "Device name: ..." convention
+                    // every other mode's own RaceProgressSummary already shows.
+                    deviceName?.takeIf { it.isNotBlank() }?.let {
+                        Text("Device name: $it", style = MaterialTheme.typography.labelMedium)
+                    }
                     Text(
-                        "${uiState.outstanding.size} of ${uiState.totalIssued} outstanding",
+                        "${uiState.closed.size} of ${uiState.totalIssued} closed",
                         style = MaterialTheme.typography.titleMedium,
                     )
                     HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
@@ -189,27 +204,46 @@ fun CloseModeScreen(
                 item {
                     HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
                     Text(
-                        "Outstanding (${uiState.outstanding.size})",
+                        "Closed (${uiState.closed.size})",
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(top = 8.dp),
                     )
                 }
-                if (uiState.outstanding.isEmpty()) {
+                if (uiState.closed.isEmpty()) {
                     item {
                         Text(
-                            "None — every issued beacon has been closed.",
+                            "None closed yet.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
                 } else {
-                    items(uiState.outstanding, key = { it.beaconNumber }) { outstanding ->
-                        Text(
-                            "Bib ${outstanding.bibNumber} — beacon %03d".format(outstanding.beaconNumber),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
+                    items(uiState.closed, key = { it.beaconNumber }) { closed ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                (closed.bibNumber?.let { "Bib $it" } ?: "Bib ?") + " — beacon %03d".format(closed.beaconNumber),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Text(
+                                "closed ${formatClosedAt(closed.closedAtMillis)}" +
+                                    (if (closed.closeCount > 1) " ×${closed.closeCount}" else "") +
+                                    " · ${closed.batteryPercent}%",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                     }
                 }
             }
+            // Foot-of-page button (direct feedback, same move CountModeScreen made for its own
+            // Stop/Reset pair) — see this screen's own doc for why the top bar's own Stop link
+            // moved here.
+            OutlinedButton(
+                onClick = withClickSound { showStopConfirm = true },
+                enabled = uiState.canStopCloseMode,
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+            ) { Text("STOP") }
         }
     }
 }

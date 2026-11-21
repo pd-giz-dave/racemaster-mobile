@@ -40,6 +40,7 @@ import mobile.racemaster.data.repository.parseBeaconReopened
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
+import mobile.racemaster.ui.deviceNameFlow
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -55,7 +56,12 @@ data class NearbyBeaconUi(
     val closeCount: Int,
 )
 
-data class OutstandingBeaconUi(val bibNumber: Int, val beaconNumber: Int)
+/** One already-closed beacon, for the "Closed" list in bib order (TODO.md: the old "Outstanding"
+ *  list here was redundant with the nearby list's own status tags) — [closedAtMillis]/
+ *  [batteryPercent] are this beacon's own latest CLOSE row (TODO.md: a re-presented beacon may be
+ *  closed more than once, so [closeCount] can be > 1); dropped from this list the moment a
+ *  CLOSE_REOPENED row supersedes it — see [CloseModeViewModel.closedBeaconNumbers]'s own doc. */
+data class ClosedBeaconUi(val bibNumber: Int?, val beaconNumber: Int, val closedAtMillis: Long, val batteryPercent: Int, val closeCount: Int)
 
 enum class CloseOutcome { SUCCESS, FAILURE }
 
@@ -74,13 +80,18 @@ data class CloseModeUiState(
     // instead of silently vanishing or being rejected (TODO.md's "allow for a beacon to be
     // re-presented" — see HistoryAction.CLOSE's own doc).
     val nearbyBeacons: List<NearbyBeaconUi> = emptyList(),
-    val outstanding: List<OutstandingBeaconUi> = emptyList(),
+    // In bib order — replaces an earlier "Outstanding" list here, judged redundant with the
+    // nearby list's own "closed ×N" status tags (TODO.md). Reactively derived from
+    // [CloseModeViewModel.closedBeaconNumbers], so a closed beacon re-presenting (see
+    // [CloseModeViewModel.handleReopenDetection]) drops back out of this list the moment that's
+    // detected, the same as it already did for the list this replaced.
+    val closed: List<ClosedBeaconUi> = emptyList(),
     val totalIssued: Int = 0,
     val selected: NearbyBeaconUi? = null,
     val reclosingPriorRecord: PriorCloseUi? = null,
     val isBusy: Boolean = false,
     val lastResult: CloseResultUi? = null,
-    // For the top bar's own "Stop" button — Close has no Reset of its own (see
+    // For the body's own foot-of-page "Stop" button — Close has no Reset of its own (see
     // CloseModeRepository's own doc), so Stop (clearing the race's mode back to null — see
     // RaceRepository.stopMode) is the only way to ever move this race out of Close mode once
     // it's set up. [canStopCloseMode] additionally requires the race's own CURRENT mode to
@@ -105,7 +116,7 @@ data class CloseModeUiState(
  *  active race's own mode (see the plan's own Part A doc for why both stay). Recording a close
  *  itself never branches on `race.mode` — it just records CLOSE rows against whatever
  *  `activeRaceId` is — so both routes resolve to the exact same screen/ViewModel with no
- *  special-casing; only the top bar's own Stop button (see [CloseModeUiState.canStopCloseMode])
+ *  special-casing; only the body's own Stop button (see [CloseModeUiState.canStopCloseMode])
  *  cares what the race's current mode actually is. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class CloseModeViewModel(
@@ -121,6 +132,11 @@ class CloseModeViewModel(
 
     private val raceIdFlow: StateFlow<Long?> = settingsRepository.activeRaceId
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    // Echoed under the title (TODO.md) — same "Device name: ..." convention every other mode's
+    // own RaceProgressSummary already shows; Close has no such shared header, so this screen
+    // reads it directly.
+    val deviceName: StateFlow<String?> = deviceNameFlow(settingsRepository)
 
     /** Per-beacon running state, keyed by advertiser address — deliberately simpler than
      *  [mobile.racemaster.ui.beaconidentify.IdentifyFobViewModel]'s own enter/exit hysteresis:
@@ -182,7 +198,7 @@ class CloseModeViewModel(
                     bibByBeaconNumber = emptyMap()
                     eventsByBeaconNumber = emptyMap()
                     closedBeaconNumbers = emptySet()
-                    _uiState.update { it.copy(outstanding = emptyList(), totalIssued = 0) }
+                    _uiState.update { it.copy(closed = emptyList(), totalIssued = 0) }
                     return@collectLatest
                 }
                 combine(
@@ -207,18 +223,25 @@ class CloseModeViewModel(
                     closedBeaconNumbers = eventsByBeaconNumber
                         .filterValues { events -> events.maxByOrNull { it.lineNumber }?.action == HistoryAction.CLOSE }
                         .keys
-                    recomputeOutstanding()
+                    recomputeClosed()
                 }
             }
         }
     }
 
-    private fun recomputeOutstanding() {
-        val outstanding = bibByBeaconNumber.entries
-            .filter { (beaconNumber, _) -> beaconNumber !in closedBeaconNumbers }
-            .map { (beaconNumber, bibNumber) -> OutstandingBeaconUi(bibNumber, beaconNumber) }
-            .sortedBy { it.bibNumber }
-        _uiState.update { it.copy(outstanding = outstanding) }
+    private fun recomputeClosed() {
+        val closed = closedBeaconNumbers.map { beaconNumber ->
+            val events = eventsByBeaconNumber.getValue(beaconNumber)
+            val latest = events.maxBy { it.lineNumber }
+            ClosedBeaconUi(
+                bibNumber = bibByBeaconNumber[beaconNumber],
+                beaconNumber = beaconNumber,
+                closedAtMillis = latest.timestampMillis,
+                batteryPercent = latest.batteryPercent!!,
+                closeCount = events.count { it.action == HistoryAction.CLOSE },
+            )
+        }.sortedBy { it.bibNumber ?: Int.MAX_VALUE }
+        _uiState.update { it.copy(closed = closed) }
     }
 
     private suspend fun collectAdvertisements() {
@@ -376,7 +399,19 @@ class CloseModeViewModel(
     companion object {
         private const val TAG = "CloseModeViewModel"
         private val RECOMPUTE_INTERVAL = 300.milliseconds
-        private const val STALE_AFTER_MILLIS = 8_000L
+
+        // Hysteresis for the nearby list (TODO.md: "beacons that are very close drop out of the
+        // list briefly") — a beacon is added the instant its first advertisement decodes, but
+        // only removed after this much silence, asymmetric on purpose so one missed packet never
+        // flickers it out. The shared Kable Scanner (MulePullClient) runs SCAN_MODE_BALANCED, not
+        // continuous low-latency scanning — it duty-cycles, and that duty cycle is unrelated to
+        // how close a beacon physically is, so even the nearest beacon can occasionally go quiet
+        // for several seconds, especially with several beacons all competing for the same scan
+        // windows. The previous 8s value was already longer than a single typical duty-cycle gap,
+        // but evidently not long enough to absorb the worst case under that contention — raised
+        // well past it instead of switching the shared scanner to continuous scanning, which
+        // would also raise Bibs/Time's own background battery draw (a separate decision).
+        private const val STALE_AFTER_MILLIS = 20_000L
         private const val RSSI_SMOOTHING_ALPHA = 0.15
         private const val RESULT_DISPLAY_MILLIS = 5_000L
 
