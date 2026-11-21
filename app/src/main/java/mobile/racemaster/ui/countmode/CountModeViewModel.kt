@@ -24,9 +24,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import mobile.racemaster.data.beacon.BeaconScanDecoder
-import mobile.racemaster.data.beacon.DetectionTracking
-import mobile.racemaster.data.beacon.shouldCommit
-import mobile.racemaster.data.beacon.updatedDetectionTracking
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.mule.MuleRepository
@@ -94,12 +91,15 @@ data class CountModeUiState(
  * plan's own doc for why this is the one genuinely judgment-call design choice here (easy to
  * promote to a process-lifetime engine later if operators background the screen mid-count).
  *
- * Reuses [BeaconScanEngine]'s own already-extracted, already-tested pure debounce functions
- * ([updatedDetectionTracking]/[shouldCommit]) rather than that engine itself — this is a sibling,
- * not a shared instance, since the dedup key (beacon number, not resolved bib — a beacon can be
- * counted before its bib pairing is known, per the doc's own "a count of unique beacons seen"),
- * the gating mode, and the write target (COUNT_SEEN rows via [CountModeRepository], not Bibs
- * entries) all differ from Bibs' own checkpoint detection.
+ * A sibling of [BeaconScanEngine], not a shared instance — the dedup key (beacon number, not
+ * resolved bib — a beacon can be counted before its bib pairing is known, per the doc's own "a
+ * count of unique beacons seen"), the gating mode, and the write target (COUNT_SEEN rows via
+ * [CountModeRepository], not Bibs entries) all differ from Bibs' own checkpoint detection.
+ * [handleBeacon] commits on the very first in-range reading, no confidence threshold — direct
+ * feedback that Count's only question is "did this runner turn up at the start," not a timed
+ * split, so a spurious single reading costs nothing worse than counting someone a few seconds
+ * early; [BeaconScanEngine] dropped the same former 3-reading debounce for the same reason (see
+ * its own doc).
  *
  * Reached only via Setup Race's own Count mode (`Routes.COUNT_MODE`) — unlike
  * [mobile.racemaster.ui.closemode.CloseModeViewModel], there is no standing Beacons-hub shortcut
@@ -129,17 +129,15 @@ class CountModeViewModel(
     // reads it directly.
     val deviceName: StateFlow<String?> = deviceNameFlow(settingsRepository)
 
-    private val detectionTracking = ConcurrentHashMap<Int, DetectionTracking>()
-
-    // Guards against a duplicate COUNT_SEEN row for the same beacon — now that
-    // REQUIRED_CONSECUTIVE_READINGS is 1, every single advertisement from an already-committing
-    // beacon re-triggers shouldCommit instantly, re-entering commitDetection before the first
-    // call's db.withTransaction has completed and fed back through seenBeaconNumbers (which only
-    // updates once that write's own Flow re-emits — strictly after the fact, not synchronously).
-    // Marked synchronously, before commitDetection's own first suspension point, so a whole burst
-    // of 200ms-spaced advertisements arriving while one commit is still in flight only ever lets
-    // the first one through; cleared once that attempt finishes (success or failure) so a
-    // legitimate later recount (e.g. after an eject/uneject round-trip) is never blocked by it.
+    // Guards against a duplicate COUNT_SEEN row for the same beacon — every single advertisement
+    // from an already-committing beacon re-triggers commitDetection instantly (there's no
+    // debounce any more — see handleBeacon's own doc), re-entering it before the first call's
+    // db.withTransaction has completed and fed back through seenBeaconNumbers (which only updates
+    // once that write's own Flow re-emits — strictly after the fact, not synchronously). Marked
+    // synchronously, before commitDetection's own first suspension point, so a whole burst of
+    // 200ms-spaced advertisements arriving while one commit is still in flight only ever lets the
+    // first one through; cleared once that attempt finishes (success or failure) so a legitimate
+    // later recount (e.g. after an eject/uneject round-trip) is never blocked by it.
     private val inFlightCommits = ConcurrentHashMap.newKeySet<Int>()
 
     // Every beacon's own last-detected instant, regardless of debounce/commit state — purely for
@@ -178,7 +176,6 @@ class CountModeViewModel(
         }
         viewModelScope.launch {
             raceIdFlow.collectLatest { raceId ->
-                detectionTracking.clear()
                 lastDetectedAtMillis.clear()
                 inFlightCommits.clear()
                 _uiState.update { it.copy(raceId = raceId) }
@@ -262,13 +259,8 @@ class CountModeViewModel(
         // until there's an actual expectation list to count against.
         if (bibByBeaconNumber.isEmpty()) return
         if (distanceMeters > COUNT_MAX_DISTANCE_METERS) return
-        val now = System.currentTimeMillis()
-        lastDetectedAtMillis[beaconNumber] = now
-        val updated = detectionTracking.compute(beaconNumber) { _, existing -> updatedDetectionTracking(existing, now, DEBOUNCE_GAP_MILLIS) }!!
-        if (shouldCommit(updated, REQUIRED_CONSECUTIVE_READINGS)) {
-            detectionTracking.remove(beaconNumber)
-            viewModelScope.launch { commitDetection(beaconNumber) }
-        }
+        lastDetectedAtMillis[beaconNumber] = System.currentTimeMillis()
+        viewModelScope.launch { commitDetection(beaconNumber) }
     }
 
     private suspend fun commitDetection(beaconNumber: Int) {
@@ -367,18 +359,6 @@ class CountModeViewModel(
         // (docs/beacon-detection-plan.md: "only close-range beacons should be counted") — start
         // identical, tune against real hardware like every other distance constant here.
         private const val COUNT_MAX_DISTANCE_METERS = 3.0
-        private const val DEBOUNCE_GAP_MILLIS = 5_000L
-
-        // 1, not BeaconScanEngine's own 3 (direct feedback: Count's only question is "did this
-        // runner turn up at the start," not a timed/photo-finish split — unlike a checkpoint
-        // entry, a spurious single reading costs nothing worse than counting someone a few
-        // seconds before their actual walk-up, so there's nothing here worth trading detection
-        // latency for). Combined with the shared scanner's own SCAN_MODE_BALANCED duty cycle
-        // (see CloseModeViewModel's own STALE_AFTER_MILLIS doc for why that's not continuous),
-        // requiring 3 consecutive readings per beacon made this screen's "seen" list visibly slow
-        // to populate once several beacons were all close together and competing for the same
-        // scan windows — any single in-range reading now commits immediately instead.
-        private const val REQUIRED_CONSECUTIVE_READINGS = 1
 
         // Purely cosmetic (TODO.md's own "highlighted" ask, not a detection/gating concern) — how
         // long since a beacon's last advertisement before it stops counting as "currently

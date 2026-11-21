@@ -25,33 +25,6 @@ import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.util.Beeper
 import mobile.racemaster.util.BibSpeaker
 
-/** Debounce-only tracking for a beacon not yet recorded this race — see [BeaconScanEngine]'s own
- *  doc for why there's no re-arm/suppression concept here any more. */
-internal data class DetectionTracking(
-    val consecutiveReadings: Int,
-    val lastSeenAtMillis: Long,
-)
-
-/** Pure state transition, pulled out of [BeaconScanEngine.handleAdvertisement] so it's testable
- *  without any BLE/coroutine machinery (see `BeaconScanEngineTest`). A gap longer than
- *  [maxGapMillis] since the last sighting starts a fresh confidence count instead of continuing
- *  the old one — tolerates a few missed advertisements or a brief step-just-outside-range during
- *  approach without being fooled into thinking this is a second, unrelated sighting. */
-internal fun updatedDetectionTracking(existing: DetectionTracking?, nowMillis: Long, maxGapMillis: Long): DetectionTracking {
-    return if (existing != null && nowMillis - existing.lastSeenAtMillis <= maxGapMillis) {
-        existing.copy(consecutiveReadings = existing.consecutiveReadings + 1, lastSeenAtMillis = nowMillis)
-    } else {
-        DetectionTracking(consecutiveReadings = 1, lastSeenAtMillis = nowMillis)
-    }
-}
-
-/** Whether [tracking] has just crossed the confidence threshold for "reliably detected." Once
- *  this is true, [BeaconScanEngine.handleAdvertisement] records the beacon permanently seen (see
- *  its own doc) rather than continuing to track it, so in practice this never sees a tracking
- *  entry go past the threshold — `>=` is just the defensive form of `==`. */
-internal fun shouldCommit(tracking: DetectionTracking, requiredConsecutiveReadings: Int): Boolean =
-    tracking.consecutiveReadings >= requiredConsecutiveReadings
-
 /**
  * Auto-records a Bibs Mode entry the moment a race beacon is reliably detected nearby — phase 2
  * of docs/beacon-detection-plan.md. A process-lifetime engine, not ViewModel-scoped, same
@@ -64,11 +37,14 @@ internal fun shouldCommit(tracking: DetectionTracking, requiredConsecutiveReadin
  * beacon's whole approach-and-recede and only committed once the beacon went silent, to time the
  * entry at closest-approach for photo-finish resolution. That precision isn't trustworthy yet —
  * nobody's analyzed a real RSSI-vs-distance curve well enough (see Beacons > Range Calibration) —
- * so this instead commits as soon as a beacon is reliably (debounced) detected, and announces the
- * bib aloud immediately, the same way a manually-typed bib does (see [BibSpeaker]/[Beeper] usage
- * in [commitDetection]). The row this writes is a completely ordinary
- * [BibsModeRepository.recordEntry] row — editable afterward like any manual entry if the timing
- * turns out to matter.
+ * so this instead commits on the very first in-range reading (no confidence threshold — a former
+ * 3-consecutive-readings debounce was dropped as not worth the detection lag, given the very next
+ * paragraph already establishes a checkpoint entry is safety-oriented and freely editable, not
+ * timing-critical — [mobile.racemaster.ui.countmode.CountModeViewModel] dropped its own identical
+ * debounce for the same reason), and announces the bib aloud immediately, the same way a
+ * manually-typed bib does (see [BibSpeaker]/[Beeper] usage in [commitDetection]). The row this
+ * writes is a completely ordinary [BibsModeRepository.recordEntry] row — editable afterward like
+ * any manual entry if the timing turns out to matter.
  *
  * **Checkpoints only, not the finish, for this phase** — timing precision doesn't matter at a
  * checkpoint, but it does at the finish, and the finish is also where runners are most likely to
@@ -106,7 +82,15 @@ class BeaconScanEngine(
     }
     private var engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
 
-    private val detectionTracking = ConcurrentHashMap<Int, DetectionTracking>()
+    // Guards against a duplicate recordEntry row for the same bib — commitDetection does several
+    // suspend calls (settings/race reads) before its own recordedBibs check, so a burst of
+    // 200ms-spaced advertisements from a not-yet-recorded beacon can re-enter commitDetection
+    // before an earlier call's write has fed back through recordedBibs (which only updates once
+    // that write's own Flow re-emits — strictly after the fact). Marked synchronously, before
+    // commitDetection's own first suspension point, so only the first call in a burst gets
+    // through; cleared once that attempt finishes (success or failure). Keyed by bib, matching
+    // recordedBibs itself — same reasoning CountModeViewModel's own inFlightCommits documents.
+    private val inFlightCommits = ConcurrentHashMap.newKeySet<Int>()
 
     // Mirrors BibsModeRepository.observeCurrentSegmentEntries's bib numbers for the active race
     // — see this class's own doc for why this, not a private "already recorded" set, is the
@@ -136,11 +120,11 @@ class BeaconScanEngine(
      *  one combined flow — so switching races (or there being none) cancels the previous race's
      *  entries-collection outright and starts clean, the same reasoning
      *  [mobile.racemaster.data.mule.ServerStatusRepository.startPolling] already uses for its own
-     *  per-URL loop. Also clears [detectionTracking] on every race change, so a beacon's debounce
-     *  progress never carries over from a previous race. */
+     *  per-URL loop. Also clears [inFlightCommits] on every race change, so a guard entry never
+     *  carries over from a previous race. */
     private suspend fun watchRecordedBibs() {
         settingsRepository.activeRaceId.collectLatest { raceId ->
-            detectionTracking.clear()
+            inFlightCommits.clear()
             if (raceId == null) {
                 recordedBibs = emptySet()
                 return@collectLatest
@@ -186,21 +170,7 @@ class BeaconScanEngine(
     private fun handleAdvertisement(advertisement: Advertisement) {
         val beacon = BeaconScanDecoder.decodeFromAdvertisement(advertisement) ?: return
         if (beacon.estimatedDistanceMeters > BEACON_MAX_DISTANCE_METERS) return
-        val now = System.currentTimeMillis()
-        val updated = detectionTracking.compute(beacon.beaconNumber) { _, existing ->
-            updatedDetectionTracking(existing, now, DEBOUNCE_GAP_MILLIS)
-        }!!
-        if (shouldCommit(updated, REQUIRED_CONSECUTIVE_READINGS)) {
-            // Restarts debounce from scratch for this beacon rather than leaving some
-            // "already committed" marker behind — commitDetection's own recordedBibs check
-            // (see this class's own doc) is what actually decides whether this fires again, so
-            // there's nothing to remember here. A beacon that's genuinely still recorded just
-            // keeps re-attempting commitDetection roughly every debounce window while lingering,
-            // each attempt a cheap no-op; one whose entry gets undone becomes detectable again
-            // the moment the very next debounce threshold is crossed.
-            detectionTracking.remove(beacon.beaconNumber)
-            engineScope.launch { commitDetection(beacon.beaconNumber, beacon.rssi) }
-        }
+        engineScope.launch { commitDetection(beacon.beaconNumber, beacon.rssi) }
     }
 
     /** Writes the row and gives the same feedback a manual 3-digit bib entry gives — see
@@ -216,12 +186,19 @@ class BeaconScanEngine(
         // The actual suppression check — see this class's own doc. Already-recorded, whether
         // by an earlier beacon detection or a manual entry, is a no-op, not an error.
         if (bib in recordedBibs) return
-        val action = settingsRepository.bibsAutoSaveAction.first()
-        bibsModeRepository.recordEntry(raceId, action, bib, note = "beacon:$beaconNumber rssi=$rssi")
-        if (settingsRepository.speakBibsAloud.first()) {
-            bibSpeaker.speak("%03d".format(bib), settingsRepository.bibSpeechVoice.first())
-        } else {
-            beeper.beep()
+        // See inFlightCommits' own doc — must run before this function's next suspension point,
+        // so it's ordered against any other commitDetection call for this same bib already queued.
+        if (!inFlightCommits.add(bib)) return
+        try {
+            val action = settingsRepository.bibsAutoSaveAction.first()
+            bibsModeRepository.recordEntry(raceId, action, bib, note = "beacon:$beaconNumber rssi=$rssi")
+            if (settingsRepository.speakBibsAloud.first()) {
+                bibSpeaker.speak("%03d".format(bib), settingsRepository.bibSpeechVoice.first())
+            } else {
+                beeper.beep()
+            }
+        } finally {
+            inFlightCommits.remove(bib)
         }
     }
 
@@ -233,20 +210,6 @@ class BeaconScanEngine(
         // at checkpoints anyway (see commitDetection's isValidCpLocation gate). Promoted to a
         // per-race setting in phase 3 (beaconMaxDistanceMeters).
         private const val BEACON_MAX_DISTANCE_METERS = 3.0
-
-        // How long since the last in-range reading before a new one starts a fresh confidence
-        // count instead of continuing the old one. A beacon advertises roughly every 200ms, so
-        // 5s tolerates several missed packets or a brief step-just-outside-range during approach
-        // without wrongly treating one continuous approach as two separate sightings. There's no
-        // re-arm/suppression purpose for this constant any more (see this file's own doc on why
-        // a checkpoint recording is permanent, not a cooldown) — this is purely the debounce
-        // window. Tune against real hardware (phase 3 step 12's job).
-        private const val DEBOUNCE_GAP_MILLIS = 5_000L
-
-        // How many in-range readings in a row count as "reliably detected" — enough to reject one
-        // stray/reflected reading without perceptibly delaying the announcement. Tuning constant,
-        // same posture as MAX_GAP_MILLIS.
-        private const val REQUIRED_CONSECUTIVE_READINGS = 3
 
         private val SCAN_RETRY_DELAY = 5.seconds
     }

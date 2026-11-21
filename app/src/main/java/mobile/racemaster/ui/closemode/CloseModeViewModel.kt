@@ -26,10 +26,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import mobile.racemaster.data.beacon.BeaconRepository
 import mobile.racemaster.data.beacon.BeaconScanDecoder
-import mobile.racemaster.data.beacon.DetectionTracking
 import mobile.racemaster.data.beacon.DxCp27Protocol
-import mobile.racemaster.data.beacon.shouldCommit
-import mobile.racemaster.data.beacon.updatedDetectionTracking
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.ProgressRepository
@@ -154,13 +151,6 @@ class CloseModeViewModel(
 
     private val trackingByAddress = ConcurrentHashMap<String, Tracking>()
 
-    // Debounces "this already-closed beacon is advertising again" the same way BeaconScanEngine/
-    // CountModeViewModel debounce their own passive detections — a few consecutive readings, not
-    // one stray packet, before concluding it's genuinely back on (reusing their already-tested
-    // pure helpers, keyed by beacon number like CountModeViewModel's own detectionTracking, not
-    // address — the same beacon can hop advertiser addresses and this still shouldn't double-fire).
-    private val reopenDetectionTracking = ConcurrentHashMap<Int, DetectionTracking>()
-
     /** One CLOSE/CLOSE_REOPENED row, decoded from
      *  [mobile.racemaster.data.db.entity.HistoryLineEntity.note] via [parseBeaconClose]/
      *  [parseBeaconReopened]. [batteryPercent] is null for a CLOSE_REOPENED row (it carries no
@@ -192,7 +182,6 @@ class CloseModeViewModel(
         }
         viewModelScope.launch {
             raceIdFlow.collectLatest { raceId ->
-                reopenDetectionTracking.clear()
                 _uiState.update { it.copy(raceId = raceId) }
                 if (raceId == null) {
                     bibByBeaconNumber = emptyMap()
@@ -278,20 +267,19 @@ class CloseModeViewModel(
     /** Auto-reinstates an already-closed beacon as outstanding once it's heard advertising
      *  again — see [CloseModeRepository.recordReopenedIfClosed]'s own doc. [handleReopenDetection]
      *  itself is a cheap, no-suspend guard (skip entirely if this beacon isn't currently flagged
-     *  closed) before even touching the debounce map, so the common "every other beacon" case
-     *  costs nothing extra per advertisement. */
+     *  closed), so the common "every other beacon" case costs nothing extra per advertisement.
+     *  No debounce, same reasoning [mobile.racemaster.data.beacon.BeaconScanEngine] and
+     *  [mobile.racemaster.ui.countmode.CountModeViewModel] both dropped their own — and no
+     *  in-flight guard is needed either, unlike those two: [CloseModeRepository
+     *  .recordReopenedIfClosed] re-reads whether this beacon's latest row is genuinely still a
+     *  CLOSE fresh, inside its own transaction, before writing, so a burst of repeat calls before
+     *  [closedBeaconNumbers] itself catches up just re-confirms the same fact and no-ops rather
+     *  than writing a duplicate row. */
     private fun handleReopenDetection(beaconNumber: Int) {
         if (beaconNumber !in closedBeaconNumbers) return
-        val now = System.currentTimeMillis()
-        val updated = reopenDetectionTracking.compute(beaconNumber) { _, existing ->
-            updatedDetectionTracking(existing, now, REOPEN_DEBOUNCE_GAP_MILLIS)
-        }!!
-        if (shouldCommit(updated, REOPEN_REQUIRED_CONSECUTIVE_READINGS)) {
-            reopenDetectionTracking.remove(beaconNumber)
-            val raceId = raceIdFlow.value ?: return
-            val bibNumber = bibByBeaconNumber[beaconNumber]
-            viewModelScope.launch { closeModeRepository.recordReopenedIfClosed(raceId, beaconNumber, bibNumber) }
-        }
+        val raceId = raceIdFlow.value ?: return
+        val bibNumber = bibByBeaconNumber[beaconNumber]
+        viewModelScope.launch { closeModeRepository.recordReopenedIfClosed(raceId, beaconNumber, bibNumber) }
     }
 
     private suspend fun recomputeLoop() {
@@ -414,12 +402,6 @@ class CloseModeViewModel(
         private const val STALE_AFTER_MILLIS = 20_000L
         private const val RSSI_SMOOTHING_ALPHA = 0.15
         private const val RESULT_DISPLAY_MILLIS = 5_000L
-
-        // Same debounce shape CountModeViewModel uses for its own passive detection — a few
-        // consecutive readings, not one stray packet, before concluding a closed beacon is
-        // genuinely back on.
-        private const val REOPEN_DEBOUNCE_GAP_MILLIS = 5_000L
-        private const val REOPEN_REQUIRED_CONSECUTIVE_READINGS = 3
 
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
