@@ -103,7 +103,12 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.compose.material.icons.extended)
+    // material3 does not pull this in on its own — Icons.Filled.* (and the materialIcon/
+    // materialPath builder DSL mobile.racemaster.ui.icons.ExtraIcons.kt reuses) live here, not in
+    // material3 itself. This is the small "core" artifact (~100 commonly-used icons, a couple MB)
+    // — see ExtraIcons.kt's own doc for why material-icons-extended (thousands of icons, ~85MB
+    // uncompressed) was dropped in favor of hand-copying the handful this app actually draws.
+    implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)

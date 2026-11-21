@@ -1,7 +1,7 @@
 package mobile.racemaster.ui.components
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardHide
+import mobile.racemaster.ui.icons.KeyboardHide
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
