@@ -348,7 +348,7 @@ AltBeacon's own empirical curve fit as an interim improvement — see docs/beaco
 "Interim formula swap" section. Still borrowed constants (not this app's own hardware), so the
 three field sessions above remain the real fix.
 
-# Update beacon plan
+## Update beacon plan
 
 The beacon-detection-plan.md has got into a bit of a confusing mess, it needs rationalizing.
 In outline the 'beacon plan' consists of:
@@ -397,6 +397,13 @@ In outline the 'beacon plan' consists of:
       neither has a Reset; it's also what unblocks Race History's delete action for that race,
       which was otherwise permanently guarded against deletion while `race.mode` stayed Count or
       Close (see `isRaceActive`'s own doc).
+- [x] a means to eject one or all seen beacons is required to facilitate runners going away from
+      the start and returning later (e.g they forgot their compulsory kit) or to re-start the count
+      due to errors/confusion
+- [x] when ejected the beacon must not be re-counted while it remains in range — **done**, revised
+      per the "Ejection bugs/tweaks" section below: an ejected beacon stays excluded from the
+      count indefinitely (no cooldown) until the operator explicitly un-ejects it via its own
+      link in the 'to be seen' list.
 
 # Tweaks/Bugs
 
@@ -465,16 +472,53 @@ In outline the 'beacon plan' consists of:
 
 # ToDo
 
-## Bugs
+## Tweaks/Bugs
 
 ## Count mode
 
-- [ ] a means to eject one or all seen beacons is required to facilitate runners going away from
-      the start and returning later (e.g they forgot their compulsory kit) or to re-start the count
-      due to errors/confusion
-- [ ] when ejected the beacon must not be re-counted while it remains in range, and must go out
-      of range for at least N minutes before allowed to be re-counted, if it comes back sooner
-      the operator must be allowed to confirm or deny it 
+- [ ] a beacon that has not been counted should not be expected to be seen on-course anywhere,
+      this only applies when the timing method is beacons, so the mobile app needs to know the
+      race timing method being used - that is now a field in progress.json put there by the
+      web app, beacons not counted can be determined from the progress.json file
+- [ ] bibs retired at CPn should not be expected to be seen at CPn+ or the finish, but should
+      be expected at the close station, this is irrespective of the timing method
+- [ ] allow for multiple count mode phones at the pen and sync between them, in particular if
+      a beacon is ejected it must be flagged as such on all phones counting beacons, do this
+      via bluetooth so its instant
+
+## Ejection bugs/tweaks
+
+- [x] the seen list is too sparse vertically, tighten it up — **done**: the Count Mode list's own
+      `verticalArrangement` dropped from 8dp to 2dp; section headers ("Seen") carry their own
+      explicit top padding instead so sections still read as separated.
+- [x] use the refLineNumber system when ejecting in a similar manner to Undo Last in bibs mode —
+      **done**: `CountModeRepository.recordEject` writes `HistoryAction.COUNT_EJECTED` with
+      `refLineNumber` pointing at the beacon's own `COUNT_SEEN` row, the exact shape
+      `EntryLogModeEngine.undoMostRecent` already uses; `currentSegment`'s own fold now treats
+      `COUNT_EJECTED` as an undo-marker alongside `UNDO`, so the targeted row's whole group drops
+      out of the live counted set automatically (`HistoryFold.foldLatestVisible`), replacing the
+      previous bespoke "latest row by lineNumber" comparison.
+- [x] use a labelled link on the seen list 'Eject' rather than the ^ icon — **done**.
+- [x] selecting eject shows a confusing dialog - i would expect just an eject yes/no confirm —
+      **done**: a plain "Eject beacon NNN? Yes/No", no extra explanatory text.
+- [x] a beacon ejected should appear in the 'to be seen' list with an 'ejected' link — **done**:
+      tapping it calls `CountModeViewModel.unejectBeacon`.
+- [x] an ejected beacon that is visible should be highlighted in the 'to be seen' list — **done**:
+      a separate, purely cosmetic live-presence signal (`lastDetectedAtMillis`, a periodic ticker,
+      nothing to do with detection/counting gating) bolds and colors the row while true.
+- [x] selecting the ejected link should un-eject it so it becomes a normal to-be-seen
+      beacon but should remain tagged as 'was-ejected' until its re-seen — **done**: writes a new
+      `HistoryAction.COUNT_UNEJECTED` status marker (not another refLineNumber/undo row — see its
+      own doc); `CountModeRepository.statusByBeacon` reads each beacon's own most recent
+      SEEN/EJECTED/UNEJECTED row (from an unfolded, current-segment-scoped read —
+      `observeStatusByBeacon`/`currentSegmentRaw` — since the live counted-set fold above
+      deliberately hides the eject/uneject rows themselves) to decide EJECTED vs WAS_EJECTED vs
+      (absent) plain outstanding.
+- [x] the above replaces the cooldown idea, drop it and its constant — **done**: `commitDetection`
+      now just checks the beacon's own status is not EJECTED; `RECOUNT_COOLDOWN_MILLIS`,
+      `PROMPT_SNOOZE_MILLIS`, the recount confirm/deny dialog, and all their supporting state are
+      gone.
+- [x] drop the Eject All link, its redundant now there is a RESET option — **done**.
 
 ## Start line
 
@@ -525,20 +569,20 @@ In outline the 'beacon plan' consists of:
 - [ ] need to mimic SI's ability to have a time allowance between CP's (that road crossing)
       (that's a web-app issue - see ToDo.md there)
 
-# Samsung XCover 4 setup
+## Samsung XCover 4 setup
 
 Need a script/checklist of everything that can be turned off to 'lock-down' the phone to be as
 specific as possible to just running this app. In particular to minimise network and BLE traffic
 and minimise battery drain from 'irrelevant' services.
 
-# Network issue question
+## Network issue question
 
 In the context of a weak mobile signal where connections can drop out, how is a re-send handled?
 If a message is long the probability of a drop-out is much higher than for a short message.
 Should we mitigate for this by breaking up long messages into shorter ones that can be
 re-constructed at the destination as pieces arrive? Or is this auto by the TCP/IP protocol?
 
-# Do a range calibration test (when got new beacons)
+## Do a range calibration test (when got new beacons)
 
 - [ ] indoors, cluttered
 - [ ] outdoors, open space

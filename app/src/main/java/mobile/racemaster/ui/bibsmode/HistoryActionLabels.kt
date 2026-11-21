@@ -48,6 +48,8 @@ fun HistoryAction.displayName(): String = when (this) {
     // "Seen all", not "Count Complete" (direct feedback) — matches COUNT_SEEN's own "Seen" above.
     HistoryAction.COUNT_COMPLETE -> "Seen all"
     HistoryAction.COUNT_STOPPED -> "Count Stopped"
+    HistoryAction.COUNT_EJECTED -> "Ejected"
+    HistoryAction.COUNT_UNEJECTED -> "Un-ejected"
 }
 
 /** The secondary note text a history row should actually show, in place of the raw

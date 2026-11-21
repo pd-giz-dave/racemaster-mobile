@@ -349,6 +349,14 @@ class SyncRecordMappingTest {
     }
 
     @Test
+    fun countEjectedRoundTripsThroughTheWireOnItsOwnDistinctValue() {
+        val record = line(HistoryMode.COUNT, HistoryAction.COUNT_EJECTED, splitNumber = 0, timestampMillis = 0L, note = "beacon=5").toSyncRecord(null)
+        assertEquals("CountEjected", record.action)
+        assertEquals("beacon=5", record.note)
+        assertEquals(HistoryAction.COUNT_EJECTED, record.toHistoryAction())
+    }
+
+    @Test
     fun unrecognizedWireActionFallsBackToIgnoreRatherThanThrowing() {
         assertEquals(
             HistoryAction.IGNORE,

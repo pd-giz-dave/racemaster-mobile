@@ -105,6 +105,8 @@ private fun HistoryAction.toServerAction(): String = when (this) {
     HistoryAction.COUNT_SEEN -> "CountSeen"
     HistoryAction.COUNT_COMPLETE -> "CountComplete"
     HistoryAction.COUNT_STOPPED -> "CountStopped"
+    HistoryAction.COUNT_EJECTED -> "CountEjected"
+    HistoryAction.COUNT_UNEJECTED -> "CountUnejected"
 }
 
 /**
@@ -141,6 +143,8 @@ fun SyncRecord.toHistoryAction(): HistoryAction = when (action) {
     "CountSeen" -> HistoryAction.COUNT_SEEN
     "CountComplete" -> HistoryAction.COUNT_COMPLETE
     "CountStopped" -> HistoryAction.COUNT_STOPPED
+    "CountEjected" -> HistoryAction.COUNT_EJECTED
+    "CountUnejected" -> HistoryAction.COUNT_UNEJECTED
     // An unrecognized wire value — includes a legacy "Stop" from a not-yet-upgraded peer or an
     // old server-side file (STOP was removed — see HistoryAction's own doc); should otherwise
     // not get here.

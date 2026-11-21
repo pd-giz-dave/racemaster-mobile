@@ -113,9 +113,39 @@ enum class HistoryAction {
     // running/expected tally at the moment this beacon was seen, written once by
     // CountModeRepository.recordCount (counted fresh inside its own write transaction, not
     // computed by the ViewModel from its own reactive cache — see that function's own doc for
-    // the race this avoids) rather than re-derived by whatever later displays this row. Unlike
-    // CLOSE, a beacon is only ever recorded once per race.
+    // the race this avoids) rather than re-derived by whatever later displays this row. A beacon
+    // only ever gets a second COUNT_SEEN row if it was ejected (COUNT_EJECTED, below) and later
+    // let back in — never otherwise, since CountModeViewModel's own already-seen check gates
+    // every other call.
     COUNT_SEEN,
+
+    // Count Mode only — TODO.md's own "a means to eject one seen beacon" (a runner goes away and
+    // comes back later having forgotten their kit, or the operator needs to un-count one entered
+    // by mistake). refLineNumber points at the beacon's own COUNT_SEEN row, the exact same
+    // append-only "undo marker" shape BIBS/TIME's own UNDO uses (see
+    // EntryLogModeEngine.undoMostRecent's own doc) — CountModeRepository's own currentSegment
+    // treats this action as an undo-marker too, so the targeted COUNT_SEEN row's whole fold group
+    // (see HistoryFold.foldLatestVisible's own doc) drops out of the live counted-set entirely,
+    // the beacon reverting to outstanding. note still carries a bare "beacon=<n>" (the same form
+    // COUNT_SEEN's own note starts with) purely so Race History/the UI can read the beacon number
+    // straight off this row without resolving the ref first; bibNumber is copied from the root
+    // row for the same display convenience, same as UNDO's own bibNumber copy. Unlike UNDO, this
+    // isn't reversible by Undo itself — COUNT_UNEJECTED (below) is Count's own explicit, operator-
+    // driven way back, not a second eject-of-the-eject.
+    COUNT_EJECTED,
+
+    // Count Mode only — the operator's own explicit "let this one back in" after an eject,
+    // written by CountModeViewModel.unejectBeacon when the operator taps the ejected beacon's own
+    // link in the outstanding list (TODO.md: it "should un-eject it so it becomes a normal to-be-
+    // seen beacon but should remain tagged 'was-ejected' until its re-seen"). Deliberately NOT
+    // another undo-marker/refLineNumber row — a COUNT_EJECTED row's own exclusion from the live
+    // counted set (see that action's own doc) already makes the beacon outstanding again the
+    // moment it's ejected; this row's only job is to flip CountModeRepository.statusByBeacon's own
+    // read of "which happened most recently for this beacon" from EJECTED to WAS_EJECTED (a purely
+    // informational tag — commitDetection's own already-seen/already-ejected gate treats WAS_EJECTED
+    // exactly like "never seen": a fresh COUNT_SEEN row for this beacon, once detected again,
+    // supersedes it the normal way). note carries the same bare "beacon=<n>" form.
+    COUNT_UNEJECTED,
 
     // Count Mode only — written once, immediately after the COUNT_SEEN row for whichever beacon
     // brings the running count up to the expected total (see CountModeRepository.recordCount,

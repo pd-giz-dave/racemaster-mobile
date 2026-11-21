@@ -1,10 +1,13 @@
 package mobile.racemaster.ui.countmode
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,32 +24,51 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import mobile.racemaster.ui.components.ModeScreenTopBar
+import mobile.racemaster.data.repository.CountBeaconStatus
 import mobile.racemaster.ui.components.ResetButton
+import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.ui.help.HelpTopics
+import mobile.racemaster.ui.theme.SyncedGreen
+import mobile.racemaster.ui.theme.UnsyncedRed
 import mobile.racemaster.util.withClickSound
 
-/** Pre-start headcount — see [CountModeViewModel]'s own doc. Structurally the simplest of the
- *  four mode screens: one running count, one list of issued-but-not-yet-seen bibs — no per-
- *  beacon dialog or result banner, since counting has no fallible action to report on the way a
- *  BLE connect/power-off does. The top bar's own secondary action is "Stop" (per direct
- *  feedback: Relocate's full name/location/mode editor was clunky for a mode with nothing
- *  meaningful to relocate) — clears the race's mode back to null ([mobile.racemaster.data.repository.RaceRepository.stopMode])
- *  rather than opening a separate screen: it's the only way to ever move this race out of Count
- *  mode once it's set up. A separate, body-level "Reset" button (reusing the shared
+/** Pre-start headcount — see [CountModeViewModel]'s own doc. One running count, a list of
+ *  issued-but-not-yet-seen bibs — including any ejected beacon, tagged with its own "ejected"
+ *  link (tap to un-eject, behind a yes/no confirm, see [CountModeViewModel.unejectBeacon]) and
+ *  highlighted red while it's currently detected (the operator's cue this runner is back and
+ *  ready to be un-ejected), or "was-ejected" once un-ejected but not yet re-seen — itself a
+ *  tappable re-eject link (confirmed the same way) until it's genuinely re-seen, highlighted
+ *  green while NOT currently detected (reusing [SyncedGreen]/[UnsyncedRed]'s own fixed,
+ *  theme-independent "status at a glance" convention from Mule Mode's sync rows — a different
+ *  status here, but the same "red needs attention, green is settled" reading) — and a "Seen"
+ *  list, each row ejectable behind its own plain yes/no confirm (TODO.md: a previous version's
+ *  dialog here "shows a confusing dialog", simplified). There is no bulk "Eject All" any more
+ *  (TODO.md: redundant now there's Reset) and no other per-beacon dialog or result banner for an
+ *  ordinary first-time detection, since counting one has no fallible action to report on the way
+ *  a BLE connect/power-off does. "Stop" and "Reset" now sit side by side as body-level buttons
+ *  (direct feedback: a text link buried in the top bar read as too easy to miss, or to hit by
+ *  accident, for an action that ends the mode) — the top bar itself is the same
+ *  [mobile.racemaster.ui.components.ScreenTopBar] every non-mode screen uses (Help/Back/Home,
+ *  direct feedback: this screen used to be the odd one out with only one trailing icon), not
+ *  [mobile.racemaster.ui.components.ModeScreenTopBar] (Bibs/Time's own secondary-action shape).
+ *  Stop clears the race's mode back to null
+ *  ([mobile.racemaster.data.repository.RaceRepository.stopMode]) — it's the only way
+ *  to ever move this race out of Count mode once it's set up. Reset (reusing the shared
  *  [ResetButton] composable Bibs/Time already use) additionally closes out the current Count
  *  segment (see [CountModeViewModel.resetCountMode]'s own doc) so a restarted count genuinely
  *  starts from zero, rather than resuming whatever was already seen — Stop alone deliberately
  *  does not do this, since pausing without losing the running tally is still useful on its own.
- *  Reset calls [onHome] itself immediately after, same reasoning as Stop's own dialog: this
- *  screen's scan loop would otherwise immediately re-detect and re-record the very beacons just
- *  reset. Reached only via Routes.COUNT_MODE (Setup Race) — unlike Close, the Beacons hub's own
- *  "Count" button is no longer a standing shortcut straight to this screen (TODO.md: Count only
- *  ever makes sense against a race already set up for it, unlike Close — see
+ *  Both call [onHome] themselves immediately after (same reasoning for either): this screen's
+ *  scan loop would otherwise immediately re-detect and re-record the very beacons just
+ *  stopped/reset. Reached only via Routes.COUNT_MODE (Setup Race) — unlike Close, the Beacons
+ *  hub's own "Count" button is no longer a standing shortcut straight to this screen (TODO.md:
+ *  Count only ever makes sense against a race already set up for it, unlike Close — see
  *  [mobile.racemaster.ui.beaconops.BeaconOperationsScreen]'s own doc), so both Stop and Reset's
  *  [CountModeUiState.canStopCountMode] gating is now effectively always true in practice, kept
  *  as a defensive guard rather than removed outright. */
@@ -57,7 +79,10 @@ fun CountModeScreen(
     viewModel: CountModeViewModel = viewModel(factory = CountModeViewModel.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     var showStopConfirm by remember { mutableStateOf(false) }
+    var pendingEjectBeaconNumber by remember { mutableStateOf<Int?>(null) }
+    var pendingUnejectBeaconNumber by remember { mutableStateOf<Int?>(null) }
 
     if (showStopConfirm) {
         AlertDialog(
@@ -77,13 +102,50 @@ fun CountModeScreen(
         )
     }
 
+    pendingEjectBeaconNumber?.let { beaconNumber ->
+        AlertDialog(
+            onDismissRequest = { pendingEjectBeaconNumber = null },
+            title = { Text("Eject beacon %03d?".format(beaconNumber)) },
+            confirmButton = {
+                Button(onClick = withClickSound {
+                    pendingEjectBeaconNumber = null
+                    viewModel.ejectBeacon(beaconNumber)
+                }) { Text("Yes") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = withClickSound { pendingEjectBeaconNumber = null }) { Text("No") }
+            },
+        )
+    }
+
+    // Un-eject's own confirm (TODO.md: "so the user can check they hit the right one") — same
+    // yes/no shape as the eject dialog above.
+    pendingUnejectBeaconNumber?.let { beaconNumber ->
+        AlertDialog(
+            onDismissRequest = { pendingUnejectBeaconNumber = null },
+            title = { Text("Un-eject beacon %03d?".format(beaconNumber)) },
+            confirmButton = {
+                Button(onClick = withClickSound {
+                    pendingUnejectBeaconNumber = null
+                    viewModel.unejectBeacon(beaconNumber)
+                }) { Text("Yes") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = withClickSound { pendingUnejectBeaconNumber = null }) { Text("No") }
+            },
+        )
+    }
+
     Scaffold(
         topBar = {
-            ModeScreenTopBar(
-                title = "Count Mode",
-                thisRaceEnabled = uiState.canStopCountMode,
-                thisRaceLabel = "Stop",
-                onThisRace = { showStopConfirm = true },
+            ScreenTopBar(
+                title = { Text("Count Mode") },
+                // Back and Home both just navigate home — a mode screen's own back stack is
+                // always exactly [ModePicker, this screen] (see RacemasterNavHost), so a single
+                // pop and jumping straight to Mode Picker land on the same place; still shown as
+                // two separate icons (direct feedback) to match every other screen's own
+                // Help/Back/Home layout rather than standing out as the only screen missing one.
+                onBack = onHome,
                 onHome = onHome,
                 helpTopic = HelpTopics.CountMode,
             )
@@ -94,9 +156,17 @@ fun CountModeScreen(
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxSize(),
                 contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                // Tight by default (TODO.md: "the seen list is too sparse vertically") — section
+                // headers below add their own extra top padding instead, so the list body itself
+                // stays dense.
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 item {
+                    // Echoed under the title (TODO.md) — same "Device name: ..." convention
+                    // every other mode's own RaceProgressSummary already shows.
+                    deviceName?.takeIf { it.isNotBlank() }?.let {
+                        Text("Device name: $it", style = MaterialTheme.typography.labelMedium)
+                    }
                     Text(
                         "${uiState.uniqueBeaconsSeen} unique beacons seen",
                         style = MaterialTheme.typography.headlineSmall,
@@ -105,7 +175,7 @@ fun CountModeScreen(
                         "${uiState.outstanding.size} of ${uiState.totalIssued} yet to be seen",
                         style = MaterialTheme.typography.titleMedium,
                     )
-                    HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+                    HorizontalDivider(modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
                 }
                 if (uiState.outstanding.isEmpty()) {
                     item {
@@ -127,22 +197,107 @@ fun CountModeScreen(
                     }
                 } else {
                     items(uiState.outstanding, key = { it.beaconNumber }) { outstanding ->
+                        // Red while EJECTED and currently detected — TODO.md: "an ejected beacon
+                        // that is visible should be highlighted" (the operator's cue that this
+                        // runner is back and ready to be un-ejected). Green once un-ejected
+                        // (WAS_EJECTED) and NOT currently detected — the settled state once an
+                        // un-eject has genuinely taken, before a fresh detection clears the tag
+                        // entirely. Reuses the same fixed, theme-independent SyncedGreen/
+                        // UnsyncedRed pair Mule Mode's own sync rows use for an unrelated status,
+                        // for the same "red needs attention, green is settled" reading.
+                        val highlightColor = when {
+                            outstanding.status == CountBeaconStatus.EJECTED && outstanding.currentlyVisible -> UnsyncedRed
+                            outstanding.status == CountBeaconStatus.WAS_EJECTED && !outstanding.currentlyVisible -> SyncedGreen
+                            else -> null
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "Bib ${outstanding.bibNumber} — beacon %03d".format(outstanding.beaconNumber),
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = if (highlightColor != null) FontWeight.Bold else FontWeight.Normal,
+                                color = highlightColor ?: MaterialTheme.colorScheme.onSurface,
+                            )
+                            when (outstanding.status) {
+                                // Tap to un-eject, behind its own confirm (TODO.md: "so the user
+                                // can check they hit the right one") — an actionable link, not a
+                                // button, matching this screen's other labelled-link convention.
+                                CountBeaconStatus.EJECTED -> Text(
+                                    "ejected",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.clickable(onClick = withClickSound { pendingUnejectBeaconNumber = outstanding.beaconNumber }),
+                                )
+                                // Also a link (TODO.md) — tap to re-eject, behind the same eject
+                                // confirm the "Seen" list's own Eject link uses
+                                // (CountModeViewModel.ejectBeacon accepts either a currently-seen
+                                // or a WAS_EJECTED beacon). Clears on its own, same as before,
+                                // once a fresh detection genuinely re-counts this beacon instead.
+                                CountBeaconStatus.WAS_EJECTED -> Text(
+                                    "was-ejected",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.clickable(onClick = withClickSound { pendingEjectBeaconNumber = outstanding.beaconNumber }),
+                                )
+                                null -> {}
+                            }
+                        }
+                    }
+                }
+                // Seen beacons, each ejectable behind its own confirm (TODO.md: "a means to eject
+                // one seen beacon" — a runner leaves and comes back later having forgotten their
+                // kit, or the operator needs to un-count one entered by mistake).
+                item {
+                    Text(
+                        "Seen",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(top = 16.dp),
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(top = 4.dp))
+                }
+                items(uiState.seen, key = { it.beaconNumber }) { seen ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
-                            "Bib ${outstanding.bibNumber} — beacon %03d".format(outstanding.beaconNumber),
+                            (seen.bibNumber?.let { "Bib $it" } ?: "Bib ?") + " — beacon %03d".format(seen.beaconNumber),
                             style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            "Eject",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable(onClick = withClickSound { pendingEjectBeaconNumber = seen.beaconNumber }),
                         )
                     }
                 }
             }
-            ResetButton(
-                resetDescription = "Stops Count Mode and clears the running tally so it can be restarted from zero. Nothing is deleted — every beacon seen stays recorded in Race History.",
-                onReset = {
-                    viewModel.resetCountMode()
-                    onHome()
-                },
-                enabled = uiState.canStopCountMode,
-                modifier = Modifier.padding(16.dp),
-            )
+            // Stop and Reset side by side (direct feedback: Stop used to be a top-bar text
+            // link, moved down here next to its own sibling action — see this screen's own doc).
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = withClickSound { showStopConfirm = true },
+                    enabled = uiState.canStopCountMode,
+                    modifier = Modifier.weight(1f),
+                ) { Text("STOP") }
+                ResetButton(
+                    resetDescription = "Stops Count Mode and clears the running tally so it can be restarted from zero. Nothing is deleted — every beacon seen stays recorded in Race History.",
+                    onReset = {
+                        viewModel.resetCountMode()
+                        onHome()
+                    },
+                    enabled = uiState.canStopCountMode,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
     }
 }
