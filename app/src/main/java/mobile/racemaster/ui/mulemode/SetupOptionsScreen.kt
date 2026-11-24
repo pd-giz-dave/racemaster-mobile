@@ -94,6 +94,8 @@ fun SetupOptionsScreen(
             HorizontalDivider()
             BluetoothAndServerSyncToggles(uiState = uiState, viewModel = viewModel)
             HorizontalDivider()
+            PeerSyncControl(uiState = uiState, viewModel = viewModel)
+            HorizontalDivider()
             SpeakBibsAloudControl(viewModel = viewModel)
             HorizontalDivider()
             AutoSyncControls(uiState = uiState, viewModel = viewModel)
@@ -150,6 +152,38 @@ internal fun MuleSyncControl(
             ) {
                 Text("Enable Mule Mode")
             }
+        }
+    }
+}
+
+// Kill switch for the whole fast same-mode peer-sync feature (design doc's own Phase 6) — see
+// SettingsRepository.peerSyncOff's own doc for exactly what this gates (peer discovery, the
+// LOW_LATENCY scan/advertise acceleration it triggers, and merging a same-group peer's rows
+// into this device's own union views), independent of bluetoothOff/serverSyncOff above, which
+// govern ordinary relay-to-server Mule syncing. Plain on/off, same ON/OFF-button shape as
+// MuleSyncControl above, not the status-text-plus-pair-of-toggles shape
+// BluetoothAndServerSyncToggles uses — there's no separate "why is this off" signal (like a
+// disabled Bluetooth adapter) to surface here, just the operator's own choice.
+@Composable
+internal fun PeerSyncControl(uiState: MuleModeUiState, viewModel: MuleModeViewModel) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            if (uiState.peerSyncOff) {
+                "Fast peer sync: OFF — not accelerating or merging with nearby same-mode phones"
+            } else {
+                "Fast peer sync: ON — converging fast with nearby same-mode phones"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (uiState.peerSyncOff) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.primary
+            },
+        )
+        if (uiState.peerSyncOff) {
+            Button(onClick = withClickSound(viewModel::turnPeerSyncOn)) { Text("Enable fast peer sync") }
+        } else {
+            OutlinedButton(onClick = withClickSound(viewModel::turnPeerSyncOff)) { Text("Disable fast peer sync") }
         }
     }
 }

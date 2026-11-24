@@ -100,6 +100,14 @@ private fun ProgressEntryRow(entry: ProgressEntry) {
                 ).joinToString(" · ")
                 if (categoryAndCourse.isNotEmpty()) Text(categoryAndCourse)
                 val times = listOfNotNull(
+                    // Count Mode's own beacon-at-the-pen signal (ProgressEntry.beaconCountedAt's
+                    // own doc — blank means absent, same convention beaconClosedAt uses) — a
+                    // genuinely different event from startTime (Bibs Mode's manual Start), so it
+                    // sits alongside the rest of this list rather than replacing it: once a
+                    // runner is later also seen at a CP or the finish, this entry keeps its place
+                    // rather than getting dropped, since the only thing that clears the "no
+                    // activity at all yet" fallback below is this whole list staying empty.
+                    "Seen at start".takeIf { !entry.beaconCountedAt.isNullOrBlank() },
                     "Start ${entry.startTime}".takeIf { entry.startTime.isNotBlank() },
                     "Finish ${entry.finishTime}".takeIf { entry.finishTime.isNotBlank() },
                 ) + entry.cpTimes.entries.sortedBy { it.key.toIntOrNull() ?: 0 }.map { (cp, time) -> "CP$cp $time" }

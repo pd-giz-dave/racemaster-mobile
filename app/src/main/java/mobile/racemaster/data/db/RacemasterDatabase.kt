@@ -6,6 +6,7 @@ import androidx.room.TypeConverters
 import mobile.racemaster.data.db.dao.HistoryLineDao
 import mobile.racemaster.data.db.dao.KnownDeviceDao
 import mobile.racemaster.data.db.dao.LineSyncDao
+import mobile.racemaster.data.db.dao.PeerSeenRecordDao
 import mobile.racemaster.data.db.dao.ProgressDao
 import mobile.racemaster.data.db.dao.PulledRecordDao
 import mobile.racemaster.data.db.dao.RaceDao
@@ -13,6 +14,7 @@ import mobile.racemaster.data.db.dao.TargetedProgressDao
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.KnownDeviceEntity
 import mobile.racemaster.data.db.entity.LineSyncEntity
+import mobile.racemaster.data.db.entity.PeerSeenRecordEntity
 import mobile.racemaster.data.db.entity.ProgressEntity
 import mobile.racemaster.data.db.entity.PulledRecordEntity
 import mobile.racemaster.data.db.entity.RaceEntity
@@ -27,14 +29,14 @@ import mobile.racemaster.data.db.entity.TargetedProgressEntity
         KnownDeviceEntity::class,
         ProgressEntity::class,
         TargetedProgressEntity::class,
+        PeerSeenRecordEntity::class,
     ],
-    // Bumped past the short-lived beacon_close table (added and removed in the same session —
-    // Close Beacons' reporting moved to ordinary HistoryLineEntity rows instead, ridding the
-    // existing sync pipeline rather than a bespoke table/endpoint). No explicit Migration needed,
-    // same as the last several bumps — AppContainer's fallbackToDestructiveMigration(
-    // dropAllTables = true) already wipes and recreates the whole local DB on any version
-    // mismatch.
-    version = 38,
+    // Bumped for PeerSeenRecordEntity.splitNumber (Phase 5 of the same-mode peer-sync feature —
+    // the cross-device duplicate check needs a peer row's own split number, same as a local
+    // HistoryLineEntity row's). No explicit Migration needed, same as the last several bumps —
+    // AppContainer's fallbackToDestructiveMigration(dropAllTables = true) already wipes and
+    // recreates the whole local DB on any version mismatch.
+    version = 40,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -46,4 +48,5 @@ abstract class RacemasterDatabase : RoomDatabase() {
     abstract fun knownDeviceDao(): KnownDeviceDao
     abstract fun progressDao(): ProgressDao
     abstract fun targetedProgressDao(): TargetedProgressDao
+    abstract fun peerSeenRecordDao(): PeerSeenRecordDao
 }

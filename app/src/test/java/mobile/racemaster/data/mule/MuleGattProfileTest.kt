@@ -18,18 +18,73 @@ class MuleGattProfileTest {
 
     @Test
     fun roundTripsAnOrdinaryNameAndCounter() {
-        // "hedgehog" is 8 bytes — within ADVERTISED_NAME_MAX_BYTES (10), so this round-trips
+        // "fox" is 3 bytes — within ADVERTISED_NAME_MAX_BYTES (5), so this round-trips
         // untruncated; truncation itself is covered by the tests below.
         val encoded = MuleGattProfile.encodeAdvertisedIdentity(
-            lastLineNumber = 42L, deviceId = "device-a", deviceName = "hedgehog",
+            lastLineNumber = 42L, deviceId = "device-a", deviceName = "fox",
         )
 
         val decoded = MuleGattProfile.decodeAdvertisedIdentity(encoded)
 
         assertEquals(
-            MuleGattProfile.AdvertisedIdentity(42L, MuleGattProfile.shortDeviceId("device-a"), "hedgehog"),
+            MuleGattProfile.AdvertisedIdentity(42L, MuleGattProfile.shortDeviceId("device-a"), "fox"),
             decoded,
         )
+    }
+
+    // groupRaceId/locationCode — the convergence-group fingerprint (see AdvertisedIdentity's own
+    // doc) that lets two phones recognize "same race, same station" without connecting.
+
+    @Test
+    fun roundTripsGroupRaceIdAndLocationCodeAlongsideEverythingElse() {
+        val encoded = MuleGattProfile.encodeAdvertisedIdentity(
+            lastLineNumber = 7L, deviceId = "device-a", deviceName = "fox",
+            raceLabel = "lmv-seniors-23-08-2026", location = "Finish",
+        )
+
+        val decoded = MuleGattProfile.decodeAdvertisedIdentity(encoded)
+
+        assertEquals(
+            MuleGattProfile.AdvertisedIdentity(
+                7L, MuleGattProfile.shortDeviceId("device-a"), "fox", null,
+                MuleGattProfile.groupRaceId("lmv-seniors-23-08-2026"), MuleGattProfile.locationCode("Finish"),
+            ),
+            decoded,
+        )
+    }
+
+    @Test
+    fun blankRaceLabelAndLocationEncodeAsZeroRatherThanARealHash() {
+        val encoded = MuleGattProfile.encodeAdvertisedIdentity(
+            lastLineNumber = 0L, deviceId = "device-a", deviceName = "",
+        )
+
+        val decoded = MuleGattProfile.decodeAdvertisedIdentity(encoded)
+
+        assertEquals(0, decoded!!.groupRaceId)
+        assertEquals(0.toByte(), decoded.locationCode)
+    }
+
+    @Test
+    fun groupRaceIdDiffersForDifferentRaceLabels() {
+        assertTrue(MuleGattProfile.groupRaceId("race-a") != MuleGattProfile.groupRaceId("race-b"))
+    }
+
+    @Test
+    fun twoPhonesAtTheSameStationOfTheSameRaceEncodeTheSameGroup() {
+        val phoneOne = MuleGattProfile.decodeAdvertisedIdentity(
+            MuleGattProfile.encodeAdvertisedIdentity(
+                1L, "device-a", "one", AppMode.BIBS, raceLabel = "lmv-23-08-2026", location = "Start",
+            ),
+        )!!
+        val phoneTwo = MuleGattProfile.decodeAdvertisedIdentity(
+            MuleGattProfile.encodeAdvertisedIdentity(
+                50L, "device-b", "two", AppMode.BIBS, raceLabel = "lmv-23-08-2026", location = "Start",
+            ),
+        )!!
+
+        assertEquals(phoneOne.groupRaceId, phoneTwo.groupRaceId)
+        assertEquals(phoneOne.locationCode, phoneTwo.locationCode)
     }
 
     @Test
@@ -98,9 +153,11 @@ class MuleGattProfileTest {
     @Test
     fun decodeReturnsNullWhenDeclaredNameLengthExceedsWhatsActuallyThere() {
         val encoded = MuleGattProfile.encodeAdvertisedIdentity(1L, "device-a", "name")
-        // Corrupt the nameLen byte (right after magic+version+mode+counter+shortDeviceId) to
-        // claim more bytes than actually follow.
-        val nameLenIndex = MuleGattProfile.ADVERTISING_MAGIC.size + 1 + 1 + 4 + MuleGattProfile.SHORT_DEVICE_ID_BYTES
+        // Corrupt the nameLen byte (right after
+        // magic+version+mode+counter+shortDeviceId+groupRaceId+locationCode) to claim more
+        // bytes than actually follow.
+        val nameLenIndex = MuleGattProfile.ADVERTISING_MAGIC.size + 1 + 1 + 4 +
+            MuleGattProfile.SHORT_DEVICE_ID_BYTES + MuleGattProfile.GROUP_RACE_ID_BYTES + 1
         encoded[nameLenIndex] = 100
 
         assertNull(MuleGattProfile.decodeAdvertisedIdentity(encoded))
@@ -146,11 +203,13 @@ class MuleGattProfileTest {
     @Test
     fun roundTripsEachModeAlongsideNameAndCounter() {
         for (mode in AppMode.entries) {
-            val encoded = MuleGattProfile.encodeAdvertisedIdentity(7L, "device-a", "Phone One", mode)
+            // "Phone" is 5 bytes — exactly ADVERTISED_NAME_MAX_BYTES, so this round-trips
+            // untruncated.
+            val encoded = MuleGattProfile.encodeAdvertisedIdentity(7L, "device-a", "Phone", mode)
             val decoded = MuleGattProfile.decodeAdvertisedIdentity(encoded)
 
             assertEquals(
-                MuleGattProfile.AdvertisedIdentity(7L, MuleGattProfile.shortDeviceId("device-a"), "Phone One", mode),
+                MuleGattProfile.AdvertisedIdentity(7L, MuleGattProfile.shortDeviceId("device-a"), "Phone", mode),
                 decoded,
             )
         }

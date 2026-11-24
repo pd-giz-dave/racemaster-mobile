@@ -68,6 +68,7 @@ class MuleRepository(
     val autoSyncStopped: Flow<Boolean> = settingsRepository.autoSyncStopped
     val bluetoothOff: Flow<Boolean> = settingsRepository.bluetoothOff
     val serverSyncOff: Flow<Boolean> = settingsRepository.serverSyncOff
+    val peerSyncOff: Flow<Boolean> = settingsRepository.peerSyncOff
 
     val sourceSummaries: Flow<List<PulledSourceSummary>> = pulledRecordDao.observeSourceSummaries()
     val tombstonedSources: Flow<Set<Pair<String, String>>> = pulledRecordDao.observeTombstonedSources()
@@ -121,6 +122,11 @@ class MuleRepository(
     // attempting on a given tick.
     fun decodeAdvertisedIdentity(advertisement: Advertisement): MuleGattProfile.AdvertisedIdentity? =
         pullClient.decodeAdvertisedIdentity(advertisement)
+
+    // See MulePullClient.setLowLatencyScanning's own doc — the Mule Mode peer-sync feature's
+    // accelerated scan path, switched by MuleSyncEngine as a same-group peer becomes
+    // nearby/not-nearby.
+    fun setLowLatencyScanning(lowLatency: Boolean) = pullClient.setLowLatencyScanning(lowLatency)
 
     // [sourceDeviceId]/[sourceRaceLabel], when this source has already been resolved at least
     // once before, let this same connection also deliver any sink confirmation already owed to
@@ -259,6 +265,10 @@ class MuleRepository(
         settingsRepository.setServerSyncOff(off)
     }
 
+    suspend fun setPeerSyncOff(off: Boolean) {
+        settingsRepository.setPeerSyncOff(off)
+    }
+
     // The delta-sync cutoff for the next pull from this specific device/race — 0 (request
     // everything) if nothing's ever been pulled from it before.
     suspend fun lastPulledLineNumber(sourceDeviceId: String, sourceRaceLabel: String): Long =
@@ -340,6 +350,25 @@ class MuleRepository(
             },
         )
         return count
+    }
+
+    // See mobile.racemaster.data.peersync.PeerSyncEngine's own doc for why this exists as a
+    // second, narrower pull primitive rather than that engine calling pullFrom above: pullFrom
+    // unconditionally stages whatever it receives into this device's own relay-to-server inbox
+    // (storePulledRecords -> PulledRecordEntity) — correct for an ordinary Mule pull, but wrong
+    // for peer-sync, whose whole convergence feature is explicitly a phone-local, on-screen-only
+    // convenience (see ~racemaster's own ToDo.MD "never synced here" doc), never a new path for a
+    // peer's data to reach the server via this device. [onReceived] is handed the raw pulled
+    // records and nothing else — the caller (PeerSyncEngine) is the one that merges them into
+    // PeerSeenRecordEntity.
+    suspend fun pullForPeerSync(
+        advertisement: Advertisement,
+        sinceLineNumber: Long,
+        onReceived: suspend (List<SyncRecord>) -> Unit,
+    ) {
+        val myDeviceId = settingsRepository.getOrCreateDeviceId()
+        val myDeviceName = settingsRepository.getOrCreateDeviceName()
+        pullClient.pull(advertisement, myDeviceId, myDeviceName, sinceLineNumber, onReceived = onReceived)
     }
 
     private suspend fun storePulledRecords(

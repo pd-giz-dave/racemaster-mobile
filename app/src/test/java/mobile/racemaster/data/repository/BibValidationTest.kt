@@ -570,4 +570,98 @@ class BibValidationTest {
         // alone in their own segment — no duplicates anywhere.
         assertTrue(dups.isEmpty())
     }
+
+    // extractRssi
+
+    @Test
+    fun extractRssiParsesABeaconTriggeredEntrysNoteFormat() {
+        assertEquals(-71, extractRssi("beacon:7 rssi=-71"))
+    }
+
+    @Test
+    fun extractRssiIsNullForAManuallyTypedEntrysNote() {
+        assertEquals(null, extractRssi(null))
+        assertEquals(null, extractRssi("some other note"))
+    }
+
+    // strongestSignalFirst / resolveCanonical — Phase 5's default tie-break
+
+    private data class SignalRow(val name: String, val rssi: Int?, val timestampMillis: Long)
+
+    @Test
+    fun strongestSignalFirstPicksTheLeastNegativeRssi() {
+        val group = listOf(SignalRow("far", -85, 1_000L), SignalRow("near", -45, 2_000L))
+        val comparator = strongestSignalFirst<SignalRow>({ it.rssi }, { it.timestampMillis })
+        assertEquals("near", resolveCanonical(group, comparator).name)
+    }
+
+    @Test
+    fun anEntryWithAMeasuredSignalBeatsOneWithNoneAtAllRegardlessOfTimestamp() {
+        // "manual" has no signal reading at all (a typed bib) even though it was recorded
+        // first — the beacon-triggered entry still wins since there's no basis to distrust an
+        // actual reading in favor of a total unknown.
+        val group = listOf(SignalRow("manual", null, 1_000L), SignalRow("beacon", -90, 2_000L))
+        val comparator = strongestSignalFirst<SignalRow>({ it.rssi }, { it.timestampMillis })
+        assertEquals("beacon", resolveCanonical(group, comparator).name)
+    }
+
+    @Test
+    fun fallsBackToEarliestTimestampWhenNeitherSideHasASignalReading() {
+        val group = listOf(SignalRow("second", null, 2_000L), SignalRow("first", null, 1_000L))
+        val comparator = strongestSignalFirst<SignalRow>({ it.rssi }, { it.timestampMillis })
+        assertEquals("first", resolveCanonical(group, comparator).name)
+    }
+
+    // findCanonicalDuplicates
+
+    private data class CanonicalRow(val id: String, val bibNumber: Int?, val action: HistoryAction, val rssi: Int?, val timestampMillis: Long)
+
+    @Test
+    fun findCanonicalDuplicatesNamesTheStrongestSignalAsCanonicalForATwoWayCrossDeviceFinish() {
+        val rows = listOf(
+            CanonicalRow("local", 101, HistoryAction.FINISH, null, 1_000L),
+            CanonicalRow("peer", 101, HistoryAction.FINISH, -50, 2_000L),
+        )
+        val result = findCanonicalDuplicates(
+            rows,
+            keyOf = { it.id },
+            bibNumberOf = { it.bibNumber },
+            actionOf = { it.action },
+            comparator = strongestSignalFirst<CanonicalRow>({ it.rssi }, { it.timestampMillis }),
+        )
+        assertEquals("peer", result["local"]?.canonical?.id)
+        assertEquals("peer", result["peer"]?.canonical?.id)
+        assertEquals(listOf("peer"), result["local"]?.othersInGroup?.map { it.id })
+    }
+
+    @Test
+    fun findCanonicalDuplicatesIsEmptyWhenThereIsOnlyOneRecordForTheBib() {
+        val rows = listOf(CanonicalRow("local", 101, HistoryAction.FINISH, null, 1_000L))
+        val result = findCanonicalDuplicates(
+            rows,
+            keyOf = { it.id },
+            bibNumberOf = { it.bibNumber },
+            actionOf = { it.action },
+            comparator = strongestSignalFirst<CanonicalRow>({ it.rssi }, { it.timestampMillis }),
+        )
+        assertTrue(result.isEmpty())
+    }
+
+    @Test
+    fun findCanonicalDuplicatesNeverGroupsAStartTogetherWithACrossingRecord() {
+        // A Start and a Finish for the same bib are both legitimate (the normal workflow), so
+        // this must report no duplicate group at all — same rule findDuplicateSplitRefs enforces.
+        val rows = listOf(
+            CanonicalRow("start", 101, HistoryAction.START, -40, 1_000L),
+            CanonicalRow("finish", 101, HistoryAction.FINISH, -90, 2_000L),
+        )
+        val result = findCanonicalDuplicates(
+            rows,
+            keyOf = { it.id },
+            bibNumberOf = { it.bibNumber },
+            actionOf = { it.action },
+            comparator = strongestSignalFirst<CanonicalRow>({ it.rssi }, { it.timestampMillis }),
+        )
+        assertTrue(result.isEmpty())
+    }
 }

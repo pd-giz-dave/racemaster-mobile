@@ -62,6 +62,82 @@ private fun <T, K> flagExcess(group: List<T>, keyOf: (T) -> K, splitNumberOf: (T
     }
 }
 
+// Shared with BeaconScanEngine.commitDetection's own "beacon:<n> rssi=<n>" note convention for a
+// beacon-triggered Bibs/Finish entry — the only source of a measured signal reading on this path;
+// a manually typed bib carries no note at all, so this is null for it (see [strongestSignalFirst]
+// for how that's handled).
+private val RSSI_NOTE_PATTERN = Regex("""rssi=(-?\d+)""")
+
+/** The RSSI (dBm) a beacon-triggered Bibs/Finish entry's own note recorded at detection time —
+ *  null for a manually typed entry, which never carries a signal reading at all. */
+fun extractRssi(note: String?): Int? =
+    note?.let { RSSI_NOTE_PATTERN.find(it)?.groupValues?.get(1)?.toIntOrNull() }
+
+/**
+ * Default tie-break for [resolveCanonical]/[findCanonicalDuplicates]: the entry with the
+ * strongest (least negative) RSSI wins — the phone that was physically closest when it recorded
+ * this crossing is the one most likely to have gotten it right. An entry with *any* measured
+ * reading always beats one with none (there's no basis to distrust a real reading in favor of a
+ * total unknown); when neither side has one — the common case for a manually typed bib, which
+ * never carries a signal reading — falls back to earliest [timestampOf], a deterministic rule for
+ * exactly the gap this comparator can't otherwise resolve. This is the operator-facing tie-break
+ * policy the design doc's own risk #3 named as needing explicit sign-off — confirmed by the user
+ * as the default, not assumed.
+ */
+fun <T> strongestSignalFirst(rssiOf: (T) -> Int?, timestampOf: (T) -> Long): Comparator<T> =
+    compareByDescending<T> { rssiOf(it) ?: Int.MIN_VALUE }.thenBy { timestampOf(it) }
+
+/**
+ * Picks one entry from a group of same-slot duplicates (see [findDuplicateSplitRefs]'s own rule
+ * for what counts) to treat as canonical for display — every row stays in the ledger regardless
+ * (the append-only invariant is never touched by this; it only decides which one a summary should
+ * point to). [comparator] orders "most preferred first", e.g. [strongestSignalFirst]. [group]
+ * must be non-empty.
+ */
+fun <T> resolveCanonical(group: List<T>, comparator: Comparator<T>): T =
+    group.minWith(comparator)
+
+/** One entry's cross-device duplicate detail: the other entries sharing its slot (see
+ *  [findCanonicalDuplicates]), and which single one of the whole group [resolveCanonical] picked
+ *  as canonical under that call's comparator. */
+data class CrossDeviceDuplicate<T>(val othersInGroup: List<T>, val canonical: T)
+
+/**
+ * Richer sibling of [findDuplicateSplitRefs]'s generic core, for a local+peer union (see the
+ * design doc's "Dedup/canonicalization" phase): same duplicate rule (more than one Start, or more
+ * than one crossing, for a bib), but also names which entry [comparator] would keep as canonical
+ * — e.g. [strongestSignalFirst]. Kept as its own function rather than folded into
+ * [findDuplicateSplitRefs] itself, since every existing caller of that one only ever wanted the
+ * split-number list, never a canonical pick — this leaves that contract untouched.
+ */
+fun <T, K> findCanonicalDuplicates(
+    entries: List<T>,
+    keyOf: (T) -> K,
+    bibNumberOf: (T) -> Int?,
+    actionOf: (T) -> HistoryAction,
+    comparator: Comparator<T>,
+): Map<K, CrossDeviceDuplicate<T>> {
+    val groups = entries
+        .filter { actionOf(it) in BIB_REQUIRED_ACTIONS && bibNumberOf(it) != null }
+        .groupBy { bibNumberOf(it) }
+
+    val result = mutableMapOf<K, CrossDeviceDuplicate<T>>()
+    for (group in groups.values) {
+        flagCanonical(group.filter { actionOf(it) == HistoryAction.START }, keyOf, comparator, result)
+        flagCanonical(group.filter { actionOf(it) in ACCOUNTED_FOR_ACTIONS }, keyOf, comparator, result)
+    }
+    return result
+}
+
+private fun <T, K> flagCanonical(group: List<T>, keyOf: (T) -> K, comparator: Comparator<T>, result: MutableMap<K, CrossDeviceDuplicate<T>>) {
+    if (group.size <= 1) return
+    val canonical = resolveCanonical(group, comparator)
+    for (entry in group) {
+        val key = keyOf(entry)
+        result[key] = CrossDeviceDuplicate(group.filter { keyOf(it) != key }, canonical)
+    }
+}
+
 /**
  * Splits [entries] into segments bounded by RESET **or** LOCATION markers (mirroring
  * BibsModeRepository's own segment boundary — see HistoryFold.sinceLastLocationMarker's own doc

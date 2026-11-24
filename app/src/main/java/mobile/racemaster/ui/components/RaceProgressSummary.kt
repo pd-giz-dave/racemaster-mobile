@@ -57,6 +57,7 @@ import mobile.racemaster.util.withClickSound
 @Composable
 fun RaceProgressSummary(
     deviceName: String?,
+    nearbyPeerNames: List<String> = emptyList(),
     raceLabel: String,
     raceLocation: String,
     nextSplitNumber: Int,
@@ -77,6 +78,12 @@ fun RaceProgressSummary(
     BtPollingStatusLine(btPollingStatus)
     if (!deviceName.isNullOrBlank()) {
         Text(text = "Device name: $deviceName", style = MaterialTheme.typography.labelMedium)
+    }
+    // Same-mode peer-sync feature — other phones converging on this same race/mode/station right
+    // now (see PeerSyncEngine.nearbyPeerNames' own doc). Omitted entirely rather than shown as
+    // "none" when empty, matching every other optional line in this block.
+    if (nearbyPeerNames.isNotEmpty()) {
+        Text(text = "Nearby: ${nearbyPeerNames.joinToString(", ")}", style = MaterialTheme.typography.labelMedium)
     }
     Text(text = "Race name: $raceLabel", style = MaterialTheme.typography.labelMedium)
     if (showLocation) {

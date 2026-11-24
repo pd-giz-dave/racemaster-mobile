@@ -11,12 +11,16 @@ import mobile.racemaster.data.beacon.DxCp27Client
 import mobile.racemaster.data.beacon.RangeSampleLogger
 import mobile.racemaster.data.db.RacemasterDatabase
 import mobile.racemaster.data.mule.BluetoothStateRepository
+import mobile.racemaster.data.mule.LocationStateRepository
 import mobile.racemaster.data.mule.MulePullClient
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.MuleSyncClient
 import mobile.racemaster.data.mule.MuleSyncEngine
 import mobile.racemaster.data.mule.ProgressRepository
 import mobile.racemaster.data.mule.ServerStatusRepository
+import mobile.racemaster.data.peersync.PeerGroupDetector
+import mobile.racemaster.data.peersync.PeerSyncEngine
+import mobile.racemaster.data.peersync.PeerSyncRepository
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.CloseModeRepository
 import mobile.racemaster.data.repository.CountModeRepository
@@ -38,12 +42,16 @@ interface AppContainer {
     val beaconScanEngine: BeaconScanEngine
     val serverStatusRepository: ServerStatusRepository
     val bluetoothStateRepository: BluetoothStateRepository
+    val locationStateRepository: LocationStateRepository
     val progressRepository: ProgressRepository
     val bibSpeaker: BibSpeaker
     val beaconRepository: BeaconRepository
     val rangeSampleLogger: RangeSampleLogger
     val closeModeRepository: CloseModeRepository
     val countModeRepository: CountModeRepository
+    val peerSyncRepository: PeerSyncRepository
+    val peerGroupDetector: PeerGroupDetector
+    val peerSyncEngine: PeerSyncEngine
 }
 
 class DefaultAppContainer(context: Context) : AppContainer {
@@ -88,6 +96,14 @@ class DefaultAppContainer(context: Context) : AppContainer {
         )
     }
 
+    override val peerGroupDetector: PeerGroupDetector by lazy {
+        PeerGroupDetector(peerSyncRepository)
+    }
+
+    override val peerSyncEngine: PeerSyncEngine by lazy {
+        PeerSyncEngine(muleRepository, raceRepository, settingsRepository, peerGroupDetector, peerSyncRepository)
+    }
+
     override val beaconScanEngine: BeaconScanEngine by lazy {
         BeaconScanEngine(muleRepository, progressRepository, settingsRepository, raceRepository, bibsModeRepository, bibSpeaker, Beeper(context))
     }
@@ -98,6 +114,10 @@ class DefaultAppContainer(context: Context) : AppContainer {
 
     override val bluetoothStateRepository: BluetoothStateRepository by lazy {
         BluetoothStateRepository(context)
+    }
+
+    override val locationStateRepository: LocationStateRepository by lazy {
+        LocationStateRepository(context)
     }
 
     override val progressRepository: ProgressRepository by lazy {
@@ -116,5 +136,9 @@ class DefaultAppContainer(context: Context) : AppContainer {
 
     override val countModeRepository: CountModeRepository by lazy {
         CountModeRepository(database, database.raceDao(), database.historyLineDao())
+    }
+
+    override val peerSyncRepository: PeerSyncRepository by lazy {
+        PeerSyncRepository(database.peerSeenRecordDao())
     }
 }

@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.ui.components.RaceProgressSummary
 import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.util.withClickSound
@@ -71,6 +72,7 @@ fun CloseModeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
+    val btPollingStatus by viewModel.btPollingStatus.collectAsStateWithLifecycle()
     var showStopConfirm by remember { mutableStateOf(false) }
 
     if (showStopConfirm) {
@@ -157,14 +159,23 @@ fun CloseModeScreen(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 item {
-                    // Echoed under the title (TODO.md) — same "Device name: ..." convention
-                    // every other mode's own RaceProgressSummary already shows.
-                    deviceName?.takeIf { it.isNotBlank() }?.let {
-                        Text("Device name: $it", style = MaterialTheme.typography.labelMedium)
-                    }
-                    Text(
-                        "${uiState.closed.size} of ${uiState.totalIssued} closed",
-                        style = MaterialTheme.typography.titleMedium,
+                    // Same shared feedback block Bibs/Time/Count Mode all use (server status,
+                    // BT/Location status, device name, race name, location, unsynced count) —
+                    // see RaceProgressSummary's own doc. showNextSplit false: Close has no
+                    // segmented split-counter concept, same reasoning Count Mode's own call
+                    // gives. progressText carries what used to be this item's own standalone
+                    // "N of M closed" line, so nothing here is shown twice.
+                    RaceProgressSummary(
+                        deviceName = deviceName,
+                        raceLabel = uiState.raceLabel,
+                        raceLocation = uiState.raceLocation,
+                        nextSplitNumber = 0,
+                        showNextSplit = false,
+                        unsyncedCount = uiState.unsyncedCount,
+                        lastSyncedAtMillis = uiState.lastSyncedAtMillis,
+                        serverStatus = uiState.serverStatus,
+                        btPollingStatus = btPollingStatus,
+                        progressText = "${uiState.closed.size} of ${uiState.totalIssued} closed",
                     )
                     HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
                 }

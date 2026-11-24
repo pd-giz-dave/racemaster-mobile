@@ -18,11 +18,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.takeWhile
@@ -40,7 +43,7 @@ import kotlin.uuid.toKotlinUuid
 
 /** BLE central: scans for [MuleGattProfile.SERVICE_UUID], connects to a nearby Time/Bibs/Mule
  *  phone, and pulls whatever unsynced records it's holding. */
-@OptIn(ExperimentalUuidApi::class)
+@OptIn(ExperimentalUuidApi::class, ExperimentalCoroutinesApi::class)
 class MulePullClient {
     // encodeDefaults = true — see PeripheralSyncService's own doc on its identically-configured
     // Json instance for why a default-valued field (e.g. AckPayload.isSink, PullRequest's null
@@ -77,9 +80,41 @@ class MulePullClient {
     // interval on every peer risked compounding (multiplicatively, not additively) the exact
     // scan-window/advertise-interval mismatch failure this comment already documents above.
     // Revisit empirically against real multi-device field testing before ever going lower.
+    //
+    // Two pre-built Scanners (not one, rebuilt on demand) — Kable's Scanner is an immutable
+    // configuration object, so switching mode means switching *which* Scanner backs
+    // sharedAdvertisements below, not mutating one in place. See desiredScanMode/
+    // sharedAdvertisements for how that switch actually happens, and setLowLatencyScanning's own
+    // doc for why this exists at all: the Mule Mode peer-sync feature's accelerated path for a
+    // same-group peer nearby, mirroring DxCp27Client's own already-proven LOW_LATENCY precedent
+    // for Program Beacon — accepted, per the user, as reintroducing the contention problem
+    // BALANCED was originally chosen to avoid, as a problem to tune later rather than a blocker
+    // now.
     @OptIn(ObsoleteKableApi::class)
-    private val scanner = Scanner {
+    private val balancedScanner = Scanner {
         scanSettings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_BALANCED).build()
+    }
+
+    @OptIn(ObsoleteKableApi::class)
+    private val lowLatencyScanner = Scanner {
+        scanSettings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
+    }
+
+    // Driven by setLowLatencyScanning — see sharedAdvertisements' own flatMapLatest for how a
+    // change here actually swaps the underlying native scan session.
+    private val desiredLowLatencyScanning = MutableStateFlow(false)
+
+    /** Switches the underlying native scan between [balancedScanner] and [lowLatencyScanner] —
+     *  called by [MuleSyncEngine] as [PeerGroupDetector.sameGroupPeerKeys] goes
+     *  non-empty/empty. Takes effect on sharedAdvertisements' very next re-subscription (the
+     *  flatMapLatest below cancels whichever scan is currently running and starts the other);
+     *  with scanForDevices()/scanForAdvertisements() both permanently subscribed for the life of
+     *  Mule Mode (via MuleSyncEngine.startScan/BeaconScanEngine), that's effectively immediate.
+     *  Affects every consumer of [scanForAdvertisements] too (BeaconScanEngine included) — there
+     *  is only one physical radio/one native scan session to share, so this can't be scoped to
+     *  "just the Mule-relevant part" of what's currently being scanned for. */
+    fun setLowLatencyScanning(lowLatency: Boolean) {
+        desiredLowLatencyScanning.value = lowLatency
     }
 
     // One Peripheral per device address, reused across calls — a fresh Peripheral(advertisement)
@@ -257,7 +292,8 @@ class MulePullClient {
     // only ever sees adverts from the moment it starts collecting, not ones from before.
     private val scanScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val sharedAdvertisements: SharedFlow<Advertisement> = scanner.advertisements
+    private val sharedAdvertisements: SharedFlow<Advertisement> = desiredLowLatencyScanning
+        .flatMapLatest { lowLatency -> (if (lowLatency) lowLatencyScanner else balancedScanner).advertisements }
         .onEach { advertisement ->
             if (loggedRawAddresses.add(advertisement.identifier)) {
                 Log.d(

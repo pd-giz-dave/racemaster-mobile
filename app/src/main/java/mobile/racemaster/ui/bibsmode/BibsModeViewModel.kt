@@ -9,19 +9,27 @@ import mobile.racemaster.data.db.entity.BIB_REQUIRED_ACTIONS
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
+import mobile.racemaster.data.db.entity.PeerSeenRecordEntity
 import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.mule.BluetoothStateRepository
+import mobile.racemaster.data.mule.LocationStateRepository
 import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.data.mule.ProgressEntry
 import mobile.racemaster.data.mule.ProgressRepository
 import mobile.racemaster.data.mule.ServerStatus
 import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.mule.ServerStatusState
+import mobile.racemaster.data.mule.toHistoryAction
+import mobile.racemaster.data.peersync.PeerGroupDetector
+import mobile.racemaster.data.peersync.PeerSyncEngine
+import mobile.racemaster.data.peersync.PeerSyncRepository
 import mobile.racemaster.data.repository.BibsModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.countDuplicateExtras
 import mobile.racemaster.data.repository.duplicateBibNumbers
 import mobile.racemaster.data.repository.expectedBibsAtLocation
+import mobile.racemaster.data.repository.extractRssi
+import mobile.racemaster.data.repository.findCanonicalDuplicates
 import mobile.racemaster.data.repository.findDuplicateSplitRefs
 import mobile.racemaster.data.repository.hasRealEntries
 import mobile.racemaster.data.repository.isBibsActionAllowedAtLocation
@@ -29,6 +37,7 @@ import mobile.racemaster.data.repository.isRaceActive
 import mobile.racemaster.data.repository.lineSyncState
 import mobile.racemaster.data.repository.linesWithAnySync
 import mobile.racemaster.data.repository.outstandingAtLocation
+import mobile.racemaster.data.repository.strongestSignalFirst
 import mobile.racemaster.data.repository.unexpectedBibNumbers
 import mobile.racemaster.data.repository.unexpectedBibWarning
 import mobile.racemaster.data.settings.AppMode
@@ -43,6 +52,7 @@ import mobile.racemaster.ui.deviceNameFlow
 import mobile.racemaster.util.BibSpeaker
 import mobile.racemaster.util.Beeper
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -56,6 +66,21 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+// A plain union of this device's own entries (originDeviceId null) and a same-group peer's
+// reported rows — just enough shape for BibValidation.findCanonicalDuplicates' generic core to
+// walk across both at once, using the design doc's own Phase 5 "(originDeviceId?, lineNumber)"
+// composite key so two different devices' row 1 never collide (a peer's own lineNumber is only
+// unique within its own sequence — see HistoryLineEntity.lineNumber's own doc).
+private data class UnionBibEntry(
+    val originDeviceId: String?,
+    val originDeviceName: String?,
+    val lineNumber: Long,
+    val bibNumber: Int?,
+    val action: HistoryAction,
+    val rssi: Int?,
+    val timestampMillis: Long,
+)
 
 private data class RaceContext(
     val race: RaceEntity?,
@@ -154,8 +179,12 @@ class BibsModeViewModel(
     private val serverStatusRepository: ServerStatusRepository,
     private val progressRepository: ProgressRepository,
     bluetoothStateRepository: BluetoothStateRepository,
+    locationStateRepository: LocationStateRepository,
     private val beeper: Beeper,
     private val bibSpeaker: BibSpeaker,
+    private val peerGroupDetector: PeerGroupDetector,
+    private val peerSyncRepository: PeerSyncRepository,
+    peerSyncEngine: PeerSyncEngine,
 ) : ViewModel() {
 
     private val raceIdFlow: StateFlow<Long?> = settingsRepository.activeRaceId
@@ -177,7 +206,11 @@ class BibsModeViewModel(
 
     val deviceName: StateFlow<String?> = deviceNameFlow(settingsRepository)
 
-    val btPollingStatus: StateFlow<BtPollingStatus> = btPollingStatusFlow(bluetoothStateRepository)
+    val btPollingStatus: StateFlow<BtPollingStatus> = btPollingStatusFlow(bluetoothStateRepository, locationStateRepository, settingsRepository)
+
+    // Same-group peers currently nearby over BLE — see CountModeViewModel's own identical field
+    // for why this just exposes PeerSyncEngine's already-live StateFlow directly.
+    val nearbyPeerNames: StateFlow<List<String>> = peerSyncEngine.nearbyPeerNames
 
     private val digitsFlow = MutableStateFlow("")
     // True whenever the digits currently on screen are already committed (either just
@@ -266,17 +299,69 @@ class BibsModeViewModel(
         }
     }
 
+    // Same-mode peer-sync feature, Phase 4 — see CountModeViewModel.peerSeenBeaconsFlow's own
+    // doc for the general shape; every bib a same-group Bibs/Finish peer has reported, mapped to
+    // its most recent reporting peer. Unlike Count's own full union (there's no equivalent
+    // "unexpected location" concept to piggyback on there), this feeds a per-entry warning via
+    // the existing unexpectedBibWarning slot below rather than a separate visible list — see the
+    // design doc's own "Merge into local state" section for why Bibs/Finish's own convergence
+    // need is answered by a plain duplicate-recording warning, not a full peer-rows view.
+    private val peerGroupKeyFlow: Flow<String?> = raceIdFlow.flatMapLatest { raceId ->
+        if (raceId == null) {
+            flowOf(null)
+        } else {
+            raceRepository.observeRace(raceId)
+                .map { race -> race?.let { peerGroupDetector.ownGroupKey(it.label, it.location, HistoryMode.BIBS) } }
+                .distinctUntilChanged()
+        }
+    }
+
+    private val peerSeenBibsFlow: Flow<Map<Int, String>> = peerGroupKeyFlow.flatMapLatest { groupKey ->
+        if (groupKey == null) flowOf(emptyMap()) else peerSyncRepository.observeLatestOriginByBib(groupKey, HistoryMode.BIBS)
+    }
+
+    // Phase 5 (Dedup/canonicalization): the same group's raw rows, alongside peerSeenBibsFlow's
+    // own collapsed-to-latest-origin view — findCanonicalDuplicates below needs every row, not
+    // just the most recent one per bib, to tell a genuine same-slot conflict (two Finishes for
+    // bib 42) apart from an unrelated mention (a Start and a Finish legitimately coexisting).
+    private val peerGroupRowsFlow: Flow<List<PeerSeenRecordEntity>> = peerGroupKeyFlow.flatMapLatest { groupKey ->
+        if (groupKey == null) flowOf(emptyList()) else peerSyncRepository.observeGroup(groupKey, HistoryMode.BIBS)
+    }
+
+    // Packed into one Pair rather than added as the outer combine's own 6th argument — see
+    // raceAndEntriesFlow's own Triple/Pair-packing doc above for why (combine()'s typed overloads
+    // only go up to 5).
+    private val peerSyncFlow: Flow<Pair<Map<Int, String>, List<PeerSeenRecordEntity>>> =
+        combine(peerSeenBibsFlow, peerGroupRowsFlow) { peerSeenBibs, peerGroupRows -> peerSeenBibs to peerGroupRows }
+
     val uiState: StateFlow<BibsModeUiState> = combine(
         raceAndEntriesFlow,
         digitsFlow,
         canRetagFlow,
         defaultBibsActionFlow,
-    ) { context, digits, canRetag, defaultBibsAction ->
+        peerSyncFlow,
+    ) { context, digits, canRetag, defaultBibsAction, (peerSeenBibs, peerGroupRows) ->
         val (race, entries, unsyncedCount, lastSyncedAtMillis, linesWithAnySync, serverStatus, progressEntries, openLocations) = context
         val dupRefs = findDuplicateSplitRefs(entries)
         val raceLocation = race?.location.orEmpty()
         val expectedBibs = expectedBibsAtLocation(progressEntries, raceLocation)
         val outstanding = outstandingAtLocation(entries, progressEntries, raceLocation)
+        // Phase 5: cross-device duplicate detection over the local+peer union — see
+        // UnionBibEntry's own doc for the composite key, and BibValidation.findCanonicalDuplicates
+        // for the rule this mirrors from findDuplicateSplitRefs above (unchanged, local-only,
+        // still what dupSplitRefs/dupCount/duplicateBibNumbers below report).
+        val unionEntries = entries.map {
+            UnionBibEntry(null, null, it.lineNumber, it.bibNumber, it.action, extractRssi(it.note), it.timestampMillis)
+        } + peerGroupRows.map {
+            UnionBibEntry(it.originDeviceId, it.originDeviceName, it.lineNumber, it.bibNumber, it.toHistoryAction(), extractRssi(it.note), it.timestampMillis)
+        }
+        val canonicalDuplicates = findCanonicalDuplicates(
+            unionEntries,
+            keyOf = { it.originDeviceId to it.lineNumber },
+            bibNumberOf = { it.bibNumber },
+            actionOf = { it.action },
+            comparator = strongestSignalFirst(rssiOf = { it.rssi }, timestampOf = { it.timestampMillis }),
+        )
         BibsModeUiState(
             raceId = race?.id,
             raceLabel = race?.label.orEmpty(),
@@ -304,6 +389,20 @@ class BibsModeViewModel(
             // not this one, so undoing a relocate the operator can't see listed still works
             // exactly as before.
             entries = entries.filterNot { it.action == HistoryAction.LOCATION }.map {
+                val duplicate = canonicalDuplicates[null to it.lineNumber]
+                val peerConflicts = duplicate?.othersInGroup.orEmpty().filter { other -> other.originDeviceId != null }
+                // Only a genuine same-slot conflict (two Starts, or two crossings, for this bib —
+                // see findCanonicalDuplicates' own rule) gets this specific message; a duplicate
+                // that's entirely local (every other entry in the group also has originDeviceId
+                // null) is already covered by dupSplitRefs below, so this stays null for it.
+                val crossDeviceDuplicateWarning = if (peerConflicts.isEmpty()) {
+                    null
+                } else if (duplicate!!.canonical.originDeviceId == null && duplicate.canonical.lineNumber == it.lineNumber) {
+                    "duplicate ${it.action.displayName()} — also recorded by " +
+                        peerConflicts.joinToString { conflict -> conflict.originDeviceName.orEmpty() } + "; this one is canonical"
+                } else {
+                    "duplicate ${it.action.displayName()} — superseded by ${duplicate.canonical.originDeviceName}'s record"
+                }
                 EntryLogUi(
                     id = it.id,
                     bibNumber = it.bibNumber,
@@ -312,7 +411,17 @@ class BibsModeViewModel(
                     note = it.note,
                     dupSplitRefs = dupRefs[it.id].orEmpty(),
                     syncState = lineSyncState(it.syncedAtMillis, it.lineNumber in linesWithAnySync),
-                    expectationWarning = unexpectedBibWarning(it.bibNumber, expectedBibs),
+                    // "Not expected at this location" takes priority when it applies — the
+                    // established warning an operator already knows this slot can show. Next, a
+                    // genuine cross-device duplicate (Phase 5) — more specific and more actionable
+                    // than the plain "also recorded by" mention below it falls back to, which
+                    // still covers a peer merely mentioning this bib without an actual slot
+                    // conflict (e.g. a peer's Start alongside this device's own Finish — legitimate,
+                    // not a duplicate at all). Always warn, never block — same posture
+                    // unexpectedBibWarning's own doc describes.
+                    expectationWarning = unexpectedBibWarning(it.bibNumber, expectedBibs)
+                        ?: crossDeviceDuplicateWarning
+                        ?: it.bibNumber?.let { bib -> peerSeenBibs[bib]?.let { origin -> "also recorded by $origin" } },
                 )
             },
             canUndo = entries.hasRealEntries(),
@@ -496,8 +605,12 @@ class BibsModeViewModel(
                     container.serverStatusRepository,
                     container.progressRepository,
                     container.bluetoothStateRepository,
+                    container.locationStateRepository,
                     Beeper(applicationContext()),
                     container.bibSpeaker,
+                    container.peerGroupDetector,
+                    container.peerSyncRepository,
+                    container.peerSyncEngine,
                 )
             }
         }

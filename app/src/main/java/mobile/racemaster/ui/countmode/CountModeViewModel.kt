@@ -23,11 +23,22 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import mobile.racemaster.data.beacon.BeaconScanDecoder
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryMode
+import mobile.racemaster.data.mule.BluetoothStateRepository
+import mobile.racemaster.data.mule.BtPollingStatus
+import mobile.racemaster.data.mule.LocationStateRepository
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.ProgressRepository
+import mobile.racemaster.data.mule.ServerStatus
+import mobile.racemaster.data.mule.ServerStatusRepository
+import mobile.racemaster.data.mule.ServerStatusState
+import mobile.racemaster.data.peersync.PeerGroupDetector
+import mobile.racemaster.data.peersync.PeerSyncEngine
+import mobile.racemaster.data.peersync.PeerSyncRepository
 import mobile.racemaster.data.repository.CountBeaconStatus
 import mobile.racemaster.data.repository.CountModeRepository
 import mobile.racemaster.data.repository.RaceRepository
@@ -35,6 +46,7 @@ import mobile.racemaster.data.repository.parseBeaconCount
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
+import mobile.racemaster.ui.btPollingStatusFlow
 import mobile.racemaster.ui.deviceNameFlow
 
 data class OutstandingBeaconUi(
@@ -44,7 +56,23 @@ data class OutstandingBeaconUi(
     val currentlyVisible: Boolean = false,
 )
 
-data class SeenBeaconUi(val bibNumber: Int?, val beaconNumber: Int)
+// originDeviceName is non-null exactly for a same-group peer's own report of this beacon that
+// THIS device has never itself recorded (see recomputeOutstanding) — same-mode peer-sync
+// feature, Phase 4. Null means an ordinary local COUNT_SEEN row, same as before this field
+// existed. A peer-sourced entry has no local row to target, so CountModeScreen must not offer
+// its own "Eject" link for one (ejectBeacon would just silently no-op against it).
+data class SeenBeaconUi(val bibNumber: Int?, val beaconNumber: Int, val originDeviceName: String? = null)
+
+// See CountModeViewModel's own race-progress collector — packed into one small holder rather
+// than combine()'s own 6th/7th argument, same Triple/Pair-packing reasoning BibsModeViewModel's
+// own raceAndEntriesFlow doc gives (kotlinx coroutines' typed combine() overloads only go up to 5).
+private data class RaceProgressInfo(
+    val raceLabel: String = "",
+    val raceLocation: String = "",
+    val unsyncedCount: Int = 0,
+    val lastSyncedAtMillis: Long? = null,
+    val serverStatus: ServerStatusState = ServerStatusState(ServerStatus.UNKNOWN, null),
+)
 
 data class CountModeUiState(
     val uniqueBeaconsSeen: Int = 0,
@@ -66,6 +94,13 @@ data class CountModeUiState(
     // removed outright.
     val raceId: Long? = null,
     val canStopCountMode: Boolean = false,
+    // Same feedback RaceProgressSummary already shows for Bibs/Time Mode (and now Close Mode) —
+    // Count had none of its own before; see CountModeScreen's own RaceProgressSummary call.
+    val raceLabel: String = "",
+    val raceLocation: String = "",
+    val unsyncedCount: Int = 0,
+    val lastSyncedAtMillis: Long? = null,
+    val serverStatus: ServerStatusState = ServerStatusState(ServerStatus.UNKNOWN, null),
 )
 
 /**
@@ -117,6 +152,12 @@ class CountModeViewModel(
     private val progressRepository: ProgressRepository,
     private val raceRepository: RaceRepository,
     private val settingsRepository: SettingsRepository,
+    private val peerGroupDetector: PeerGroupDetector,
+    private val peerSyncRepository: PeerSyncRepository,
+    peerSyncEngine: PeerSyncEngine,
+    bluetoothStateRepository: BluetoothStateRepository,
+    locationStateRepository: LocationStateRepository,
+    private val serverStatusRepository: ServerStatusRepository,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(CountModeUiState())
     val uiState: StateFlow<CountModeUiState> = _uiState.asStateFlow()
@@ -128,6 +169,17 @@ class CountModeViewModel(
     // own RaceProgressSummary already shows; Count has no such shared header, so this screen
     // reads it directly.
     val deviceName: StateFlow<String?> = deviceNameFlow(settingsRepository)
+
+    // Same-group peers currently nearby over BLE — PeerSyncEngine is independent of this
+    // ViewModel's own lifecycle (see its own doc), so this just exposes its already-live
+    // StateFlow directly rather than re-deriving anything.
+    val nearbyPeerNames: StateFlow<List<String>> = peerSyncEngine.nearbyPeerNames
+
+    // Same Bluetooth/Location status Bibs/Time Mode already show (see BtPollingStatusLine's own
+    // doc) — Count has no such line of its own today; this is what makes a Location-off phone's
+    // own silently-empty nearbyPeerNames above explicable from this screen alone, rather than
+    // looking like an unexplained bug.
+    val btPollingStatus: StateFlow<BtPollingStatus> = btPollingStatusFlow(bluetoothStateRepository, locationStateRepository, settingsRepository)
 
     // Guards against a duplicate COUNT_SEEN row for the same beacon — every single advertisement
     // from an already-committing beacon re-triggers commitDetection instantly (there's no
@@ -164,9 +216,51 @@ class CountModeViewModel(
     @Volatile
     private var statusByBeacon: Map<Int, CountBeaconStatus> = emptyMap()
 
+    // Same-mode peer-sync feature, Phase 4: every beacon a same-group Count peer has reported,
+    // mapped to its most recent reporting peer's own device name — see peerSeenBeaconsFlow's own
+    // doc. Folded into seenBeaconNumbers' union in recomputeOutstanding, same reasoning
+    // statusByBeacon documents for why this is a second, separately-updated field rather than
+    // baked into seenBeaconNumbers itself: the two have genuinely different provenance (this
+    // device's own fold-aware local rows vs. another device's raw reports) that recomputeOutstanding
+    // still needs to tell apart (a peer-only entry has no local row for Eject to target).
+    @Volatile
+    private var peerSeenOriginByBeacon: Map<Int, String> = emptyMap()
+
     init {
         viewModelScope.launch { collectAdvertisements() }
         viewModelScope.launch { tickCurrentlyVisible() }
+        // Same feedback RaceProgressSummary already derives for Bibs/Time Mode — a separate,
+        // independent collector (not folded into the combine below) since it's unrelated to the
+        // counting logic that drives, matching this class's own established "separate collectors
+        // each update their own slice of _uiState" convention (see canStopCountMode's own
+        // collector just below for the precedent).
+        viewModelScope.launch {
+            raceIdFlow.flatMapLatest { raceId ->
+                if (raceId == null) {
+                    flowOf(RaceProgressInfo())
+                } else {
+                    combine(
+                        raceRepository.observeRace(raceId),
+                        countModeRepository.observeUnsyncedCount(raceId),
+                        combine(countModeRepository.observeLastSyncedAtMillis(raceId), serverStatusRepository.state) { lastSyncedAtMillis, serverStatus ->
+                            lastSyncedAtMillis to serverStatus
+                        },
+                    ) { race, unsyncedCount, (lastSyncedAtMillis, serverStatus) ->
+                        RaceProgressInfo(race?.label.orEmpty(), race?.location.orEmpty(), unsyncedCount, lastSyncedAtMillis, serverStatus)
+                    }
+                }
+            }.collectLatest { info ->
+                _uiState.update {
+                    it.copy(
+                        raceLabel = info.raceLabel,
+                        raceLocation = info.raceLocation,
+                        unsyncedCount = info.unsyncedCount,
+                        lastSyncedAtMillis = info.lastSyncedAtMillis,
+                        serverStatus = info.serverStatus,
+                    )
+                }
+            }
+        }
         viewModelScope.launch {
             raceIdFlow.flatMapLatest { raceId ->
                 if (raceId == null) flowOf(null) else raceRepository.observeRace(raceId).map { it?.mode }
@@ -183,6 +277,7 @@ class CountModeViewModel(
                     bibByBeaconNumber = emptyMap()
                     seenBeaconNumbers = emptySet()
                     statusByBeacon = emptyMap()
+                    peerSeenOriginByBeacon = emptyMap()
                     _uiState.update {
                         it.copy(outstanding = emptyList(), seen = emptyList(), totalIssued = 0, uniqueBeaconsSeen = 0)
                     }
@@ -192,14 +287,16 @@ class CountModeViewModel(
                     progressRepository.observeIssuedBeacons(raceId),
                     countModeRepository.observeCounts(raceId),
                     countModeRepository.observeStatusByBeacon(raceId),
-                ) { issued, rows, status -> Triple(issued, rows, status) }.collect { (issued, rows, status) ->
+                    peerSeenBeaconsFlow(raceId),
+                ) { issued, rows, status, peerSeen ->
                     bibByBeaconNumber = issued.associate { it.beaconNumber!! to it.bibNumber }
                     seenBeaconNumbers = rows.filter { it.action == HistoryAction.COUNT_SEEN }
                         .mapNotNull { parseBeaconCount(it.note) }.toSet()
                     statusByBeacon = status
+                    peerSeenOriginByBeacon = peerSeen
                     _uiState.update { it.copy(totalIssued = issued.size) }
                     recomputeOutstanding()
-                }
+                }.collect { }
             }
         }
     }
@@ -216,10 +313,22 @@ class CountModeViewModel(
         }
     }
 
+    // Same-mode peer-sync feature, Phase 4: a beacon a same-group peer has reported counts as
+    // converged state just as much as this device's own local COUNT_SEEN row does — the entire
+    // point of this feature is that several Count phones share one combined picture of who's
+    // been counted, not each its own separate tally (see the design doc's own framing). Folded
+    // into outstanding/seen/uniqueBeaconsSeen here (display only); peerSeenOriginByBeacon never
+    // feeds commitDetection's own "already seen" gate (handleBeacon/commitDetection are
+    // untouched) — this device still writes its own local COUNT_SEEN row if it also physically
+    // detects a beacon a peer already reported, exactly as before this feature existed. That's a
+    // deliberate choice, not an oversight: a local row is this device's own append-only ledger
+    // entry, independent of whatever any peer has or hasn't reported.
     private fun recomputeOutstanding() {
         val now = System.currentTimeMillis()
+        val peerSeen = peerSeenOriginByBeacon
+        val unionSeen = seenBeaconNumbers + peerSeen.keys
         val outstanding = bibByBeaconNumber.entries
-            .filter { (beaconNumber, _) -> beaconNumber !in seenBeaconNumbers }
+            .filter { (beaconNumber, _) -> beaconNumber !in unionSeen }
             .map { (beaconNumber, bibNumber) ->
                 OutstandingBeaconUi(
                     bibNumber = bibNumber,
@@ -229,13 +338,32 @@ class CountModeViewModel(
                 )
             }
             .sortedBy { it.bibNumber }
-        val seen = seenBeaconNumbers
-            .map { beaconNumber -> SeenBeaconUi(bibByBeaconNumber[beaconNumber], beaconNumber) }
+        val seen = unionSeen
+            .map { beaconNumber ->
+                // A beacon this device has ALSO recorded locally is shown as its own local entry
+                // (originDeviceName null), even if a peer happens to have reported it too — only
+                // a peer-ONLY beacon (no local row at all) is tagged with where it came from.
+                val originDeviceName = if (beaconNumber in seenBeaconNumbers) null else peerSeen[beaconNumber]
+                SeenBeaconUi(bibByBeaconNumber[beaconNumber], beaconNumber, originDeviceName)
+            }
             .sortedBy { it.bibNumber ?: Int.MAX_VALUE }
         _uiState.update {
-            it.copy(outstanding = outstanding, seen = seen, uniqueBeaconsSeen = seenBeaconNumbers.size)
+            it.copy(outstanding = outstanding, seen = seen, uniqueBeaconsSeen = unionSeen.size)
         }
     }
+
+    // This device's own current convergence-group key for HistoryMode.COUNT (see
+    // PeerGroupDetector.ownGroupKey's own doc) scoped to [raceId], re-resolved every time the
+    // race's own label changes — null (same as PeerGroupDetector's own "nothing to converge on
+    // yet" contract) folds straight through to an empty peer map via flatMapLatest below, so
+    // every downstream read stays "local only" exactly as it behaved before this feature existed.
+    private fun peerSeenBeaconsFlow(raceId: Long): Flow<Map<Int, String>> =
+        raceRepository.observeRace(raceId)
+            .map { race -> race?.let { peerGroupDetector.ownGroupKey(it.label, it.location, HistoryMode.COUNT) } }
+            .distinctUntilChanged()
+            .flatMapLatest { groupKey ->
+                if (groupKey == null) flowOf(emptyMap()) else peerSyncRepository.observeLatestOriginByBeacon(groupKey, HistoryMode.COUNT)
+            }
 
     private suspend fun collectAdvertisements() {
         try {
@@ -376,6 +504,12 @@ class CountModeViewModel(
                     container.progressRepository,
                     container.raceRepository,
                     container.settingsRepository,
+                    container.peerGroupDetector,
+                    container.peerSyncRepository,
+                    container.peerSyncEngine,
+                    container.bluetoothStateRepository,
+                    container.locationStateRepository,
+                    container.serverStatusRepository,
                 )
             }
         }

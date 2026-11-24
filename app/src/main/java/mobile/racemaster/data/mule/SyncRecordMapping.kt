@@ -3,6 +3,7 @@ package mobile.racemaster.data.mule
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
+import mobile.racemaster.data.db.entity.PeerSeenRecordEntity
 import mobile.racemaster.util.elapsedSeconds
 
 // See toSyncRecord's own doc for why each of these Time-mode actions sends a null splitTime
@@ -120,7 +121,15 @@ private fun HistoryAction.toServerAction(): String = when (this) {
  * Time split is sent as its own honest "Split" (see [toServerAction]), not disguised as
  * "Finish".
  */
-fun SyncRecord.toHistoryAction(): HistoryAction = when (action) {
+fun SyncRecord.toHistoryAction(): HistoryAction = wireActionToHistoryAction(action)
+
+/** Same inverse mapping as [SyncRecord.toHistoryAction], for a [PeerSeenRecordEntity] row — its
+ *  own `action` column is the identical wire string [mobile.racemaster.data.peersync.PeerSyncRepository.mergeRecords] copied
+ *  straight from the originating [SyncRecord], so this just delegates rather than risking the two
+ *  quietly drifting apart. */
+fun PeerSeenRecordEntity.toHistoryAction(): HistoryAction = wireActionToHistoryAction(action)
+
+private fun wireActionToHistoryAction(action: String): HistoryAction = when (action) {
     "Split" -> HistoryAction.SPLIT
     "Finish" -> HistoryAction.FINISH
     "Start" -> HistoryAction.START

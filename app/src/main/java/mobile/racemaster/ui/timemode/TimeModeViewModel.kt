@@ -8,6 +8,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.BtPollingStatus
+import mobile.racemaster.data.mule.LocationStateRepository
 import mobile.racemaster.data.mule.ServerStatus
 import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.mule.ServerStatusState
@@ -74,6 +75,7 @@ class TimeModeViewModel(
     private val settingsRepository: SettingsRepository,
     private val serverStatusRepository: ServerStatusRepository,
     bluetoothStateRepository: BluetoothStateRepository,
+    locationStateRepository: LocationStateRepository,
     private val beeper: Beeper,
 ) : ViewModel() {
 
@@ -82,7 +84,7 @@ class TimeModeViewModel(
 
     val deviceName: StateFlow<String?> = deviceNameFlow(settingsRepository)
 
-    val btPollingStatus: StateFlow<BtPollingStatus> = btPollingStatusFlow(bluetoothStateRepository)
+    val btPollingStatus: StateFlow<BtPollingStatus> = btPollingStatusFlow(bluetoothStateRepository, locationStateRepository, settingsRepository)
 
     val uiState: StateFlow<TimeModeUiState> = raceIdFlow
         .flatMapLatest { raceId ->
@@ -214,6 +216,7 @@ class TimeModeViewModel(
                     container.settingsRepository,
                     container.serverStatusRepository,
                     container.bluetoothStateRepository,
+                    container.locationStateRepository,
                     Beeper(applicationContext()),
                 )
             }

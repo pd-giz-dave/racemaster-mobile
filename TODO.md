@@ -470,9 +470,47 @@ In outline the 'beacon plan' consists of:
       Relocate goes straight into the keypad, while the race's first-ever Bibs setup still shows
      the manual Start button.
 
+## Ejection bugs/tweaks
+
+- [x] the seen list is too sparse vertically, tighten it up — **done**: the Count Mode list's own
+  `verticalArrangement` dropped from 8dp to 2dp; section headers ("Seen") carry their own
+  explicit top padding instead so sections still read as separated.
+- [x] use the refLineNumber system when ejecting in a similar manner to Undo Last in bibs mode —
+  **done**: `CountModeRepository.recordEject` writes `HistoryAction.COUNT_EJECTED` with
+  `refLineNumber` pointing at the beacon's own `COUNT_SEEN` row, the exact shape
+  `EntryLogModeEngine.undoMostRecent` already uses; `currentSegment`'s own fold now treats
+  `COUNT_EJECTED` as an undo-marker alongside `UNDO`, so the targeted row's whole group drops
+  out of the live counted set automatically (`HistoryFold.foldLatestVisible`), replacing the
+  previous bespoke "latest row by lineNumber" comparison.
+- [x] use a labelled link on the seen list 'Eject' rather than the ^ icon — **done**.
+- [x] selecting eject shows a confusing dialog - i would expect just an eject yes/no confirm —
+  **done**: a plain "Eject beacon NNN? Yes/No", no extra explanatory text.
+- [x] a beacon ejected should appear in the 'to be seen' list with an 'ejected' link — **done**:
+  tapping it calls `CountModeViewModel.unejectBeacon`.
+- [x] an ejected beacon that is visible should be highlighted in the 'to be seen' list — **done**:
+  a separate, purely cosmetic live-presence signal (`lastDetectedAtMillis`, a periodic ticker,
+  nothing to do with detection/counting gating) bolds and colors the row while true.
+- [x] selecting the ejected link should un-eject it so it becomes a normal to-be-seen
+  beacon but should remain tagged as 'was-ejected' until its re-seen — **done**: writes a new
+  `HistoryAction.COUNT_UNEJECTED` status marker (not another refLineNumber/undo row — see its
+  own doc); `CountModeRepository.statusByBeacon` reads each beacon's own most recent
+  SEEN/EJECTED/UNEJECTED row (from an unfolded, current-segment-scoped read —
+  `observeStatusByBeacon`/`currentSegmentRaw` — since the live counted-set fold above
+  deliberately hides the eject/uneject rows themselves) to decide EJECTED vs WAS_EJECTED vs
+  (absent) plain outstanding.
+- [x] the above replaces the cooldown idea, drop it and its constant — **done**: `commitDetection`
+  now just checks the beacon's own status is not EJECTED; `RECOUNT_COOLDOWN_MILLIS`,
+  `PROMPT_SNOOZE_MILLIS`, the recount confirm/deny dialog, and all their supporting state are
+  gone.
+- [x] drop the Eject All link, its redundant now there is a RESET option — **done**.
+
 # ToDo
 
-## Tweaks/Bugs
+## Factor out all the BLe stuff so there is a single source of truth
+
+- [ ] Mule mode uses BLE to transport data when there is no mobile signal
+- [ ] Other modes use BLE to detect nearby peers
+- [ ] Document how all this hangs together so a niaive code reader can work out what is going on
 
 ## Count mode
 
@@ -485,40 +523,7 @@ In outline the 'beacon plan' consists of:
 - [ ] allow for multiple count mode phones at the pen and sync between them, in particular if
       a beacon is ejected it must be flagged as such on all phones counting beacons, do this
       via bluetooth so its instant
-
-## Ejection bugs/tweaks
-
-- [x] the seen list is too sparse vertically, tighten it up — **done**: the Count Mode list's own
-      `verticalArrangement` dropped from 8dp to 2dp; section headers ("Seen") carry their own
-      explicit top padding instead so sections still read as separated.
-- [x] use the refLineNumber system when ejecting in a similar manner to Undo Last in bibs mode —
-      **done**: `CountModeRepository.recordEject` writes `HistoryAction.COUNT_EJECTED` with
-      `refLineNumber` pointing at the beacon's own `COUNT_SEEN` row, the exact shape
-      `EntryLogModeEngine.undoMostRecent` already uses; `currentSegment`'s own fold now treats
-      `COUNT_EJECTED` as an undo-marker alongside `UNDO`, so the targeted row's whole group drops
-      out of the live counted set automatically (`HistoryFold.foldLatestVisible`), replacing the
-      previous bespoke "latest row by lineNumber" comparison.
-- [x] use a labelled link on the seen list 'Eject' rather than the ^ icon — **done**.
-- [x] selecting eject shows a confusing dialog - i would expect just an eject yes/no confirm —
-      **done**: a plain "Eject beacon NNN? Yes/No", no extra explanatory text.
-- [x] a beacon ejected should appear in the 'to be seen' list with an 'ejected' link — **done**:
-      tapping it calls `CountModeViewModel.unejectBeacon`.
-- [x] an ejected beacon that is visible should be highlighted in the 'to be seen' list — **done**:
-      a separate, purely cosmetic live-presence signal (`lastDetectedAtMillis`, a periodic ticker,
-      nothing to do with detection/counting gating) bolds and colors the row while true.
-- [x] selecting the ejected link should un-eject it so it becomes a normal to-be-seen
-      beacon but should remain tagged as 'was-ejected' until its re-seen — **done**: writes a new
-      `HistoryAction.COUNT_UNEJECTED` status marker (not another refLineNumber/undo row — see its
-      own doc); `CountModeRepository.statusByBeacon` reads each beacon's own most recent
-      SEEN/EJECTED/UNEJECTED row (from an unfolded, current-segment-scoped read —
-      `observeStatusByBeacon`/`currentSegmentRaw` — since the live counted-set fold above
-      deliberately hides the eject/uneject rows themselves) to decide EJECTED vs WAS_EJECTED vs
-      (absent) plain outstanding.
-- [x] the above replaces the cooldown idea, drop it and its constant — **done**: `commitDetection`
-      now just checks the beacon's own status is not EJECTED; `RECOUNT_COOLDOWN_MILLIS`,
-      `PROMPT_SNOOZE_MILLIS`, the recount confirm/deny dialog, and all their supporting state are
-      gone.
-- [x] drop the Eject All link, its redundant now there is a RESET option — **done**.
+- [ ] a bib must be ejectable no matter what phone did the initial detection
 
 ## Start line
 
@@ -599,3 +604,31 @@ Modify all modes to relay their physical location, via GPS, back to the server/r
 Modify the racemaster web-app to show mobile locations on a map tagging the location with the
 location code reported by the phone. The best place for the map is another tab on the Mobile
 Files page. Ideally an OS map if available for free, else the best OpenStreetMap variant.
+
+## Beacon options
+
+Buy bare DX-CP27 beacons, plus 25mm wide hook-and-loop velcro cable strap and use a clear 
+heat-shrink tube (30mm flat) over the strap and beacon. Rinse in a bucket of soapy water 
+after use and air dry.
+
+Velcro straps can be bought in 10m rolls by 25mm wide with 50 buckles for ~£14 from Amazon.
+Each beacon would need ~300mm (to allow for folding both ends around the buckle), so ~40p per band.
+
+Heat-shrink clear 30mm tubing can be bought in 5m rolls for ~£9 from Amazon, ~60mm per beacon
+so ~12p per band.
+
+No cost advantage over the 'other' beacons on order (£3.50 each).
+
+## Mule mode tweak
+
+To facilitate phone to browser connection over (dongle provided) WiFi, implement a small server
+on the phone that the web-app can connect to. Do this in preference to a bluetooth connection
+from the browser (as that is not universally available). This is two-way, so the web-app can
+send data to the phone via its server and the other modes in the phone can pick it up from there.
+
+In fact, make this local server always the way other modes send/receive data, and when the phone
+is online it just relays to/from the remote server from/to the local one. The the web-browser
+bluetooth stuff can be dropped.
+
+An auto way to detect the phone when it connects to the dongle Wifi would be nice,
+if not it can show its address and that be entered into the web-app manually.

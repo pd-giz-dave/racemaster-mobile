@@ -9,6 +9,7 @@ import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.NON_ENTRY_ACTIONS
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.BtPollingStatus
+import mobile.racemaster.data.mule.LocationStateRepository
 import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.data.repository.BibsModeRepository
@@ -21,6 +22,7 @@ import mobile.racemaster.data.repository.parseBeaconCount
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
+import mobile.racemaster.ui.locationServicesEnabledFlow
 import mobile.racemaster.util.formatBibsSoFarText
 import mobile.racemaster.util.formatTimeSplitsText
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -56,6 +58,7 @@ class ModePickerViewModel(
     private val settingsRepository: SettingsRepository,
     private val serverStatusRepository: ServerStatusRepository,
     bluetoothStateRepository: BluetoothStateRepository,
+    locationStateRepository: LocationStateRepository,
 ) : ViewModel() {
 
     val hasActiveRace: StateFlow<Boolean> = settingsRepository.activeRaceId
@@ -66,10 +69,14 @@ class ModePickerViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     // Device-wide, not tied to whether a race is selected — same reasoning as TimeModeViewModel's
-    // own identical flow.
+    // own identical flow. settingsRepository.bluetoothOff is this app's own in-app Bluetooth
+    // toggle — see BtPollingStatus.bluetoothOff's own doc for why the picker needs it too, not
+    // just the live mode screens.
     val btPollingStatus: StateFlow<BtPollingStatus> = combine(
         bluetoothStateRepository.advertisingWarning,
         bluetoothStateRepository.lastPolledAtMillis,
+        locationServicesEnabledFlow(locationStateRepository),
+        settingsRepository.bluetoothOff,
         ::BtPollingStatus,
     ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BtPollingStatus())
 
@@ -175,6 +182,7 @@ class ModePickerViewModel(
                     container.settingsRepository,
                     container.serverStatusRepository,
                     container.bluetoothStateRepository,
+                    container.locationStateRepository,
                 )
             }
         }

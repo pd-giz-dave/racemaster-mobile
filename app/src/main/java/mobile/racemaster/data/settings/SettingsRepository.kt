@@ -67,6 +67,7 @@ class SettingsRepository(
         val AUTO_SYNC_STOPPED = booleanPreferencesKey("auto_sync_stopped")
         val BLUETOOTH_OFF = booleanPreferencesKey("bluetooth_off")
         val SERVER_SYNC_OFF = booleanPreferencesKey("server_sync_off")
+        val PEER_SYNC_OFF = booleanPreferencesKey("peer_sync_off")
         val DRAFT_SERVER_URL = stringPreferencesKey("draft_server_url")
         val DRAFT_USERNAME = stringPreferencesKey("draft_username")
         val DRAFT_PASSWORD = stringPreferencesKey("draft_password")
@@ -399,6 +400,21 @@ class SettingsRepository(
         dataStore.edit { prefs -> prefs[Keys.SERVER_SYNC_OFF] = off }
     }
 
+    // Kill switch for the whole fast same-mode peer-sync feature — independent of
+    // bluetoothOff/serverSyncOff above, and of muleSyncEnabled below (this feature runs via its
+    // own mobile.racemaster.data.peersync.PeerSyncEngine, entirely independent of Mule Mode — see
+    // that class's own doc). See PeerSyncEngine.computeOwnContextFlow's own doc for exactly what
+    // this gates: with it on, this device's own convergence group is forced to null, which in one
+    // place cuts off peer discovery, the LOW_LATENCY scan switch and accelerated pull cadence that
+    // follow from a detected peer, and merging a same-group peer's rows into PeerSeenRecordEntity
+    // — ordinary relay-to-server Mule syncing is completely unaffected. Cheap insurance for the
+    // radio-contention tradeoff LOW_LATENCY reintroduces, accepted up front rather than pre-tuned.
+    val peerSyncOff: Flow<Boolean> = dataStore.data.map { prefs -> prefs[Keys.PEER_SYNC_OFF] ?: false }
+
+    suspend fun setPeerSyncOff(off: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.PEER_SYNC_OFF] = off }
+    }
+
     // General "how long is a race worth still chasing" cutoff, shared by every sync path
     // rather than each having its own: bounds MuleRepository.pushToServer's own per-tick
     // reconciliation (see its own doc) to only races Mule has touched within this many days —
@@ -447,10 +463,10 @@ class SettingsRepository(
 
     // Whether BibsModeViewModel.onDigit speaks a bib aloud, digit-by-digit, instead of just
     // beeping, once a 3rd digit commits it (see that function's own doc and BibSpeaker's own
-    // doc for how). Off by default — TODO.md: not practical at a busy/noisy finish line, only
-    // switched on deliberately for a quieter on-course checkpoint where audio confirmation is
-    // actually useful.
-    val speakBibsAloud: Flow<Boolean> = dataStore.data.map { prefs -> prefs[Keys.SPEAK_BIBS_ALOUD] ?: false }
+    // doc for how). On by default, with DEFAULT_BIB_SPEECH_VOICE (FEMALE) below — an operator at
+    // a noisy finish line who finds it impractical (TODO.md's own original concern) can still
+    // switch it off from Setup Options.
+    val speakBibsAloud: Flow<Boolean> = dataStore.data.map { prefs -> prefs[Keys.SPEAK_BIBS_ALOUD] ?: true }
 
     suspend fun setSpeakBibsAloud(enabled: Boolean) {
         dataStore.edit { prefs -> prefs[Keys.SPEAK_BIBS_ALOUD] = enabled }

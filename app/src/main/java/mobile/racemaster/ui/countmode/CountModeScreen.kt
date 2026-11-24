@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.data.repository.CountBeaconStatus
+import mobile.racemaster.ui.components.RaceProgressSummary
 import mobile.racemaster.ui.components.ResetButton
 import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.ui.help.HelpTopics
@@ -80,6 +81,8 @@ fun CountModeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
+    val nearbyPeerNames by viewModel.nearbyPeerNames.collectAsStateWithLifecycle()
+    val btPollingStatus by viewModel.btPollingStatus.collectAsStateWithLifecycle()
     var showStopConfirm by remember { mutableStateOf(false) }
     var pendingEjectBeaconNumber by remember { mutableStateOf<Int?>(null) }
     var pendingUnejectBeaconNumber by remember { mutableStateOf<Int?>(null) }
@@ -155,25 +158,40 @@ fun CountModeScreen(
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxSize(),
-                contentPadding = PaddingValues(16.dp),
+                // Top kept tight (vertical space is scarce — the gap under the top bar's title
+                // should cost as little as possible); sides/bottom keep their original margin.
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 16.dp),
                 // Tight by default (TODO.md: "the seen list is too sparse vertically") — section
                 // headers below add their own extra top padding instead, so the list body itself
                 // stays dense.
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 item {
-                    // Echoed under the title (TODO.md) — same "Device name: ..." convention
-                    // every other mode's own RaceProgressSummary already shows.
-                    deviceName?.takeIf { it.isNotBlank() }?.let {
-                        Text("Device name: $it", style = MaterialTheme.typography.labelMedium)
-                    }
+                    // Same shared feedback block Bibs/Time/Close Mode all use (server status,
+                    // BT/Location status, device name, same-mode nearby peers, race name,
+                    // location, unsynced count) — see RaceProgressSummary's own doc. showNextSplit
+                    // false: Count has no segmented split-counter concept (same reasoning Close
+                    // Mode's own call gives). progressText carries what used to be this item's own
+                    // standalone "N of M yet to be seen" line, so nothing here is shown twice.
+                    RaceProgressSummary(
+                        deviceName = deviceName,
+                        nearbyPeerNames = nearbyPeerNames,
+                        raceLabel = uiState.raceLabel,
+                        raceLocation = uiState.raceLocation,
+                        nextSplitNumber = 0,
+                        showNextSplit = false,
+                        unsyncedCount = uiState.unsyncedCount,
+                        lastSyncedAtMillis = uiState.lastSyncedAtMillis,
+                        serverStatus = uiState.serverStatus,
+                        btPollingStatus = btPollingStatus,
+                        progressText = "${uiState.outstanding.size} of ${uiState.totalIssued} yet to be seen",
+                    )
+                    // Count's own distinctive large running tally — nothing else on this screen
+                    // (or RaceProgressSummary) shows this number, so it stays its own prominent
+                    // line rather than folding into progressText above.
                     Text(
                         "${uiState.uniqueBeaconsSeen} unique beacons seen",
                         style = MaterialTheme.typography.headlineSmall,
-                    )
-                    Text(
-                        "${uiState.outstanding.size} of ${uiState.totalIssued} yet to be seen",
-                        style = MaterialTheme.typography.titleMedium,
                     )
                     HorizontalDivider(modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
                 }
@@ -265,15 +283,22 @@ fun CountModeScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            (seen.bibNumber?.let { "Bib $it" } ?: "Bib ?") + " — beacon %03d".format(seen.beaconNumber),
+                            (seen.bibNumber?.let { "Bib $it" } ?: "Bib ?") + " — beacon %03d".format(seen.beaconNumber) +
+                                (seen.originDeviceName?.let { " (via $it)" } ?: ""),
                             style = MaterialTheme.typography.bodySmall,
                         )
-                        Text(
-                            "Eject",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.clickable(onClick = withClickSound { pendingEjectBeaconNumber = seen.beaconNumber }),
-                        )
+                        // A peer-sourced entry (same-mode peer-sync feature, Phase 4 — see
+                        // SeenBeaconUi's own doc) has no local row of this device's own for
+                        // Eject to target, so the link is withheld entirely rather than offering
+                        // a tap that would just silently no-op.
+                        if (seen.originDeviceName == null) {
+                            Text(
+                                "Eject",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.clickable(onClick = withClickSound { pendingEjectBeaconNumber = seen.beaconNumber }),
+                            )
+                        }
                     }
                 }
             }

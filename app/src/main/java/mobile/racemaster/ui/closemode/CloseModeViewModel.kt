@@ -28,8 +28,14 @@ import mobile.racemaster.data.beacon.BeaconRepository
 import mobile.racemaster.data.beacon.BeaconScanDecoder
 import mobile.racemaster.data.beacon.DxCp27Protocol
 import mobile.racemaster.data.db.entity.HistoryAction
+import mobile.racemaster.data.mule.BluetoothStateRepository
+import mobile.racemaster.data.mule.BtPollingStatus
+import mobile.racemaster.data.mule.LocationStateRepository
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.ProgressRepository
+import mobile.racemaster.data.mule.ServerStatus
+import mobile.racemaster.data.mule.ServerStatusRepository
+import mobile.racemaster.data.mule.ServerStatusState
 import mobile.racemaster.data.repository.CloseModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.parseBeaconClose
@@ -37,6 +43,7 @@ import mobile.racemaster.data.repository.parseBeaconReopened
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
+import mobile.racemaster.ui.btPollingStatusFlow
 import mobile.racemaster.ui.deviceNameFlow
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.milliseconds
@@ -97,6 +104,24 @@ data class CloseModeUiState(
     // mode instead, and Stop must never clear a mode this screen had nothing to do with.
     val raceId: Long? = null,
     val canStopCloseMode: Boolean = false,
+    // Same feedback RaceProgressSummary already shows for Bibs/Time/Count Mode — Close had none
+    // of its own before; see CloseModeScreen's own RaceProgressSummary call.
+    val raceLabel: String = "",
+    val raceLocation: String = "",
+    val unsyncedCount: Int = 0,
+    val lastSyncedAtMillis: Long? = null,
+    val serverStatus: ServerStatusState = ServerStatusState(ServerStatus.UNKNOWN, null),
+)
+
+// See CloseModeViewModel's own race-progress collector — packed into one small holder rather
+// than combine()'s own 6th/7th argument, same reasoning CountModeViewModel's own identical
+// RaceProgressInfo gives.
+private data class RaceProgressInfo(
+    val raceLabel: String = "",
+    val raceLocation: String = "",
+    val unsyncedCount: Int = 0,
+    val lastSyncedAtMillis: Long? = null,
+    val serverStatus: ServerStatusState = ServerStatusState(ServerStatus.UNKNOWN, null),
 )
 
 /** Post-race beacon tidy-up: connect to each beacon handed out, read its battery, power it off,
@@ -123,6 +148,9 @@ class CloseModeViewModel(
     private val progressRepository: ProgressRepository,
     private val raceRepository: RaceRepository,
     private val settingsRepository: SettingsRepository,
+    bluetoothStateRepository: BluetoothStateRepository,
+    locationStateRepository: LocationStateRepository,
+    private val serverStatusRepository: ServerStatusRepository,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(CloseModeUiState())
     val uiState: StateFlow<CloseModeUiState> = _uiState.asStateFlow()
@@ -131,9 +159,14 @@ class CloseModeViewModel(
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     // Echoed under the title (TODO.md) — same "Device name: ..." convention every other mode's
-    // own RaceProgressSummary already shows; Close has no such shared header, so this screen
-    // reads it directly.
+    // own RaceProgressSummary already shows; Close reads it directly the same way Count does
+    // (see CountModeViewModel's own identical field), since this ViewModel otherwise holds its
+    // own state in a single CloseModeUiState rather than RaceProgressSummary's own params.
     val deviceName: StateFlow<String?> = deviceNameFlow(settingsRepository)
+
+    // Same Bluetooth/Location status Bibs/Time/Count Mode already show — see
+    // CountModeViewModel's own identical field.
+    val btPollingStatus: StateFlow<BtPollingStatus> = btPollingStatusFlow(bluetoothStateRepository, locationStateRepository, settingsRepository)
 
     /** Per-beacon running state, keyed by advertiser address — deliberately simpler than
      *  [mobile.racemaster.ui.beaconidentify.IdentifyFobViewModel]'s own enter/exit hysteresis:
@@ -173,6 +206,36 @@ class CloseModeViewModel(
     init {
         viewModelScope.launch { collectAdvertisements() }
         viewModelScope.launch { recomputeLoop() }
+        // Same feedback RaceProgressSummary already derives for Bibs/Time/Count Mode — see
+        // CountModeViewModel's own identical collector for why this is a separate, independent
+        // one rather than folded into recompute()/the combine below.
+        viewModelScope.launch {
+            raceIdFlow.flatMapLatest { raceId ->
+                if (raceId == null) {
+                    flowOf(RaceProgressInfo())
+                } else {
+                    combine(
+                        raceRepository.observeRace(raceId),
+                        closeModeRepository.observeUnsyncedCount(raceId),
+                        combine(closeModeRepository.observeLastSyncedAtMillis(raceId), serverStatusRepository.state) { lastSyncedAtMillis, serverStatus ->
+                            lastSyncedAtMillis to serverStatus
+                        },
+                    ) { race, unsyncedCount, (lastSyncedAtMillis, serverStatus) ->
+                        RaceProgressInfo(race?.label.orEmpty(), race?.location.orEmpty(), unsyncedCount, lastSyncedAtMillis, serverStatus)
+                    }
+                }
+            }.collectLatest { info ->
+                _uiState.update {
+                    it.copy(
+                        raceLabel = info.raceLabel,
+                        raceLocation = info.raceLocation,
+                        unsyncedCount = info.unsyncedCount,
+                        lastSyncedAtMillis = info.lastSyncedAtMillis,
+                        serverStatus = info.serverStatus,
+                    )
+                }
+            }
+        }
         viewModelScope.launch {
             raceIdFlow.flatMapLatest { raceId ->
                 if (raceId == null) flowOf(null) else raceRepository.observeRace(raceId).map { it?.mode }
@@ -413,6 +476,9 @@ class CloseModeViewModel(
                     container.progressRepository,
                     container.raceRepository,
                     container.settingsRepository,
+                    container.bluetoothStateRepository,
+                    container.locationStateRepository,
+                    container.serverStatusRepository,
                 )
             }
         }

@@ -67,8 +67,26 @@ data class ConnectHealth(
  *  present; otherwise [lastPolledAtMillis] is shown plain, same "operator judges staleness by
  *  eye" reasoning as every other "last X" timestamp in this app. Bundled into one class (rather
  *  than each mode's UiState combining the two repository flows itself) so that combining and
- *  the display logic both live in one place. */
-data class BtPollingStatus(val advertisingWarning: String? = null, val lastPolledAtMillis: Long? = null)
+ *  the display logic both live in one place.
+ *
+ *  [locationServicesEnabled] (see [LocationStateRepository.isEnabled]'s own doc) defaults to
+ *  true — an optimistic "assume fine" seed shown only for the instant before the real first
+ *  poll tick lands, rather than flashing a false warning on every screen open.
+ *
+ *  [bluetoothOff] mirrors [mobile.racemaster.data.settings.SettingsRepository.bluetoothOff] —
+ *  this app's own in-app Bluetooth toggle, set from Mule Mode's own Setup Options screen, not
+ *  the OS Bluetooth toggle. Confirmed in the field: a device left in this state shows nothing
+ *  but a plain "Last polled by BT: never" on Count/Bibs/Time/Close mode's own screen —
+ *  indistinguishable from "nobody's nearby yet" — since nothing surfaced this setting outside
+ *  the one screen that can actually flip it. Takes priority over [advertisingWarning] when both
+ *  are set (advertising never even attempts to start while this is on, so any
+ *  [advertisingWarning] showing is stale, from before it was switched on). */
+data class BtPollingStatus(
+    val advertisingWarning: String? = null,
+    val lastPolledAtMillis: Long? = null,
+    val locationServicesEnabled: Boolean = true,
+    val bluetoothOff: Boolean = false,
+)
 
 /** Whether the device's Bluetooth radio is currently on — checked before starting a Kable
  *  scan, since scanning with it off throws (com.juul.kable.UnmetRequirementException)

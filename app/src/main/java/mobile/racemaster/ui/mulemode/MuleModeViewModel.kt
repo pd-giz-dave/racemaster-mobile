@@ -45,6 +45,7 @@ data class MuleModeUiState(
     val autoSyncArmed: Boolean = false,
     val bluetoothOff: Boolean = false,
     val serverSyncOff: Boolean = false,
+    val peerSyncOff: Boolean = false,
     val advertisingWarning: String? = null,
     // Whether this phone is actually the active BT puller right now (see MuleSyncEngine's own
     // doc on the source/sink role split) — SettingsRepository.muleSyncEnabled's live value,
@@ -122,10 +123,10 @@ class MuleModeViewModel(
     // See SettingsRepository.speakBibsAloud's own doc — same direct pass-through pattern as
     // raceStaleAfterDays/pingIntervalSeconds above: a general operator setting unrelated to
     // Mule syncing itself, surfaced on this same Options screen. Unlike those two, this renders
-    // as an immediate-effect toggle (no text field to prefill), so it defaults to false/the real
+    // as an immediate-effect toggle (no text field to prefill), so it defaults to true/the real
     // default rather than null — same reasoning as bluetoothOff/muleSyncEnabled below.
     val speakBibsAloud: StateFlow<Boolean> = settingsRepository.speakBibsAloud
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
 
     fun setSpeakBibsAloud(enabled: Boolean) {
         viewModelScope.launch { settingsRepository.setSpeakBibsAloud(enabled) }
@@ -179,6 +180,7 @@ class MuleModeViewModel(
         muleSyncEngine.lastWebAppPushedAtMillis,
         serverStatusRepository.state,
         muleSyncEngine.connectHealth,
+        muleRepository.peerSyncOff,
     ) { values ->
         val isLoggedIn = values[3] as Boolean
         val autoSyncStopped = values[7] as Boolean
@@ -195,6 +197,7 @@ class MuleModeViewModel(
         val lastWebAppPushedAtMillis = values[19] as Long?
         val serverStatus = values[20] as ServerStatusState
         val connectHealth = values[21] as ConnectHealth
+        val peerSyncOff = values[22] as Boolean
         val directDevices = values[0] as Map<String, DiscoveredDevice>
         val liveDeviceIds = (directDevices.values + relayDevices.values).mapNotNull { it.deviceId }.toSet()
         // Stale rows: a device this phone has resolved before but can't currently see, given
@@ -234,6 +237,7 @@ class MuleModeViewModel(
             autoSyncArmed = isLoggedIn && !autoSyncStopped && !serverSyncOff,
             bluetoothOff = bluetoothOff,
             serverSyncOff = serverSyncOff,
+            peerSyncOff = peerSyncOff,
             advertisingWarning = advertisingWarning,
             muleSyncEnabled = muleSyncEnabled,
             lastPushAttemptAtMillis = lastPushAttemptAtMillis,
@@ -270,6 +274,16 @@ class MuleModeViewModel(
 
     fun turnServerSyncOn() {
         viewModelScope.launch { muleRepository.setServerSyncOff(false) }
+    }
+
+    // See SettingsRepository.peerSyncOff's own doc — the whole fast same-mode peer-sync
+    // feature's kill switch, independent of turnBluetoothOff/turnServerSyncOff above.
+    fun turnPeerSyncOff() {
+        viewModelScope.launch { muleRepository.setPeerSyncOff(true) }
+    }
+
+    fun turnPeerSyncOn() {
+        viewModelScope.launch { muleRepository.setPeerSyncOff(false) }
     }
 
     fun dismissStatusMessage() {

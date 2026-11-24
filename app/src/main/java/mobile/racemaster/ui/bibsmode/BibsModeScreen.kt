@@ -109,6 +109,7 @@ fun BibsModeScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     val btPollingStatus by viewModel.btPollingStatus.collectAsStateWithLifecycle()
+    val nearbyPeerNames by viewModel.nearbyPeerNames.collectAsStateWithLifecycle()
 
     // No external HID trigger here (unlike Time Mode) — entry is now bib-driven/auto-saving
     // rather than a single "log the pending event" action a volume button could stand in for.
@@ -132,6 +133,7 @@ fun BibsModeScreen(
         BibsModeContent(
             uiState = uiState,
             deviceName = deviceName,
+            nearbyPeerNames = nearbyPeerNames,
             btPollingStatus = btPollingStatus,
             onStart = viewModel::startBibsMode,
             onDigit = viewModel::onDigit,
@@ -143,11 +145,14 @@ fun BibsModeScreen(
             onUndo = viewModel::undoLast,
             onEditEntry = onEditEntry,
             onGoToLocation = viewModel::goToLocation,
+            // Top kept tight (vertical space is scarce — the gap between the top bar's title and
+            // this header's first line should cost as little as possible); bottom stays a bit
+            // more generous as the transition into the keypad/button row below.
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
                 .imePadding()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 6.dp),
         )
     }
 }
@@ -156,6 +161,7 @@ fun BibsModeScreen(
 private fun BibsModeContent(
     uiState: BibsModeUiState,
     deviceName: String?,
+    nearbyPeerNames: List<String>,
     btPollingStatus: BtPollingStatus,
     onStart: () -> Unit,
     onDigit: (Int) -> Unit,
@@ -181,7 +187,9 @@ private fun BibsModeContent(
     BoxWithConstraints(modifier = modifier) {
         val minListHeight = 140.dp
         val headerMaxHeight = (maxHeight - minListHeight).coerceAtLeast(0.dp)
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        // Tightened from 4dp (vertical space is scarce) — matches CountModeScreen's own 2dp
+        // list-body convention.
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             var showEventPicker by remember { mutableStateOf(false) }
             val listClickGuard = rememberListClickGuard()
 
@@ -205,10 +213,11 @@ private fun BibsModeContent(
                 // just stays its natural size, so the list gets whatever's left over exactly
                 // as before.
                 modifier = Modifier.heightIn(max = headerMaxHeight).verticalScroll(headerScrollState),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 EntryModeHeaderInfo(
                     deviceName = deviceName,
+                    nearbyPeerNames = nearbyPeerNames,
                     raceLabel = uiState.raceLabel,
                     raceLocation = uiState.raceLocation,
                     nextSplitNumber = uiState.nextSplitNumber,

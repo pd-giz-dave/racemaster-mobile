@@ -142,6 +142,13 @@ class PeripheralSyncService : Service() {
     @Volatile
     private var muleSyncEnabled: Boolean = false
 
+    // Mule Mode peer-sync feature, Phase 3 — mirrors MulePullClient's own scan-mode switch (see
+    // its setLowLatencyScanning doc) on the advertising side: BALANCED by default, switched to
+    // LOW_LATENCY while observeSameGroupPeerNearby below sees a same-group peer nearby. Read
+    // fresh by startAdvertisingAttempt on every (re)start, same as currentMode/muleSyncEnabled.
+    @Volatile
+    private var lowLatencyAdvertising: Boolean = false
+
     @Volatile
     private var servingState = ServingState()
 
@@ -178,6 +185,11 @@ class PeripheralSyncService : Service() {
         val raceId: Long? = null,
         val raceLabel: String = "",
         val lastLineNumber: Long = 0,
+        // Fed into the advertised convergence-group fingerprint (see
+        // MuleGattProfile.AdvertisedIdentity.locationCode's own doc) — never read for anything
+        // else in this class, since every other use of this device's location already goes
+        // through RaceEntity directly.
+        val location: String = "",
     )
 
     // One outbound chunked-notification stream per connected central (keyed by MAC address).
@@ -276,9 +288,14 @@ class PeripheralSyncService : Service() {
         observeSelfTombstones()
         observeRaceStaleAfterDays()
         observeAdvertisingWarning()
+        observeSameGroupPeerNearby()
         startAdvertisingRetryLoop()
         startChunkWatchdogLoop()
         container.muleSyncEngine.start()
+        // Independent sibling of muleSyncEngine, not nested inside it — see PeerSyncEngine's own
+        // doc for why this feature must keep running (and keep working) regardless of whether
+        // Mule Mode's own engine is started, or what its own transport becomes later.
+        container.peerSyncEngine.start()
         container.beaconScanEngine.start()
     }
 
@@ -325,6 +342,28 @@ class PeripheralSyncService : Service() {
                 Log.i(TAG, "Mule sync enabled observed: $enabled (was $muleSyncEnabled)")
                 muleSyncEnabled = enabled
                 scheduleAdvertisedIdentityRefresh()
+            }
+        }
+    }
+
+    // Same-mode peer-sync feature — mirrors observeMuleSyncEnabled's own shape.
+    // PeerSyncEngine.hasSameGroupPeerNearby is that engine's own detection, run entirely
+    // independently of MuleSyncEngine (see PeerSyncEngine's own doc for why) — this service just
+    // collects it to switch its own advertise mode, the same way it drives the GATT-server/
+    // advertiser side of ordinary Mule syncing. Collected rather than read once, since a peer can
+    // come into/go out of group-relevance for the whole duration this long-running service is up,
+    // not just at startup. refreshAdvertisedIdentity's existing stop+restart plumbing (already
+    // needed for lastLineNumber/mode changes) is reused here too, via the same debounced
+    // scheduleAdvertisedIdentityRefresh — a mode flip is just one more reason that payload needs
+    // rebroadcasting, not a separate mechanism.
+    private fun observeSameGroupPeerNearby() {
+        serviceScope.launch {
+            container.peerSyncEngine.hasSameGroupPeerNearby.collect { nearby ->
+                if (nearby != lowLatencyAdvertising) {
+                    Log.i(TAG, "Same-group peer nearby observed: $nearby (was $lowLatencyAdvertising)")
+                    lowLatencyAdvertising = nearby
+                    scheduleAdvertisedIdentityRefresh()
+                }
             }
         }
     }
@@ -495,6 +534,7 @@ class PeripheralSyncService : Service() {
         // onCreate() above, but never itself tied to this service's own lifecycle before; see
         // MuleSyncEngine.stop's own doc for why that let scanning silently outlive this service.
         container.muleSyncEngine.stop()
+        container.peerSyncEngine.stop()
         container.beaconScanEngine.stop()
         serviceJob.cancel()
         super.onDestroy()
@@ -512,6 +552,7 @@ class PeripheralSyncService : Service() {
                                 raceId = raceId,
                                 raceLabel = race?.label.orEmpty(),
                                 lastLineNumber = (race?.nextLineNumber ?: 1) - 1,
+                                location = race?.location.orEmpty(),
                             )
                         }
                     }
@@ -586,7 +627,20 @@ class PeripheralSyncService : Service() {
         val adapter = bluetoothManager.adapter ?: return
         if (!adapter.isEnabled) return
 
-        val server = bluetoothManager.openGattServer(this, gattServerCallback) ?: return
+        // Confirmed in the field (XCover7/witty-warbler): a device whose BLE stack has
+        // exhausted its limited pool of concurrent GATT-server app registrations — a resource
+        // shared across every app/system service using BLE on the phone, not a radio/RF limit —
+        // returns null here forever, silently, every retry tick, with nothing else in this
+        // function ever logging or surfacing it: deviceName/permissions/adapter were all fine,
+        // so this device never advertised and nothing on screen said why. Surfaced the same way
+        // AdvertiseCallback.onStartFailure already is (see advertiseCallback below) so a repeat
+        // of this doesn't go fully invisible again.
+        val server = bluetoothManager.openGattServer(this, gattServerCallback)
+        if (server == null) {
+            Log.w(TAG, "openGattServer() returned null — BLE GATT-server registration slots may be exhausted")
+            container.bluetoothStateRepository.recordAdvertisingFailure()
+            return
+        }
         gattServer = server
 
         val deviceInfoCharacteristic = BluetoothGattCharacteristic(
@@ -680,7 +734,11 @@ class PeripheralSyncService : Service() {
             // busy enough that a low-power chipset has less opportunity to fully sleep through
             // an incoming connection attempt, at the cost of the same advertising-frequency
             // battery tradeoff SCAN_MODE_BALANCED already accepts on the scanning side.
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
+            .setAdvertiseMode(
+                // See lowLatencyAdvertising's own doc — the Mule Mode peer-sync feature's
+                // accelerated advertise path, mirroring MulePullClient's own scan-mode switch.
+                if (lowLatencyAdvertising) AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY else AdvertiseSettings.ADVERTISE_MODE_BALANCED,
+            )
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
             .setConnectable(true)
             .build()
@@ -716,7 +774,10 @@ class PeripheralSyncService : Service() {
             return null
         }
         val name = if (advertisingAttempt == 0) deviceName else ""
-        val payload = MuleGattProfile.encodeAdvertisedIdentity(servingState.lastLineNumber, deviceId, name, currentMode)
+        val payload = MuleGattProfile.encodeAdvertisedIdentity(
+            servingState.lastLineNumber, deviceId, name, currentMode,
+            raceLabel = servingState.raceLabel, location = servingState.location,
+        )
         // Temporary/diagnostic — added while tracking down the web app's mode-filtered picker
         // finding nothing. Hex-dumped so it can be compared byte-for-byte against mule-ble.js's
         // own "expected prefix" log and against chrome://bluetooth-internals' raw advertisement

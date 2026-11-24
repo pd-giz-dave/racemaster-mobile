@@ -19,6 +19,7 @@ import mobile.racemaster.util.formatBibsExpectedText
 @Composable
 fun EntryModeHeaderInfo(
     deviceName: String?,
+    nearbyPeerNames: List<String> = emptyList(),
     raceLabel: String,
     raceLocation: String,
     nextSplitNumber: Int,
@@ -42,6 +43,7 @@ fun EntryModeHeaderInfo(
 ) {
     RaceProgressSummary(
         deviceName = deviceName,
+        nearbyPeerNames = nearbyPeerNames,
         raceLabel = raceLabel,
         raceLocation = raceLocation,
         nextSplitNumber = nextSplitNumber,
