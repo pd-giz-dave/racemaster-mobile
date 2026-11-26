@@ -22,6 +22,9 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertiseSettings
+import android.bluetooth.le.AdvertisingSet
+import android.bluetooth.le.AdvertisingSetCallback
+import android.bluetooth.le.AdvertisingSetParameters
 import android.bluetooth.le.BluetoothLeAdvertiser
 import android.content.Context
 import android.content.Intent
@@ -112,6 +115,33 @@ class PeripheralSyncService : Service() {
     private var gattServer: BluetoothGattServer? = null
     private var advertiser: BluetoothLeAdvertiser? = null
     private var dataCharacteristic: BluetoothGattCharacteristic? = null
+
+    // Non-null only on API 26+ (Build.VERSION_CODES.O), once startAdvertisingSetAttempt's own
+    // start has actually been confirmed via onAdvertisingSetStarted — see that function's own
+    // doc for why this path exists at all: it's what lets doRefreshAdvertisedIdentity update
+    // the broadcast payload in place (AdvertisingSet.setAdvertisingData/setScanResponseData)
+    // instead of a stop+restart that gets issued a brand new random BLE address every time
+    // (TODO.md's own "advert stop+start" entry). Written only from startTxActorLoop's single
+    // consumer or from advertisingSetCallback (the BLE stack's own callback thread) — same
+    // @Volatile cross-thread need as isAdvertising below, which this is read alongside.
+    @Volatile
+    private var advertisingSet: AdvertisingSet? = null
+
+    // Set true the moment advertisingSetCallback ever reports ADVERTISE_FAILED_FEATURE_UNSUPPORTED
+    // — the OS-level AdvertisingSet API existing (Build.VERSION.SDK_INT >= O) doesn't guarantee
+    // the actual BT controller hardware supports it; a chipset that doesn't just fails every
+    // attempt with this status rather than falling back on its own. Once set, startAdvertisingAttempt
+    // permanently prefers the legacy path for the rest of this process's life rather than retrying
+    // a call already known to be doomed on this device.
+    @Volatile
+    private var advertisingSetUnsupported = false
+
+    // Set only for the duration of one startAdvertisingAttempt() call's own start request — see
+    // that function's own doc for why a response is awaited (with a timeout) rather than
+    // trusted to always eventually arrive. Same CompletableDeferred/pendingX pattern as
+    // pendingServiceAdded above, for the same cross-thread (BLE callback thread) reason.
+    @Volatile
+    private var pendingAdvertisingStart: CompletableDeferred<Int>? = null
 
     // Set only for the duration of one startGattServerAndAdvertising() call's own addService()
     // — see that function's own doc for why advertising now waits for this rather than firing
@@ -744,9 +774,28 @@ class PeripheralSyncService : Service() {
         }
     }
 
-    // Android's BluetoothLeAdvertiser has no "update the scan response in place" API — a plain
-    // stop+restart with freshly-built AdvertiseData (which picks up the current
-    // servingState.lastLineNumber) is the only way to change what's being broadcast.
+    // On API 26+ (the advertisingSet path — see startAdvertisingSetAttempt's own doc), this
+    // updates the broadcast payload in place via AdvertisingSet.setAdvertisingData/
+    // setScanResponseData, which does NOT tear down or restart the advertising set — confirmed
+    // against the Android platform docs for that call specifically (unlike stopAdvertising() +
+    // startAdvertising(), which issues a brand new random BLE address immediately rather than
+    // waiting for the normal ~10+ minute privacy rotation, confirmed live via raw Bluetooth
+    // stack logs: "Unregister" followed by "StartAdvertisingSet: create advertising set"
+    // followed by "update random address for advertising set <id>: <new address>", all within a
+    // few ms of each other — see TODO.md's own "advert stop+start" entry). That churn was
+    // harmless for Mule Mode's own relay use case (a short-lived connect, pull, disconnect — it
+    // re-scans fresh every time anyway), but ruinous for PeerSyncEngine, which holds onto a
+    // peer's address across many back-to-back reconnects over a whole counting session: every
+    // refresh invalidated whatever address the peer's own last scan still had, producing a hung
+    // connect() that eventually failed with status=133 — chronic, not occasional, since Count
+    // Mode triggers a refresh on nearly every recorded beacon event.
+    //
+    // API 24/25 devices have no AdvertisingSet API at all, so they fall through to the old
+    // stop+restart below — still subject to the address churn above. The SuppressionChanged/
+    // peer-nearby suppression this actor already applies (see startTxActorLoop's own doc)
+    // stays in place for both paths: harmless extra conservatism on the advertisingSet path,
+    // still the only mitigation available on the legacy one.
+    //
     // advertisingAttempt is deliberately left as-is (not reset to 0) rather than routed through
     // startAdvertising() — this only needs to refresh the payload, not redo the
     // DATA_TOO_LARGE-retry negotiation that already settled on whatever attempt count is
@@ -754,29 +803,17 @@ class PeripheralSyncService : Service() {
     // startAdvertisingRetryLoop already owns getting it started/restarted in that case, on its
     // own cadence. Called only from startTxActorLoop's own single-consumer coroutine — no mutex
     // needed, since nothing else ever touches advertiser/isAdvertising concurrently with this.
-    //
-    // Confirmed live (two real phones, raw Bluetooth stack logs) that this stop+restart gets
-    // issued a brand new random BLE address immediately, not on the normal ~10+ minute privacy
-    // rotation schedule: "Unregister" followed by "StartAdvertisingSet: create advertising set"
-    // followed by "update random address for advertising set <id>: <new address>", all within a
-    // few ms of each other (see TODO.md's own "advert stop+start" entry — avoiding this at the
-    // source, rather than coalescing around it, would need startAdvertisingSet/
-    // AdvertisingSet.setAdvertisingData instead, a bigger, separate change). Harmless for Mule
-    // Mode's own relay use case (a short-lived connect, pull, disconnect — it re-scans fresh
-    // every time anyway), but ruinous for PeerSyncEngine, which holds onto a peer's address
-    // across many back-to-back reconnects over a whole counting session: every refresh
-    // invalidated whatever address the peer's own last scan still had, producing a hung
-    // connect() that eventually fails with status=133 — chronic, not occasional, since Count
-    // Mode triggers a refresh on nearly every recorded beacon event. PeerSyncEngine's own
-    // convergence doesn't read this device's advertised lastLineNumber at all (unlike
-    // MuleSyncEngine's fast path), so there's nothing it loses by this broadcast going stale
-    // while it's active — see startTxActorLoop's own doc for what catches it back up once no
-    // peer is nearby to be disrupted by it.
     @SuppressLint("MissingPermission")
     private suspend fun doRefreshAdvertisedIdentity() {
         if (!isAdvertising) return
-        val advertiserLocal = advertiser ?: return
         if (!hasAdvertisePermission()) return
+        val advertisingSetLocal = advertisingSet
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && advertisingSetLocal != null) {
+            advertisingSetLocal.setAdvertisingData(buildPrimaryAdvertiseData())
+            buildScanResponseData()?.let { advertisingSetLocal.setScanResponseData(it) }
+            return
+        }
+        val advertiserLocal = advertiser ?: return
         advertiserLocal.stopAdvertising(advertiseCallback)
         // stopAdvertising() is fire-and-forget (no "stop confirmed" callback at all, unlike the
         // GATT server's own onServiceAdded this class already awaits elsewhere) — this settle
@@ -918,14 +955,72 @@ class PeripheralSyncService : Service() {
         startAdvertisingAttempt(advertiserLocal)
     }
 
-    // A single startAdvertising() call fails atomically for both packets it's given — so if
-    // the scan-response payload ever pushes the combined advertisement over what this
-    // chipset's controller can accept (ADVERTISE_FAILED_DATA_TOO_LARGE), advertiseCallback
-    // below retries here with a smaller payload rather than this device going dark entirely.
-    // Byte-budget math (see MuleGattProfile.ADVERTISED_NAME_MAX_BYTES) says this should never
-    // legitimately trigger — this is defense-in-depth, not an expected path.
+    // MULE_MODE_MARKER_SERVICE_UUID rides in the primary packet (not the scan response),
+    // alongside SERVICE_UUID — see its own doc for why service-UUID filtering, not
+    // manufacturer data, is what the web app's picker actually relies on now, and why this
+    // fits the legacy 31-byte primary-advertisement budget (SERVICE_UUID alone already costs
+    // 18 of those; a short-form 16-bit UUID costs only 4 more). Shared by both
+    // startLegacyAdvertisingAttempt/startAdvertisingSetAttempt and doRefreshAdvertisedIdentity's
+    // own in-place update, so all three can never drift apart on what's actually broadcast.
+    private fun buildPrimaryAdvertiseData(): AdvertiseData {
+        val advertisedInMule = muleSyncEnabled
+        val builder = AdvertiseData.Builder()
+            .setIncludeDeviceName(false)
+            .addServiceUuid(ParcelUuid(MuleGattProfile.SERVICE_UUID))
+        if (advertisedInMule) {
+            builder.addServiceUuid(ParcelUuid(MuleGattProfile.MULE_MODE_MARKER_SERVICE_UUID))
+        }
+        Log.i(
+            TAG,
+            "Primary advertisement service UUIDs: SERVICE_UUID" +
+                (if (advertisedInMule) " + MULE_MODE_MARKER_SERVICE_UUID" else "") +
+                " (mode=$currentMode, muleSyncEnabled=$muleSyncEnabled)",
+        )
+        return builder.build()
+    }
+
+    // A single startAdvertising()/startAdvertisingSet() call fails atomically for both packets
+    // it's given — so if the scan-response payload ever pushes the combined advertisement over
+    // what this chipset's controller can accept (ADVERTISE_FAILED_DATA_TOO_LARGE), the relevant
+    // callback below retries here with a smaller payload rather than this device going dark
+    // entirely. Byte-budget math (see MuleGattProfile.ADVERTISED_NAME_MAX_BYTES) says this
+    // should never legitimately trigger — this is defense-in-depth, not an expected path.
+    //
+    // TODO.md's own "advertiser liveness" entry: before this, nothing here ever noticed a start
+    // attempt that neither succeeded nor failed — the native BLE stack accepting the call but
+    // never calling back at all leaves isAdvertising stuck stale at whatever it was before,
+    // invisible to handleEnsureUp's own health check (which only acts on gattServer == null or
+    // isAdvertising == false) and to BluetoothStateRepository's "5 consecutive failures ->
+    // restart the phone" warning (which also needs a reported failure to count). Suspected live
+    // on the beacon-tracking field test: one phone's advertiser went fully dark — stopped being
+    // seen by its peer entirely — coincident with a cluster of status=133 connection collisions,
+    // and only recovered after a force-stop + relaunch, never via any self-healing. Wrapping the
+    // actual platform call in a bounded wait on pendingAdvertisingStart (completed by whichever
+    // callback actually fires — see advertiseCallback/advertisingSetCallback below) closes that
+    // gap: a stall now gets treated exactly like a reported failure, which the existing retry
+    // loop and warning threshold both already know what to do with.
     @SuppressLint("MissingPermission")
-    private fun startAdvertisingAttempt(advertiserLocal: BluetoothLeAdvertiser) {
+    private suspend fun startAdvertisingAttempt(advertiserLocal: BluetoothLeAdvertiser) {
+        val started = CompletableDeferred<Int>()
+        pendingAdvertisingStart = started
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !advertisingSetUnsupported) {
+            startAdvertisingSetAttempt(advertiserLocal)
+        } else {
+            startLegacyAdvertisingAttempt(advertiserLocal)
+        }
+        val status = withTimeoutOrNull(ADVERTISING_START_LIVENESS_TIMEOUT) { started.await() }
+        pendingAdvertisingStart = null
+        if (status == null) {
+            Log.w(TAG, "BLE advertising start never confirmed via a callback within $ADVERTISING_START_LIVENESS_TIMEOUT — treating as failed")
+            isAdvertising = false
+            container.bluetoothStateRepository.recordAdvertisingFailure()
+        }
+    }
+
+    // API 24/25 fallback — see startAdvertisingSetAttempt's own doc for the API 26+ path this
+    // yields to on every real device this app currently ships to.
+    @SuppressLint("MissingPermission")
+    private fun startLegacyAdvertisingAttempt(advertiserLocal: BluetoothLeAdvertiser) {
         val settings = AdvertiseSettings.Builder()
             // Was ADVERTISE_MODE_LOW_POWER (the longest possible interval between advertising
             // bursts) — see MulePullClient's own SCAN_MODE_BALANCED doc for why that side was
@@ -949,26 +1044,32 @@ class PeripheralSyncService : Service() {
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
             .setConnectable(true)
             .build()
-        // MULE_MODE_MARKER_SERVICE_UUID rides in the primary packet (not the scan response),
-        // alongside SERVICE_UUID — see its own doc for why service-UUID filtering, not
-        // manufacturer data, is what the web app's picker actually relies on now, and why this
-        // fits the legacy 31-byte primary-advertisement budget (SERVICE_UUID alone already costs
-        // 18 of those; a short-form 16-bit UUID costs only 4 more).
-        val advertisedInMule = muleSyncEnabled
-        val dataBuilder = AdvertiseData.Builder()
-            .setIncludeDeviceName(false)
-            .addServiceUuid(ParcelUuid(MuleGattProfile.SERVICE_UUID))
-        if (advertisedInMule) {
-            dataBuilder.addServiceUuid(ParcelUuid(MuleGattProfile.MULE_MODE_MARKER_SERVICE_UUID))
-        }
-        val data = dataBuilder.build()
-        Log.i(
-            TAG,
-            "Primary advertisement service UUIDs: SERVICE_UUID" +
-                (if (advertisedInMule) " + MULE_MODE_MARKER_SERVICE_UUID" else "") +
-                " (mode=$currentMode, muleSyncEnabled=$muleSyncEnabled)",
+        advertiserLocal.startAdvertising(settings, buildPrimaryAdvertiseData(), buildScanResponseData(), advertiseCallback)
+    }
+
+    // API 26+ (Build.VERSION_CODES.O) — the path every real device this app currently ships to
+    // actually takes. legacyMode(true) keeps the over-the-air format byte-for-byte equivalent to
+    // startLegacyAdvertisingAttempt above (the same legacy ADV_IND PDU: connectable + scannable,
+    // a 31-byte primary packet plus a 31-byte scan response), so every existing scanner (this
+    // app's own MulePullClient, the web app's Web Bluetooth picker) sees no difference in what's
+    // broadcast. The only thing this path changes is *how* a payload refresh happens: once
+    // onAdvertisingSetStarted below hands back a live AdvertisingSet, doRefreshAdvertisedIdentity
+    // can update its data in place instead of a stop+restart — seeing that function's own doc for
+    // why that in-place update is the entire point (no address rotation).
+    @SuppressLint("MissingPermission")
+    private fun startAdvertisingSetAttempt(advertiserLocal: BluetoothLeAdvertiser) {
+        val parameters = AdvertisingSetParameters.Builder()
+            .setLegacyMode(true)
+            .setConnectable(true)
+            .setScannable(true)
+            .setInterval(
+                if (lowLatencyAdvertising) AdvertisingSetParameters.INTERVAL_LOW else AdvertisingSetParameters.INTERVAL_MEDIUM,
+            )
+            .setTxPowerLevel(AdvertisingSetParameters.TX_POWER_MEDIUM)
+            .build()
+        advertiserLocal.startAdvertisingSet(
+            parameters, buildPrimaryAdvertiseData(), buildScanResponseData(), null, null, advertisingSetCallback,
         )
-        advertiserLocal.startAdvertising(settings, data, buildScanResponseData(), advertiseCallback)
     }
 
     // attempt 0: name + lastLineNumber. attempt 1 (only reached after a DATA_TOO_LARGE retry):
@@ -1009,8 +1110,16 @@ class PeripheralSyncService : Service() {
         startAdvertising(adapter)
     }
 
+    // API 24/25 fallback callback — see startLegacyAdvertisingAttempt's own doc. On a real
+    // device (API 26+) advertisingSetCallback below is what actually fires.
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
+            // AdvertiseCallback itself has no ADVERTISE_SUCCESS constant (success is signaled
+            // by this separate no-arg callback, not a status code) — ADVERTISE_SUCCESS_STATUS
+            // is just a locally-named "any non-null status completes the wait" sentinel for
+            // pendingAdvertisingStart; startAdvertisingAttempt only ever checks this for null
+            // (a timeout), never compares it against a real status value.
+            pendingAdvertisingStart?.complete(ADVERTISE_SUCCESS_STATUS)
             isAdvertising = true
             Log.i(TAG, "Advertising started successfully (attempt $advertisingAttempt, mode=$currentMode)")
             container.bluetoothStateRepository.recordAdvertisingSuccess()
@@ -1022,6 +1131,7 @@ class PeripheralSyncService : Service() {
             // itself, so this retry is also serialized through startTxActorLoop's single
             // consumer like every other touch of the advertiser, instead of being the one
             // remaining call site that could still race it.
+            pendingAdvertisingStart?.complete(errorCode)
             if (errorCode == ADVERTISE_FAILED_DATA_TOO_LARGE && advertisingAttempt < MAX_SCAN_RESPONSE_ATTEMPTS) {
                 txChannel.trySend(TxCommand.DataTooLargeRetry)
                 return
@@ -1032,12 +1142,52 @@ class PeripheralSyncService : Service() {
         }
     }
 
+    // API 26+ companion to advertiseCallback above — see startAdvertisingSetAttempt's own doc
+    // for why this path exists at all. The status codes AdvertisingSetCallback declares
+    // (ADVERTISE_SUCCESS, ADVERTISE_FAILED_DATA_TOO_LARGE, ...) are the same ints
+    // AdvertiseCallback uses for the same outcomes — both just surface the identical underlying
+    // HCI result through two different callback shapes, depending on which of
+    // startAdvertising/startAdvertisingSet was used to start it.
+    private val advertisingSetCallback = object : AdvertisingSetCallback() {
+        override fun onAdvertisingSetStarted(advertisingSetStarted: AdvertisingSet?, txPower: Int, status: Int) {
+            pendingAdvertisingStart?.complete(status)
+            if (status == ADVERTISE_SUCCESS) {
+                advertisingSet = advertisingSetStarted
+                isAdvertising = true
+                Log.i(TAG, "Advertising set started successfully (attempt $advertisingAttempt, mode=$currentMode)")
+                container.bluetoothStateRepository.recordAdvertisingSuccess()
+                return
+            }
+            advertisingSet = null
+            if (status == ADVERTISE_FAILED_DATA_TOO_LARGE && advertisingAttempt < MAX_SCAN_RESPONSE_ATTEMPTS) {
+                txChannel.trySend(TxCommand.DataTooLargeRetry)
+                return
+            }
+            if (status == ADVERTISE_FAILED_FEATURE_UNSUPPORTED) {
+                Log.w(TAG, "This device's BLE controller doesn't actually support advertising sets — falling back to legacy advertising from now on")
+                advertisingSetUnsupported = true
+            }
+            isAdvertising = false
+            Log.w(TAG, "BLE advertising set failed to start: $status")
+            container.bluetoothStateRepository.recordAdvertisingFailure()
+        }
+
+        override fun onAdvertisingSetStopped(advertisingSetStopped: AdvertisingSet?) {
+            advertisingSet = null
+        }
+    }
+
     @SuppressLint("MissingPermission")
     private fun stopAdvertisingIfPossible() {
         if (hasAdvertisePermission()) {
-            advertiser?.stopAdvertising(advertiseCallback)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && advertisingSet != null) {
+                advertiser?.stopAdvertisingSet(advertisingSetCallback)
+            } else {
+                advertiser?.stopAdvertising(advertiseCallback)
+            }
         }
         isAdvertising = false
+        advertisingSet = null
         // A deliberate stop (radio disabled, operator turned Bluetooth off in-app) is not the
         // wedged-firmware failure this warning exists for — clear it so the UI doesn't keep
         // telling the operator to restart the phone while this device isn't even trying to
@@ -1837,6 +1987,17 @@ class PeripheralSyncService : Service() {
         // lastLineNumber-driven refresh, unlike the much rarer GATT-server-registration case
         // SERVICE_ADD_TIMEOUT above exists for.
         private val ADVERTISING_RESTART_SETTLE_DELAY = 300.milliseconds
+
+        // See advertiseCallback.onStartSuccess's own doc — AdvertiseCallback has no status-code
+        // concept of success at all, unlike AdvertisingSetCallback's own ADVERTISE_SUCCESS.
+        private const val ADVERTISE_SUCCESS_STATUS = 0
+
+        // See startAdvertisingAttempt's own doc — how long a start attempt waits for either
+        // callback (onStartSuccess/onStartFailure, or onAdvertisingSetStarted) before treating
+        // the silence itself as a failure. Generous relative to how quickly these normally fire
+        // (near-instant in practice, same as SERVICE_ADD_TIMEOUT's own reasoning) — this only
+        // ever costs real time on the rare device/moment where neither callback ever arrives.
+        private val ADVERTISING_START_LIVENESS_TIMEOUT = 5_000.milliseconds
 
         // See AdvertisingRefreshCoalescer's own doc for what this actually controls now — the
         // coalescing window a burst of TxCommand.IdentityChanged signals collapses into one
