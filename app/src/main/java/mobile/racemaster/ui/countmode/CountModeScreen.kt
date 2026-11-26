@@ -26,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -37,6 +38,7 @@ import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.ui.theme.SyncedGreen
 import mobile.racemaster.ui.theme.UnsyncedRed
+import mobile.racemaster.util.formatTimeOfDay
 import mobile.racemaster.util.withClickSound
 
 /** Pre-start headcount — see [CountModeViewModel]'s own doc. One running count, a list of
@@ -86,6 +88,11 @@ fun CountModeScreen(
     var showStopConfirm by remember { mutableStateOf(false) }
     var pendingEjectBeaconNumber by remember { mutableStateOf<Int?>(null) }
     var pendingUnejectBeaconNumber by remember { mutableStateOf<Int?>(null) }
+    // TODO.md "need to be able to see the peer lines pulled from nearby devices in the history
+    // (as a diagnostic aid)" — collapsed by default (this is a diagnostic, not something an
+    // operator needs open during ordinary counting).
+    var showPeerActivity by remember { mutableStateOf(false) }
+    val locale = LocalConfiguration.current.locales[0]
 
     if (showStopConfirm) {
         AlertDialog(
@@ -297,6 +304,38 @@ fun CountModeScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.clickable(onClick = withClickSound { pendingEjectBeaconNumber = seen.beaconNumber }),
+                            )
+                        }
+                    }
+                }
+                // TODO.md "need to be able to see the peer lines pulled from nearby devices in
+                // the history (as a diagnostic aid)" — the raw feed behind statusByBeacon/
+                // peerSeenOriginByBeacon above, shown here unfiltered/unfolded so an operator or
+                // developer can confirm peer-sync is actually landing anything at all, without
+                // needing an adb/sqlite pull.
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp).clickable(onClick = withClickSound { showPeerActivity = !showPeerActivity }),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Peer activity (diagnostic) — ${uiState.peerActivity.size}", style = MaterialTheme.typography.titleMedium)
+                        Text(if (showPeerActivity) "hide" else "show", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(top = 4.dp))
+                }
+                if (showPeerActivity) {
+                    if (uiState.peerActivity.isEmpty()) {
+                        item {
+                            Text("None yet.", style = MaterialTheme.typography.bodySmall)
+                        }
+                    } else {
+                        items(uiState.peerActivity, key = { "${it.originDeviceName}:${it.timestampMillis}:${it.actionLabel}" }) { line ->
+                            Text(
+                                formatTimeOfDay(line.timestampMillis, locale) + " " + line.originDeviceName + " — " + line.actionLabel +
+                                    (line.beaconNumber?.let { " beacon %03d".format(it) } ?: "") +
+                                    (line.bibNumber?.let { " bib $it" } ?: ""),
+                                style = MaterialTheme.typography.bodySmall,
                             )
                         }
                     }

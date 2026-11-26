@@ -165,6 +165,18 @@ internal fun ConnectivityStatusText(uiState: MuleModeUiState) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
+        } else if (!uiState.radioEnabled) {
+            // Distinct from the bluetoothOff branch above: that's this app's own in-app kill
+            // switch (SettingsRepository.bluetoothOff), deliberately engaged — the fix is this
+            // screen's own Bluetooth toggle. This is the OS radio itself being off (confirmed in
+            // the field on a fresh phone whose Bluetooth was simply never turned on) — the fix is
+            // the system Bluetooth switch, not anything in this app, so the wording must not
+            // point the operator at the wrong control.
+            Text(
+                "Bluetooth: OFF — turn on Bluetooth in system settings to be visible to nearby devices",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
         } else {
             // "Pulling" is only ever true for the active BT puller (see MuleSyncEngine's own
             // doc on the source/sink role split) — a Time/Bibs/CP phone only advertises and

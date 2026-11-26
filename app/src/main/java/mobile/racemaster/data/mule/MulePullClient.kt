@@ -11,6 +11,7 @@ import com.juul.kable.State
 import com.juul.kable.WriteType
 import com.juul.kable.characteristicOf
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -27,11 +28,14 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.SerializationException
@@ -161,6 +165,7 @@ class MulePullClient {
     // was exhausted.
     private suspend fun evictAfterFailedConnect(advertisement: Advertisement, peripheral: Peripheral) {
         peripherals.remove(advertisement.identifier)
+        if (heldConnection?.address == advertisement.identifier) heldConnection = null
         // NonCancellable — see endConnection's own doc below for why a bare suspend disconnect()
         // call here can't be trusted to actually run when the coroutine calling this is itself
         // already being cancelled (e.g. connect() failed *because* an ambient timeout cancelled
@@ -183,43 +188,87 @@ class MulePullClient {
     // attempt against that address until the whole app restarts, since peripheralFor() keeps
     // reusing the same (now-permanently-broken) instance forever otherwise.
     //
-    // [succeeded] distinguishes a clean return (only disconnect — the common case, no reason to
-    // discard a perfectly good cached instance) from any other exit, including cancellation
-    // (evict, exactly like evictAfterFailedConnect). The disconnect call itself always runs
-    // inside NonCancellable regardless of which branch: a coroutine already in the process of
-    // being cancelled skips any further *unprotected* suspension point immediately rather than
-    // actually running it, so a bare `peripheral.disconnect()` inside a `finally` block reached
-    // via cancellation could silently no-op — never actually telling Kable/the OS to tear down
-    // the link — unless explicitly shielded from that. Evicting our own cache entry still helps
-    // even then (the next attempt gets a genuinely fresh Peripheral instead of reusing whatever
-    // Kable now considers this one to be), but a real disconnect attempt is strictly better when
-    // it can actually happen.
+    // [succeeded] distinguishes a clean return (hand the connection off to heldConnection for a
+    // possible next caller to reuse — the common case, no reason to tear down a perfectly good
+    // live link) from any other exit, including cancellation (disconnect and evict, exactly like
+    // evictAfterFailedConnect). The disconnect call itself always runs inside NonCancellable
+    // regardless of which branch: a coroutine already in the process of being cancelled skips any
+    // further *unprotected* suspension point immediately rather than actually running it, so a
+    // bare `peripheral.disconnect()` inside a `finally` block reached via cancellation could
+    // silently no-op — never actually telling Kable/the OS to tear down the link — unless
+    // explicitly shielded from that. Evicting our own cache entry still helps even then (the next
+    // attempt gets a genuinely fresh Peripheral instead of reusing whatever Kable now considers
+    // this one to be), but a real disconnect attempt is strictly better when it can actually
+    // happen.
     private suspend fun endConnection(advertisement: Advertisement, peripheral: Peripheral, succeeded: Boolean) {
-        if (!succeeded) peripherals.remove(advertisement.identifier)
+        if (succeeded) {
+            heldConnection = HeldConnection(advertisement.identifier, peripheral)
+            return
+        }
+        peripherals.remove(advertisement.identifier)
+        if (heldConnection?.address == advertisement.identifier) heldConnection = null
         withContext(NonCancellable) { runCatching { peripheral.disconnect() } }
     }
+
+    // The one BLE central connection this client currently holds open and idle, if any — left
+    // connected by endConnection above instead of being torn down at the end of every single
+    // call, and only ever disconnected by connectOrEvict below when a *different* address
+    // actually needs the one slot sharedConnectSemaphore allows (MAX_CONCURRENT_CENTRAL_CONNECTS
+    // = 1, so there is never more than one of these to track). Replaces an earlier, narrower fix
+    // (a fixed settle delay before any reconnect to the same address) for the same field-observed
+    // problem: readDeviceInfo disconnecting from a peer and a second, independent call (e.g. a
+    // peer-sync pull) reconnecting to that SAME peer 40ms later connected and discovered services
+    // fine, then got torn down locally (status=22) about 1.6s after the link settled — the OS's
+    // own BT stack hadn't finished releasing the prior connection's resources before accepting
+    // the new one. Not reconnecting at all removes that failure at its source instead of just
+    // surviving it with a delay, and as a side effect skips the ~4 second connect/discover/MTU-
+    // negotiate round trip entirely for the very common case of two back-to-back calls (a
+    // readDeviceInfo immediately followed by a pull) against the same peer. mutexFor's own
+    // per-address Mutex already prevented two connects to the same address running
+    // *concurrently*; this is what now also prevents one needlessly following the other with no
+    // gap at all. Guarded only by sharedConnectSemaphore's own single permit (every reader/writer
+    // of this field — here and in connectOrEvict/evictAfterFailedConnect — runs inside a
+    // withPermit block), not a separate lock: with exactly one permit, only one of those call
+    // sites is ever actually running at a time, so no additional synchronization is needed.
+    private data class HeldConnection(val address: String, val peripheral: Peripheral)
+    private var heldConnection: HeldConnection? = null
 
     // Shared by readDeviceInfo/pull()/pullRelayManifest() — their identical
     // "withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }" plus the evictAfterFailedConnect
     // call above on any failure.
     //
-    // Proactively checks peripheral.state before ever calling connect() — a cached Peripheral
-    // reused across calls (see peripheralFor's own doc) should always already be Disconnected
-    // here: either this is its first-ever use, or the previous call's own
-    // try/finally { peripheral.disconnect() } (on success) or evictAfterFailedConnect above (on
-    // failure) already returned it there. Kable's own connect() has no independent "are you
-    // actually free right now" guard of its own — see evictAfterFailedConnect's own doc for what
-    // happens when a connect attempt is abandoned (by our own CONNECT_TIMEOUT) without first
-    // telling Kable to stop it: the underlying attempt keeps running orphaned in Kable's own
-    // Peripheral-scoped coroutine (entirely independent of whatever coroutine is awaiting
-    // connect()), so a later blind connect() call on the same instance doesn't fail outright,
-    // it just piles a fresh attempt on top of one Kable still believes is in flight. Finding
-    // anything other than Disconnected here means some earlier call path didn't clean up after
-    // itself as expected — logged so that's visible — and is treated the same way
-    // evictAfterFailedConnect already does: disconnect (cancels and joins whatever's still
-    // running) before ever attempting a fresh connect, rather than trusting every call site
-    // upstream got its own cleanup right.
+    // Checks heldConnection first: if it's already this exact address and still genuinely
+    // Connected, reuses it as-is — no connect()/discovery/MTU-negotiation at all, see
+    // heldConnection's own doc for why. Otherwise, any *different* held connection is released
+    // first (it's occupying the one slot this address now needs), then proceeds to a fresh
+    // connect — checking peripheral.state proactively first: a cached Peripheral reused across
+    // calls (see peripheralFor's own doc) should always already be Disconnected here once it
+    // isn't the held one, either because this is its first-ever use or because an earlier call's
+    // own endConnection (on failure) or this same eviction step already returned it there. Kable's
+    // own connect() has no independent "are you actually free right now" guard of its own — see
+    // evictAfterFailedConnect's own doc for what happens when a connect attempt is abandoned (by
+    // our own CONNECT_TIMEOUT) without first telling Kable to stop it: the underlying attempt
+    // keeps running orphaned in Kable's own Peripheral-scoped coroutine (entirely independent of
+    // whatever coroutine is awaiting connect()), so a later blind connect() call on the same
+    // instance doesn't fail outright, it just piles a fresh attempt on top of one Kable still
+    // believes is in flight. Finding anything other than Disconnected here means some earlier
+    // call path didn't clean up after itself as expected — logged so that's visible — and is
+    // treated the same way evictAfterFailedConnect already does: disconnect (cancels and joins
+    // whatever's still running) before ever attempting a fresh connect, rather than trusting
+    // every call site upstream got its own cleanup right.
     private suspend fun connectOrEvict(advertisement: Advertisement, peripheral: Peripheral) {
+        val held = heldConnection
+        if (held != null && held.address == advertisement.identifier && peripheral.state.value is State.Connected) {
+            // peripheralFor's own cache guarantees peripheral === held.peripheral whenever the
+            // addresses match (same key, same cached instance) — referencing peripheral directly
+            // here rather than held.peripheral is just using the one already in scope.
+            heldConnection = null
+            return
+        }
+        if (held != null) {
+            heldConnection = null
+            withContext(NonCancellable) { runCatching { held.peripheral.disconnect() } }
+        }
         val stateBeforeConnect = peripheral.state.value
         if (stateBeforeConnect !is State.Disconnected) {
             Log.w(TAG, "peripheral not Disconnected before connect (was $stateBeforeConnect) — disconnecting first: address=${advertisement.identifier}")
@@ -243,8 +292,9 @@ class MulePullClient {
         // an already-settled connection failing) — this settles the link once, right after
         // connect; that one settles between two later operations on the same, already-settled
         // link. Both are kept since neither one's own theory has been ruled out, and there's no
-        // evidence either is harmful on its own (unlike the reconnect-cooldown experiment tried
-        // and reverted alongside this — see INTER_OPERATION_SETTLE_DELAY's own doc).
+        // evidence either is harmful on its own. Only reached on a fresh connect — reusing
+        // heldConnection above skips straight past this, since that link is already settled from
+        // whichever earlier call originally connected it.
         delay(CONNECT_SETTLE_DELAY)
     }
 
@@ -269,6 +319,22 @@ class MulePullClient {
     private fun mutexFor(advertisement: Advertisement): Mutex =
         peripheralMutexes.getOrPut(advertisement.identifier) { Mutex() }
 
+    // Caps concurrent BLE central GATT connects app-wide. Every central-role caller
+    // (MuleSyncEngine's own relay pulls, PeerSyncEngine's same-group peer pulls, and this
+    // file's own deliverTargetedProgress) already routes through this one shared object, so
+    // this single semaphore — acquired by readDeviceInfo/pull/pullRelayManifest/
+    // deliverTargetedProgress themselves, below — replaces what used to be two separate,
+    // uncoordinated Semaphore(1) instances, one owned by MuleSyncEngine and one by
+    // PeerSyncEngine. Those bounded only their own engine's connects, not the combined total
+    // sharing one physical radio with PeripheralSyncService's own GATT server/advertiser — up
+    // to two concurrent central connects (to two different peers) could run at once on top of
+    // whatever the peripheral side was doing simultaneously. Putting the bound here, inside
+    // the shared primitive, also means a future caller can't forget to wrap its own connect in
+    // it the way MuleSyncEngine's old deliverTargetedProgressIfPending call used to (it sat
+    // outside that engine's own withPermit block entirely — a real, previously-unbounded
+    // connect, closed here for free since every caller goes through these same functions).
+    private val sharedConnectSemaphore = Semaphore(MAX_CONCURRENT_CENTRAL_CONNECTS)
+
     // Temporary/diagnostic — added while chasing a peer that never resolves out of
     // "Discovering…" (or never appears at all) despite both ends' own advertising/scanning
     // otherwise looking healthy. Logs every distinct BLE address seen at all (once each, not
@@ -290,7 +356,31 @@ class MulePullClient {
     // scan torn down whenever nothing downstream is collecting, same lifecycle scanner.advertisements
     // itself would have had with a single direct collector; replay=0 means a brand-new collector
     // only ever sees adverts from the moment it starts collecting, not ones from before.
-    private val scanScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Confirmed in the field as a real, app-crashing gap: Kable's own advertisements flow throws
+    // UnmetRequirementException if the OS Bluetooth radio is off — not only on first subscription
+    // (a fresh phone whose Bluetooth was never turned on), but also mid-stream, the moment the
+    // radio goes off while this flow is already collecting — and that throw happens inside
+    // shareIn's own upstream collector, which runs in *this* scope, not in whichever downstream
+    // caller's scope/try-catch subscribed to sharedAdvertisements.
+    //
+    // retryWhen below is what actually recovers from this now — confirmed in the field as the
+    // missing piece: every current caller (MuleSyncEngine/PeerSyncEngine/BeaconScanEngine) checks
+    // BluetoothStateRepository.isEnabled() before ever subscribing, which prevents the *initial*
+    // crash, but does nothing for the OS radio going off mid-scan, after those checks already
+    // passed. Without retryWhen, that throw completes shareIn's upstream collecting coroutine
+    // *permanently* — shareIn only relaunches it on a genuine 0-to-1 subscriber transition, which
+    // never happens again for these process-lifetime engines (their own `if already active,
+    // return` guards see their `.collect{}` call as still "running" forever, since a SharedFlow
+    // whose only writer died doesn't complete or throw downstream, it just stops emitting,
+    // silently, for good). The result isn't a crash — it's worse: every nearby beacon and peer
+    // silently stops being seen, with nothing on screen to suggest why, until the app is
+    // force-stopped and reopened. retryWhen keeps the upstream itself alive indefinitely instead,
+    // so turning Bluetooth back on recovers scanning for every subscriber automatically, with no
+    // engine-side change needed.
+    private val scanExceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        Log.e(TAG, "Uncaught exception in shared BLE scan — swallowed to avoid crashing the app", throwable)
+    }
+    private val scanScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + scanExceptionHandler)
 
     private val sharedAdvertisements: SharedFlow<Advertisement> = desiredLowLatencyScanning
         .flatMapLatest { lowLatency -> (if (lowLatency) lowLatencyScanner else balancedScanner).advertisements }
@@ -303,6 +393,12 @@ class MulePullClient {
                         "hasServiceUuid=${MuleGattProfile.SERVICE_UUID.toKotlinUuid() in advertisement.uuids}",
                 )
             }
+        }
+        .retryWhen { cause, _ ->
+            if (cause is CancellationException) throw cause
+            Log.w(TAG, "shared BLE scan failed — retrying", cause)
+            delay(SCAN_RETRY_DELAY)
+            true
         }
         .shareIn(scanScope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 2_000L), replay = 0)
 
@@ -398,7 +494,7 @@ class MulePullClient {
         require(sinkConfirmedOrigins.isEmpty() || pullerDeviceId != null) {
             "pullerDeviceId is required when sinkConfirmedOrigins is non-empty"
         }
-        return mutexFor(advertisement).withLock {
+        return sharedConnectSemaphore.withPermit { mutexFor(advertisement).withLock {
             var lastError: Throwable? = null
             for (attempt in 1..READ_DEVICE_INFO_ATTEMPTS) {
                 try {
@@ -417,7 +513,7 @@ class MulePullClient {
                 }
             }
             throw lastError!!
-        }
+        } }
     }
 
     /** Phase 3's standalone targeted-relay delivery: connects, writes [payload] to the peer's
@@ -433,7 +529,7 @@ class MulePullClient {
      *  which is best-effort/swallowed inline) — the caller (MuleSyncEngine) is what decides
      *  whether a failed handoff is fatal to anything, via its own runCatching. */
     suspend fun deliverTargetedProgress(advertisement: Advertisement, payload: ProgressPayload) {
-        mutexFor(advertisement).withLock {
+        sharedConnectSemaphore.withPermit { mutexFor(advertisement).withLock {
             val peripheral = peripheralFor(advertisement)
             connectOrEvict(advertisement, peripheral)
             var succeeded = false
@@ -443,7 +539,7 @@ class MulePullClient {
             } finally {
                 endConnection(advertisement, peripheral, succeeded)
             }
-        }
+        } }
     }
 
     private suspend fun readDeviceInfoOnce(
@@ -670,9 +766,15 @@ class MulePullClient {
         originDeviceId: String? = null,
         originRaceLabel: String? = null,
         sinkConfirmedOrigins: List<AckedOrigin> = emptyList(),
+        // Caps this one request's own response — see PullRequest.maxRecords's own doc. Null (the
+        // default) is every existing caller's own unbounded behavior, unchanged.
+        maxRecords: Int? = null,
+        // See PullRequest.countStatusOnly's own doc. False (the default) is every existing
+        // caller's own behavior, unchanged — only PeerSyncEngine's Count Mode pull sets this.
+        countStatusOnly: Boolean = false,
         onReceived: suspend (List<SyncRecord>) -> Unit,
         onConfirmationsRelayed: suspend (List<AckedOrigin>) -> Unit = {},
-    ): Unit = mutexFor(advertisement).withLock {
+    ): Unit = sharedConnectSemaphore.withPermit { mutexFor(advertisement).withLock {
         coroutineScope {
             val peripheral = peripheralFor(advertisement)
             // Same reasoning as readDeviceInfo's own CONNECT_TIMEOUT — bounds just the connect
@@ -690,8 +792,10 @@ class MulePullClient {
                 val serviceUuid = MuleGattProfile.SERVICE_UUID.toKotlinUuid()
                 val ackCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.ACK_CHARACTERISTIC_UUID.toKotlinUuid())
 
-                val requestKey = computeRequestKey(pullerDeviceId, originDeviceId, originRaceLabel, sinceLineNumber)
-                val pullRequest = json.encodeToString(PullRequest(sinceLineNumber, originDeviceId, originRaceLabel, requestKey = requestKey))
+                val requestKey = computeRequestKey(pullerDeviceId, originDeviceId, originRaceLabel, sinceLineNumber, maxRecords, countStatusOnly)
+                val pullRequest = json.encodeToString(
+                    PullRequest(sinceLineNumber, originDeviceId, originRaceLabel, requestKey = requestKey, maxRecords = maxRecords, countStatusOnly = countStatusOnly),
+                )
                 val payload = collectChunkedResponse(peripheral, pullRequest)
                 val records = if (payload.isBlank()) emptyList() else json.decodeFromString<List<SyncRecord>>(payload)
 
@@ -743,7 +847,7 @@ class MulePullClient {
                 endConnection(advertisement, peripheral, succeeded)
             }
         }
-    }
+    } }
 
     /** Fetches a peripheral's own current relay manifest — everything else it's holding
      *  relayable data for on behalf of other, genuinely different origin devices (see
@@ -753,7 +857,7 @@ class MulePullClient {
      *  characteristic bounded by the ATT protocol's own 512-byte attribute value cap). Callers
      *  should only bother with this extra round trip when [DeviceInfo.relayCount] from a prior
      *  [readDeviceInfo] read was greater than 0 — see [MuleSyncEngine.pullAllVisibleDevices]. */
-    suspend fun pullRelayManifest(advertisement: Advertisement): List<RelayManifestEntry> = mutexFor(advertisement).withLock {
+    suspend fun pullRelayManifest(advertisement: Advertisement): List<RelayManifestEntry> = sharedConnectSemaphore.withPermit { mutexFor(advertisement).withLock {
         coroutineScope {
             val peripheral = peripheralFor(advertisement)
             try {
@@ -774,7 +878,7 @@ class MulePullClient {
                 endConnection(advertisement, peripheral, succeeded)
             }
         }
-    }
+    } }
 
     // Writes [payload] to the peer's PROGRESS_CHARACTERISTIC_UUID as a sequence of small,
     // ordinary writes terminated by a single END_OF_STREAM_MARKER byte — the write-direction
@@ -892,6 +996,14 @@ class MulePullClient {
         private const val READ_DEVICE_INFO_ATTEMPTS = 3
         private val READ_DEVICE_INFO_RETRY_DELAY = 1_500.milliseconds
 
+        // sharedAdvertisements' own retryWhen backoff — see that flow's own doc for why this
+        // exists at all. Long enough that a genuinely-off radio doesn't spin-retry pointlessly
+        // fast (no caller needs faster recovery than this — every gate loop that triggers a fresh
+        // subscription already polls isEnabled()/bluetoothOff on its own multi-second cadence),
+        // short enough that turning Bluetooth back on recovers scanning within a couple of ticks
+        // rather than feeling stuck.
+        private val SCAN_RETRY_DELAY = 3_000.milliseconds
+
         // Mirrors js/mule-ble.js's GATT_CONNECT_SETTLE_MS exactly (same value, same
         // field-tested reasoning) — see connectOrEvict's own doc at its call site. Kept even
         // though it didn't fix the ack-write failure on its own (see
@@ -911,6 +1023,29 @@ class MulePullClient {
         // connection, not something specific to a read preceding a write), once readDeviceInfo's
         // own case was fixed and real traffic exercised this second, previously-unprotected spot.
         private val INTER_OPERATION_SETTLE_DELAY = 2_000.milliseconds
+
+        // Merges MuleSyncEngine's own former MAX_CONCURRENT_CONNECTS and PeerSyncEngine's own
+        // former MAX_CONCURRENT_PEER_CONNECTS (both independently 1) into one shared pool — see
+        // sharedConnectSemaphore's own doc for why one bound now has to cover both engines'
+        // connects. Kept at 1, not 2 or the sum of the two: MuleSyncEngine's own value was
+        // originally dropped from 2 to 1 as a direct test after TODO.md's Sony-Mule
+        // investigation traced Kable's own internal disconnect() (Connection.kt: it waits up to
+        // its disconnectTimeout, 5s, for taskScope's own in-flight tasks — including a
+        // discoverServices() call — to finish before it ever calls gatt.disconnect()) logging
+        // "Timed out after 5s waiting for disconnect" back to the same underlying phenomenon as
+        // the original diagnosis: discoverServices() occasionally getting no OS callback at all,
+        // surfacing at the disconnect end of a connection's life this time instead of the
+        // connect end. This phone's own concurrent scanning, advertising, and GATT-server roles
+        // (serving other phones' pulls) already compete for one controller even at 2; fully
+        // serializing every central-role connect app-wide is the cheapest, most reversible way
+        // to keep that contention down. Revisit upward only once real data shows a higher value
+        // is safe. Revisit empirically if PeerSyncEngine's much faster PULL_INTERVAL cadence is
+        // ever found to be starved behind a slow MuleSyncEngine relay sequence for longer than
+        // acceptable — though that's a smaller risk now than when each engine held one permit
+        // across its *whole* multi-connect sequence: the permit is acquired per individual
+        // primitive call here, so a busy relay device's sequence no longer monopolizes the one
+        // shared slot for its entire duration.
+        private const val MAX_CONCURRENT_CENTRAL_CONNECTS = 1
     }
 }
 
@@ -976,9 +1111,22 @@ internal fun shouldDeliverProgress(peerRaceLabel: String, peerProgressGeneratedA
  * the underlying data happens to repeat; this is responder-side work-avoidance for repeats of
  * the *same* ask, not cross-requester data dedup (that's already fully handled elsewhere by
  * `lineNumber` + the per-origin `MuleRepository.lastPulledLineNumber` delta cursor).
+ *
+ * [maxRecords] is folded in too — two requests that differ only in page size are not the same
+ * ask (a responder that cached an earlier, differently-capped answer for this exact key must
+ * never replay it for a request now asking for a different page size). [countStatusOnly]
+ * likewise — a count-status-filtered answer and a general, unfiltered one are never
+ * interchangeable even for the same sinceLineNumber/maxRecords.
  */
-internal fun computeRequestKey(pullerDeviceId: String, originDeviceId: String?, originRaceLabel: String?, sinceLineNumber: Long): String =
-    "$pullerDeviceId:${originDeviceId ?: "self"}:${originRaceLabel.orEmpty()}:$sinceLineNumber"
+internal fun computeRequestKey(
+    pullerDeviceId: String,
+    originDeviceId: String?,
+    originRaceLabel: String?,
+    sinceLineNumber: Long,
+    maxRecords: Int? = null,
+    countStatusOnly: Boolean = false,
+): String =
+    "$pullerDeviceId:${originDeviceId ?: "self"}:${originRaceLabel.orEmpty()}:$sinceLineNumber:${maxRecords ?: "-"}:$countStatusOnly"
 
 /**
  * Splits [ackedOrigins] and [sinkConfirmedOrigins] across as many separate [AckPayload]s as

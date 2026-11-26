@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import mobile.racemaster.data.db.dao.PulledSourceSummary
 import mobile.racemaster.data.db.entity.KnownDeviceEntity
+import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.ConnectHealth
 import mobile.racemaster.data.mule.DiscoveredDevice
 import mobile.racemaster.data.mule.MuleRepository
@@ -44,6 +45,16 @@ data class MuleModeUiState(
     val autoSyncStopped: Boolean = false,
     val autoSyncArmed: Boolean = false,
     val bluetoothOff: Boolean = false,
+    // The OS Bluetooth radio's own actual on/off state (BluetoothStateRepository.isEnabled, live
+    // via observeEnabled) — distinct from bluetoothOff above, which is this app's own in-app kill
+    // switch. Confirmed in the field as a real gap: a fresh phone whose Bluetooth was simply
+    // never turned on has bluetoothOff == false (kill switch not engaged, default) but the radio
+    // itself off, and ConnectivityStatusText used to show "Bluetooth: ON — visible to nearby
+    // Mule devices" in exactly that state — true about the kill switch, false about reality.
+    // Defaults true (optimistic "assume fine" seed, same reasoning as BtPollingStatus.locationServicesEnabled's
+    // own doc) so the very first composition before observeEnabled's first poll lands doesn't
+    // flash a false warning.
+    val radioEnabled: Boolean = true,
     val serverSyncOff: Boolean = false,
     val peerSyncOff: Boolean = false,
     val advertisingWarning: String? = null,
@@ -91,6 +102,7 @@ class MuleModeViewModel(
     private val settingsRepository: SettingsRepository,
     private val serverStatusRepository: ServerStatusRepository,
     private val bibSpeaker: BibSpeaker,
+    private val bluetoothStateRepository: BluetoothStateRepository,
 ) : ViewModel() {
 
     val deviceName: StateFlow<String?> = muleRepository.deviceName
@@ -181,6 +193,7 @@ class MuleModeViewModel(
         serverStatusRepository.state,
         muleSyncEngine.connectHealth,
         muleRepository.peerSyncOff,
+        bluetoothStateRepository.observeEnabled(),
     ) { values ->
         val isLoggedIn = values[3] as Boolean
         val autoSyncStopped = values[7] as Boolean
@@ -198,6 +211,7 @@ class MuleModeViewModel(
         val serverStatus = values[20] as ServerStatusState
         val connectHealth = values[21] as ConnectHealth
         val peerSyncOff = values[22] as Boolean
+        val radioEnabled = values[23] as Boolean
         val directDevices = values[0] as Map<String, DiscoveredDevice>
         val liveDeviceIds = (directDevices.values + relayDevices.values).mapNotNull { it.deviceId }.toSet()
         // Stale rows: a device this phone has resolved before but can't currently see, given
@@ -236,6 +250,7 @@ class MuleModeViewModel(
             // side (nothing to discover), not whether this device still pushes to the server.
             autoSyncArmed = isLoggedIn && !autoSyncStopped && !serverSyncOff,
             bluetoothOff = bluetoothOff,
+            radioEnabled = radioEnabled,
             serverSyncOff = serverSyncOff,
             peerSyncOff = peerSyncOff,
             advertisingWarning = advertisingWarning,
@@ -307,6 +322,7 @@ class MuleModeViewModel(
                     container.settingsRepository,
                     container.serverStatusRepository,
                     container.bibSpeaker,
+                    container.bluetoothStateRepository,
                 )
             }
         }

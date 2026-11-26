@@ -3,11 +3,13 @@ package mobile.racemaster.data.beacon
 import android.util.Log
 import com.juul.kable.Advertisement
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -15,6 +17,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.ProgressRepository
 import mobile.racemaster.data.repository.BibsModeRepository
@@ -76,6 +79,7 @@ class BeaconScanEngine(
     private val bibsModeRepository: BibsModeRepository,
     private val bibSpeaker: BibSpeaker,
     private val beeper: Beeper,
+    private val bluetoothStateRepository: BluetoothStateRepository,
 ) {
     private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
         Log.e(TAG, "Uncaught exception in BeaconScanEngine — swallowed to avoid crashing the app", throwable)
@@ -111,7 +115,7 @@ class BeaconScanEngine(
     fun start() {
         if (started) return
         started = true
-        engineScope.launch { collectAdvertisements() }
+        startBluetoothOffGateLoop()
         engineScope.launch { watchRecordedBibs() }
     }
 
@@ -144,8 +148,19 @@ class BeaconScanEngine(
         started = false
         engineScope.cancel()
         engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
+        scanJob = null
         beeper.release()
     }
+
+    // The actual scan subscription — split out into its own cancellable job (rather than the
+    // bare unconditional loop launched straight from start(), as this used to be) so
+    // startBluetoothOffGateLoop below can start/stop it in response to
+    // SettingsRepository.bluetoothOff. This engine never makes its own GATT connect — it's a
+    // pure scan-and-decode consumer — so gating just this subscription is the whole fix: once
+    // every subscriber (this included) drops, MulePullClient.sharedAdvertisements' own
+    // WhileSubscribed(2s) actually tears the real native scan session down, which is what
+    // SettingsRepository.bluetoothOff's own "no scanning" contract requires.
+    private var scanJob: Job? = null
 
     /** Collects the one shared scan [MuleRepository.scanForAdvertisements] exposes (fans out the
      *  same native scan Mule Mode's own scanning uses, rather than opening a second one). Unlike
@@ -154,15 +169,43 @@ class BeaconScanEngine(
      *  a transient upstream failure retries instead of silently ending detection for the rest of
      *  the race — the `while (isActive)` here is this specific launched coroutine's own
      *  liveness, same as [mobile.racemaster.data.mule.MuleSyncEngine]'s loops use. */
-    private suspend fun CoroutineScope.collectAdvertisements() {
-        while (isActive) {
-            try {
-                muleRepository.scanForAdvertisements().collect { advertisement -> handleAdvertisement(advertisement) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "beacon scan failed — retrying", e)
-                delay(SCAN_RETRY_DELAY)
+    private fun startScan() {
+        if (scanJob?.isActive == true) return
+        scanJob = engineScope.launch {
+            while (isActive) {
+                try {
+                    muleRepository.scanForAdvertisements().collect { advertisement -> handleAdvertisement(advertisement) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "beacon scan failed — retrying", e)
+                    delay(SCAN_RETRY_DELAY)
+                }
+            }
+        }
+    }
+
+    private fun stopScan() {
+        scanJob?.cancel()
+        scanJob = null
+    }
+
+    // See PeerSyncEngine.startBluetoothOffGateLoop's own doc for why this exists at all — this
+    // engine was the other of the two BLE actors that never checked SettingsRepository.bluetoothOff,
+    // so setting it true (e.g. while DxCp27Client programs a beacon) didn't actually stop this
+    // engine's own scan subscription the way the flag's own doc already promises. Also gates on
+    // bluetoothStateRepository.isEnabled() (the OS radio itself) for the same reason
+    // PeerSyncEngine's own gate loop does — see that function's own doc for the exact crash this
+    // closes (a fresh phone whose Bluetooth was never turned on at all).
+    private fun startBluetoothOffGateLoop() {
+        engineScope.launch {
+            while (isActive) {
+                if (settingsRepository.bluetoothOff.first() || !bluetoothStateRepository.isEnabled()) {
+                    stopScan()
+                } else {
+                    startScan()
+                }
+                delay(BLUETOOTH_OFF_CHECK_INTERVAL)
             }
         }
     }
@@ -212,5 +255,9 @@ class BeaconScanEngine(
         private const val BEACON_MAX_DISTANCE_METERS = 3.0
 
         private val SCAN_RETRY_DELAY = 5.seconds
+
+        // Matches MuleSyncEngine's own BLUETOOTH_CHECK_INTERVAL/PeerSyncEngine's own
+        // BLUETOOTH_OFF_CHECK_INTERVAL — see startBluetoothOffGateLoop's own doc for what this polls.
+        private val BLUETOOTH_OFF_CHECK_INTERVAL = 3_000.milliseconds
     }
 }

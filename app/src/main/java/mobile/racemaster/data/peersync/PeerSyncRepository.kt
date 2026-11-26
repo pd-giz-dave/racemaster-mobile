@@ -43,6 +43,13 @@ class PeerSyncRepository(
     suspend fun lastMergedLineNumber(originDeviceId: String): Long =
         peerSeenRecordDao.getLastMergedLineNumber(originDeviceId) ?: 0L
 
+    /** Count Mode's own cursor — see [PeerSeenRecordDao.getLastMergedCountStatusLineNumber]'s own
+     *  doc for why this must be a separate query from [lastMergedLineNumber] rather than reusing
+     *  it. Compared against [mobile.racemaster.data.mule.DeviceInfo.lastCountStatusLineNumber],
+     *  never [mobile.racemaster.data.mule.DeviceInfo.lastLineNumber]. */
+    suspend fun lastMergedCountStatusLineNumber(originDeviceId: String): Long =
+        peerSeenRecordDao.getLastMergedCountStatusLineNumber(originDeviceId) ?: 0L
+
     /** Merges a batch of a peer's own [SyncRecord]s, already known (by [PeerSyncEngine], via
      *  [PeerGroupDetector.groupKeyOf]) to belong to [raceGroupId] — see [groupKey].
      *  [SyncRecord.bibNumber] already carries the Bibs/Finish dedup key as a real field;
@@ -95,9 +102,6 @@ class PeerSyncRepository(
      *  rows it already covers. */
     fun observeGroup(raceGroupId: String, mode: HistoryMode): Flow<List<PeerSeenRecordEntity>> =
         peerSeenRecordDao.observeGroup(raceGroupId, mode)
-
-    /** See [PeerSeenRecordDao.deleteForOrigin]'s own doc — always safe, at any time. */
-    suspend fun forgetOrigin(originDeviceId: String) = peerSeenRecordDao.deleteForOrigin(originDeviceId)
 
     /** Every beacon any peer in [raceGroupId]/[mode] has reported, mapped to whichever peer
      *  reported it *most recently* — what

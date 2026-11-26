@@ -101,11 +101,11 @@ class DefaultAppContainer(context: Context) : AppContainer {
     }
 
     override val peerSyncEngine: PeerSyncEngine by lazy {
-        PeerSyncEngine(muleRepository, raceRepository, settingsRepository, peerGroupDetector, peerSyncRepository)
+        PeerSyncEngine(muleRepository, raceRepository, settingsRepository, peerGroupDetector, peerSyncRepository, bluetoothStateRepository)
     }
 
     override val beaconScanEngine: BeaconScanEngine by lazy {
-        BeaconScanEngine(muleRepository, progressRepository, settingsRepository, raceRepository, bibsModeRepository, bibSpeaker, Beeper(context))
+        BeaconScanEngine(muleRepository, progressRepository, settingsRepository, raceRepository, bibsModeRepository, bibSpeaker, Beeper(context), bluetoothStateRepository)
     }
 
     override val serverStatusRepository: ServerStatusRepository by lazy {

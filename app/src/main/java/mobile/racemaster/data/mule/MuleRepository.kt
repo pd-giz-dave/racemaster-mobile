@@ -364,11 +364,20 @@ class MuleRepository(
     suspend fun pullForPeerSync(
         advertisement: Advertisement,
         sinceLineNumber: Long,
+        // Caps this one pull's own response — see PullRequest.maxRecords's own doc. Null (the
+        // default) is unbounded, as every caller used before this param existed.
+        maxRecords: Int? = null,
+        // See PullRequest.countStatusOnly's own doc. False (the default) is every existing
+        // caller's own behavior, unchanged — only PeerSyncEngine's Count Mode pull sets this.
+        countStatusOnly: Boolean = false,
         onReceived: suspend (List<SyncRecord>) -> Unit,
     ) {
         val myDeviceId = settingsRepository.getOrCreateDeviceId()
         val myDeviceName = settingsRepository.getOrCreateDeviceName()
-        pullClient.pull(advertisement, myDeviceId, myDeviceName, sinceLineNumber, onReceived = onReceived)
+        pullClient.pull(
+            advertisement, myDeviceId, myDeviceName, sinceLineNumber,
+            maxRecords = maxRecords, countStatusOnly = countStatusOnly, onReceived = onReceived,
+        )
     }
 
     private suspend fun storePulledRecords(

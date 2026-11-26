@@ -12,8 +12,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 // An in-memory fake rather than a mock — insertAll/getLastMergedLineNumber genuinely read back
-// what was written (mergeRecords' own tests need that), while every observe*/delete method just
-// serves whatever rows() currently holds, same shape PeerGroupDetectorTest's own
+// what was written (mergeRecords' own tests need that), while every observe* method just serves
+// whatever rows() currently holds, same shape PeerGroupDetectorTest's own
 // UncalledPeerSeenRecordDao uses for the methods it never actually exercises.
 private class FakePeerSeenRecordDao : PeerSeenRecordDao {
     private val rows = mutableListOf<PeerSeenRecordEntity>()
@@ -24,6 +24,10 @@ private class FakePeerSeenRecordDao : PeerSeenRecordDao {
 
     override suspend fun getLastMergedLineNumber(originDeviceId: String): Long? =
         rows.filter { it.originDeviceId == originDeviceId }.maxOfOrNull { it.lineNumber }
+
+    override suspend fun getLastMergedCountStatusLineNumber(originDeviceId: String): Long? =
+        rows.filter { it.originDeviceId == originDeviceId && it.action in setOf("COUNT_SEEN", "COUNT_EJECTED", "COUNT_UNEJECTED") }
+            .maxOfOrNull { it.lineNumber }
 
     override fun observeSeenBeaconNumbers(raceGroupId: String, mode: HistoryMode): Flow<List<Int>> =
         flowOf(rows.filter { it.raceGroupId == raceGroupId && it.mode == mode }.mapNotNull { it.beaconNumber }.distinct())
@@ -39,10 +43,6 @@ private class FakePeerSeenRecordDao : PeerSeenRecordDao {
 
     override fun observeGroup(raceGroupId: String, mode: HistoryMode): Flow<List<PeerSeenRecordEntity>> =
         flowOf(rows.filter { it.raceGroupId == raceGroupId && it.mode == mode })
-
-    override suspend fun deleteForOrigin(originDeviceId: String) {
-        rows.removeAll { it.originDeviceId == originDeviceId }
-    }
 }
 
 class PeerSyncRepositoryTest {

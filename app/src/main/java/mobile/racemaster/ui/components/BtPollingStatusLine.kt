@@ -69,3 +69,24 @@ fun BtPollingStatusLine(status: BtPollingStatus, modifier: Modifier = Modifier) 
         }
     }
 }
+
+/** Plain "Bluetooth: ON/OFF" line reflecting the OS radio itself (see
+ *  [BtPollingStatus.radioEnabled]'s own doc) — a separate, standalone line from
+ *  [BtPollingStatusLine] rather than folded into it, since that one's "Last polled by BT" text is
+ *  about whether anyone's actually been seen polling, not about the radio's own on/off state; the
+ *  two can and do diverge (a device polled minutes ago, then the operator background-toggled
+ *  Bluetooth off, still shows a "last polled" time that was true when it happened). Same
+ *  "ON"/"OFF" wording as Mule Mode's own ConnectivityStatusText, for consistency app-wide. */
+@Composable
+fun BluetoothRadioStatusLine(status: BtPollingStatus, modifier: Modifier = Modifier) {
+    if (status.radioEnabled) {
+        Text("Bluetooth: ON", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, modifier = modifier)
+    } else {
+        Text(
+            "Bluetooth: OFF — turn on Bluetooth in system settings",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.error,
+            modifier = modifier,
+        )
+    }
+}

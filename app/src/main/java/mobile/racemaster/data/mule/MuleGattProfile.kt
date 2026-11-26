@@ -435,6 +435,15 @@ data class DeviceInfo(
     // relayManifestVersion's own "only act on a genuine change" precedent just above, in the
     // opposite (inbound) direction. Defaulted so an old-build requester still decodes this fine.
     val progressGeneratedAt: String? = null,
+    // Count Mode peer-sync's own cursor target — the highest lineNumber among this device's own
+    // COUNT_SEEN/COUNT_EJECTED/COUNT_UNEJECTED rows only (see
+    // CountModeRepository.lastCountStatusLineNumber's own doc), never [lastLineNumber]'s raw
+    // race-wide count, which also advances on every routine Ping/Location/etc. line this feature
+    // has no use for. 0 if this device isn't running Count Mode on its active race, or has none.
+    // Defaulted so an old-build responder (pre-dating this field) still deserializes fine for a
+    // puller running newer code — that puller just falls back to never seeing anything new from
+    // it via the countStatusOnly path, same graceful-degradation precedent as pollIntervalMs.
+    val lastCountStatusLineNumber: Long = 0,
 )
 
 /** Written to [MuleGattProfile.CONTROL_CHARACTERISTIC_UUID] to request either a delta stream of
@@ -483,6 +492,28 @@ data class PullRequest(
     val requestRelayManifest: Boolean = false,
     val requestKey: String? = null,
     val isSink: Boolean = false,
+    // Caps how many records a single response carries, starting from sinceLineNumber — the
+    // responder returns at most this many of its own earliest not-yet-sent lines, never a
+    // scattered sample. A requester whose own backlog against this origin is large (first
+    // contact, or a long gap since last contact) advances sinceLineNumber by the size of
+    // whatever page just landed and asks again, rather than requesting its entire backlog in one
+    // round trip — see PeerSyncEngine's own Count Mode sync path for why: a single BLE connection
+    // surviving enough chunked notifications to deliver a large backlog in one shot is
+    // unreliable in the field, confirmed via repeated NotConnectedException failures against a
+    // real multi-phone session, while a small bounded page reliably completes. Null (the default)
+    // means "no cap, send everything since sinceLineNumber" — every existing caller/responder
+    // before this field existed, and still Bibs Mode's own peer-sync pull today.
+    val maxRecords: Int? = null,
+    // Scopes this request's response to CountModeRepository.countStatusEventsSince's own
+    // filtered view (COUNT_SEEN/COUNT_EJECTED/COUNT_UNEJECTED only, current segment) instead of
+    // computeRecordsPayload's general, unfiltered race history — see that function's own doc for
+    // why: a Count Mode peer-sync pull has no use for the Ping/Location/etc. noise the general
+    // path otherwise carries, and transferring it anyway wastes BLE chunk budget this protocol's
+    // own field history already shows is scarce. Only ever set true for a same-race-own-history
+    // request (originDeviceId null); ignored for a relay leg and for requestRelayManifest. False
+    // (the default) is every other caller's existing behavior, unchanged — including Bibs Mode's
+    // own peer-sync pull, which has no equivalent noise problem today.
+    val countStatusOnly: Boolean = false,
 )
 
 /** One pull leg's worth of acked lines — [originDeviceId]/[originRaceLabel] null means this

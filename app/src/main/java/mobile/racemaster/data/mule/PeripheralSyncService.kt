@@ -1,5 +1,6 @@
 package mobile.racemaster.data.mule
 
+import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.RaceEntity
 
 import android.Manifest
@@ -33,11 +34,12 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -47,7 +49,10 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlin.time.Duration.Companion.milliseconds
 import mobile.racemaster.MainActivity
@@ -108,6 +113,11 @@ class PeripheralSyncService : Service() {
     private var advertiser: BluetoothLeAdvertiser? = null
     private var dataCharacteristic: BluetoothGattCharacteristic? = null
 
+    // Set only for the duration of one startGattServerAndAdvertising() call's own addService()
+    // — see that function's own doc for why advertising now waits for this rather than firing
+    // addService() and moving straight on.
+    private var pendingServiceAdded: CompletableDeferred<Int>? = null
+
     // Tracks whether the last startAdvertising() call actually succeeded, independent of
     // gattServer's own lifecycle — the two can and do fail independently (the GATT server
     // opens fine while advertising itself is rejected, e.g. ADVERTISE_FAILED_TOO_MANY_ADVERTISERS
@@ -151,6 +161,14 @@ class PeripheralSyncService : Service() {
 
     @Volatile
     private var servingState = ServingState()
+
+    // See DeviceInfo.lastCountStatusLineNumber's own doc — kept live the same way servingState
+    // itself is, by observeCountStatusLineNumber() below, rather than computed inline inside
+    // onCharacteristicReadRequest: that callback runs synchronously on the platform's own GATT
+    // callback thread, never inside a coroutine, so it can only ever read an already-cached
+    // value here, exactly like every other DeviceInfo field above it.
+    @Volatile
+    private var cachedLastCountStatusLineNumber: Long = 0
 
     // Kept live the same way deviceName is above — what this device is currently able to
     // relay on behalf of other, genuinely different origin devices (its own pulled_records
@@ -281,6 +299,7 @@ class PeripheralSyncService : Service() {
         }
         startForegroundWithNotification()
         observeServingState()
+        observeCountStatusLineNumber()
         observeDeviceName()
         observeAppMode()
         observeMuleSyncEnabled()
@@ -289,6 +308,7 @@ class PeripheralSyncService : Service() {
         observeRaceStaleAfterDays()
         observeAdvertisingWarning()
         observeSameGroupPeerNearby()
+        startTxActorLoop()
         startAdvertisingRetryLoop()
         startChunkWatchdogLoop()
         container.muleSyncEngine.start()
@@ -319,14 +339,15 @@ class PeripheralSyncService : Service() {
     // scan-response payload promptly, purely for the informational mode byte it carries (see
     // MuleGattProfile.AdvertisedIdentity.mode's own doc — no picker filter relies on this
     // anymore, see MULE_MODE_MARKER_SERVICE_UUID's own doc for what does).
-    // scheduleAdvertisedIdentityRefresh() below is the same debounced refresh
-    // observeServingState already drives for lastLineNumber changes.
+    // TxCommand.IdentityChanged below routes into the same coalesced refresh
+    // observeServingState already drives for lastLineNumber changes — see startTxActorLoop's
+    // own doc.
     private fun observeAppMode() {
         serviceScope.launch {
             container.settingsRepository.appMode.collect { mode ->
                 Log.i(TAG, "App mode observed: $mode (was $currentMode)")
                 currentMode = mode
-                scheduleAdvertisedIdentityRefresh()
+                txChannel.trySend(TxCommand.IdentityChanged)
             }
         }
     }
@@ -341,7 +362,7 @@ class PeripheralSyncService : Service() {
             container.settingsRepository.muleSyncEnabled.collect { enabled ->
                 Log.i(TAG, "Mule sync enabled observed: $enabled (was $muleSyncEnabled)")
                 muleSyncEnabled = enabled
-                scheduleAdvertisedIdentityRefresh()
+                txChannel.trySend(TxCommand.IdentityChanged)
             }
         }
     }
@@ -352,18 +373,20 @@ class PeripheralSyncService : Service() {
     // collects it to switch its own advertise mode, the same way it drives the GATT-server/
     // advertiser side of ordinary Mule syncing. Collected rather than read once, since a peer can
     // come into/go out of group-relevance for the whole duration this long-running service is up,
-    // not just at startup. refreshAdvertisedIdentity's existing stop+restart plumbing (already
-    // needed for lastLineNumber/mode changes) is reused here too, via the same debounced
-    // scheduleAdvertisedIdentityRefresh — a mode flip is just one more reason that payload needs
-    // rebroadcasting, not a separate mechanism.
+    // not just at startup. Sends both IdentityChanged (lowLatencyAdvertising itself affects the
+    // next startAdvertisingAttempt's AdvertiseSettings) and SuppressionChanged — see
+    // startTxActorLoop's own doc for why a same-group peer being nearby suppresses the refresh
+    // this would otherwise trigger, and why becoming un-suppressed is itself enough to catch the
+    // broadcast back up without a second, separate mechanism.
     private fun observeSameGroupPeerNearby() {
         serviceScope.launch {
             container.peerSyncEngine.hasSameGroupPeerNearby.collect { nearby ->
                 if (nearby != lowLatencyAdvertising) {
                     Log.i(TAG, "Same-group peer nearby observed: $nearby (was $lowLatencyAdvertising)")
                     lowLatencyAdvertising = nearby
-                    scheduleAdvertisedIdentityRefresh()
+                    txChannel.trySend(TxCommand.IdentityChanged)
                 }
+                txChannel.trySend(TxCommand.SuppressionChanged(nearby))
             }
         }
     }
@@ -477,38 +500,56 @@ class PeripheralSyncService : Service() {
                 val hasActiveRace = container.settingsRepository.activeRaceId.first() != null
                 val hasUnsyncedData = container.raceRepository.unsyncedHistoryCountAcrossAllRaces.first() > 0
                 val shouldBeActive = !bluetoothOff && (hasActiveRace || hasUnsyncedData) && container.bluetoothStateRepository.isEnabled()
+                // This loop is now a pure policy producer — it decides WHETHER the GATT
+                // server/advertiser should be up, but never touches either directly; see
+                // startTxActorLoop's own doc for why every actual touch funnels through there
+                // instead now. freshActivation (handleEnsureUp's own param) mirrors what this
+                // branch used to decide inline: any earlier server/advertiser reference is
+                // stale once the radio's cycled, so it must be torn down before rebuilding
+                // fresh rather than trusted as still good — but that decision now happens
+                // inside the actor itself, which is the only thing left reading gattServer/
+                // isAdvertising, so it can do so without racing a producer-side read of the
+                // same fields.
                 if (shouldBeActive) {
-                    if (!wasActive) {
-                        // Just came on (or this is the first tick) — any earlier
-                        // server/advertiser reference is stale once the radio's cycled, so
-                        // tear down before rebuilding fresh rather than trusting it's still
-                        // good.
-                        closeGattServerIfPossible()
-                        stopAdvertisingIfPossible()
-                        gattServer = null
-                    }
-                    if (gattServer == null) {
-                        startGattServerAndAdvertising()
-                    } else if (!isAdvertising) {
-                        // The GATT server is up but the last (or only) startAdvertising()
-                        // attempt never actually succeeded — confirmed in the field on a
-                        // device whose BLE stack rejected advertising (ADVERTISE_FAILED_
-                        // TOO_MANY_ADVERTISERS, from a stale handle left by an earlier
-                        // crash/force-stop) while the GATT server opened fine, leaving it
-                        // permanently unadvertised for the rest of the process's life since
-                        // nothing ever retried advertising specifically. Retried here on its
-                        // own cadence, independent of the GATT server's own health.
-                        retryAdvertisingOnly()
-                    }
+                    txChannel.trySend(TxCommand.EnsureUp(freshActivation = !wasActive))
                 } else if (wasActive) {
-                    stopAdvertisingIfPossible()
-                    closeGattServerIfPossible()
-                    gattServer = null
+                    txChannel.trySend(TxCommand.TearDown)
                 }
                 wasActive = shouldBeActive
                 delay(BLUETOOTH_RECHECK_INTERVAL)
             }
         }
+    }
+
+    // Runs only inside startTxActorLoop's own single-consumer coroutine — see that function's
+    // own doc for why every touch of gattServer/advertiser funnels through there now, which is
+    // what makes it safe for this to branch on gattServer/isAdvertising directly: nothing else
+    // can be mutating them concurrently, so there's no stale-read risk in reading them fresh
+    // right here (unlike the old retry-loop-side check this replaces, which read them from a
+    // different coroutine than the one that was about to mutate them).
+    private suspend fun handleEnsureUp(freshActivation: Boolean) {
+        if (freshActivation) {
+            tearDownGattServerAndAdvertising()
+        }
+        if (gattServer == null) {
+            startGattServerAndAdvertising()
+        } else if (!isAdvertising) {
+            // The GATT server is up but the last (or only) startAdvertising() attempt never
+            // actually succeeded — confirmed in the field on a device whose BLE stack rejected
+            // advertising (ADVERTISE_FAILED_TOO_MANY_ADVERTISERS, from a stale handle left by an
+            // earlier crash/force-stop) while the GATT server opened fine, leaving it
+            // permanently unadvertised for the rest of the process's life since nothing ever
+            // retried advertising specifically. Retried here independent of the GATT server's
+            // own health, on whatever cadence startAdvertisingRetryLoop's own EnsureUp commands
+            // arrive at.
+            retryAdvertisingOnly()
+        }
+    }
+
+    private fun tearDownGattServerAndAdvertising() {
+        stopAdvertisingIfPossible()
+        closeGattServerIfPossible()
+        gattServer = null
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
@@ -528,6 +569,11 @@ class PeripheralSyncService : Service() {
     }
 
     override fun onDestroy() {
+        // Deliberately direct, bypassing txChannel/startTxActorLoop — the one call site that
+        // does — rather than sending TearDown: serviceJob.cancel() below kills that actor
+        // immediately after this returns, so there's nothing left to serialize against by this
+        // point, and a queued command risks never actually being processed before the
+        // coroutine it'd run in is torn down.
         stopAdvertisingIfPossible()
         closeGattServerIfPossible()
         // The central/scanning side of Mule sync — started alongside this service in
@@ -565,34 +611,136 @@ class PeripheralSyncService : Service() {
                     // leak into DeviceInfo.progressGeneratedAt/a puller for whatever race
                     // replaces it — see ProgressRepository.clearIfRaceChanged's own doc.
                     container.progressRepository.clearIfRaceChanged(it.raceId)
-                    scheduleAdvertisedIdentityRefresh()
+                    txChannel.trySend(TxCommand.IdentityChanged)
                 }
         }
     }
 
+    // Feeds DeviceInfo.lastCountStatusLineNumber — see that field's own doc, and
+    // cachedLastCountStatusLineNumber's own doc for why this has to be a reactively-maintained
+    // cache rather than a direct suspend call from onCharacteristicReadRequest. Re-derives from
+    // observeStatusEvents (CountModeRepository's own current-segment, Ping/etc.-filtered view)
+    // rather than duplicating its filtering here, then narrows further to just the three actions
+    // a Count Mode peer-sync pull actually merges — see countRelevantRows's own doc in
+    // CountModeRepository for why even observeStatusEvents' own filtering isn't narrow enough on
+    // its own (it still leaves non-count rows like LOCATION in place for its other callers).
+    private fun observeCountStatusLineNumber() {
+        serviceScope.launch {
+            container.settingsRepository.activeRaceId
+                .flatMapLatest { raceId ->
+                    if (raceId == null) {
+                        flowOf(0L)
+                    } else {
+                        container.countModeRepository.observeStatusEvents(raceId).map { rows ->
+                            rows.filter {
+                                it.action == HistoryAction.COUNT_SEEN || it.action == HistoryAction.COUNT_EJECTED || it.action == HistoryAction.COUNT_UNEJECTED
+                            }.maxOfOrNull { it.lineNumber } ?: 0L
+                        }
+                    }
+                }
+                .distinctUntilChanged()
+                .collect { cachedLastCountStatusLineNumber = it }
+        }
+    }
+
+    // Every touch of gattServer/advertiser used to be reachable from several independent
+    // trigger paths with no coordination between them — TODO.md's own "Factor out all the BLe
+    // stuff" entry: "there should be a single thread responsible to bt tx... with a queueing
+    // system to drive them, so then not possible to get advert race conditions". This sealed
+    // interface + txChannel + startTxActorLoop below is that single consumer: every one of
+    // those paths now only ever sends a command here, never calls startAdvertising/
+    // stopAdvertising/addService/close itself. Two confirmed field bugs directly motivated
+    // this, both now impossible by construction rather than patched around:
+    // - ADVERTISE_FAILED_ALREADY_STARTED, from startAdvertisingRetryLoop's own periodic health
+    //   check racing a concurrent restart triggered by a servingState/mode change — two
+    //   different coroutines both touching the same advertiser with no mutual exclusion.
+    // - 22 advertiser restarts inside 15 seconds (then a silently wedged advertiser, never
+    //   recovering on its own) from a same-group peer-nearby signal flapping and an earlier,
+    //   undebounced "catch up once the peer leaves" trigger firing on every single transition.
+    // A single actor coroutine draining one Channel sequentially gives mutual exclusion for
+    // free — no literal dedicated Thread/single-thread CoroutineDispatcher needed, since only
+    // one coroutine ever calls the guarded functions now. See AdvertisingRefreshCoalescer's own
+    // doc for the general "collapse a burst of changes into one restart" mechanism this uses in
+    // place of the old debounce + reactive peer-nearby special case.
+    private sealed interface TxCommand {
+        /** servingState/mode/muleSyncEnabled/lowLatencyAdvertising changed — the broadcast
+         *  payload needs rebuilding, subject to AdvertisingRefreshCoalescer's own coalescing. */
+        data object IdentityChanged : TxCommand
+
+        /** A same-group PeerSyncEngine partner's nearby/not-nearby state changed. See
+         *  startTxActorLoop's own doc for why this suppresses IdentityChanged's refresh while
+         *  true, and itself behaves like a dirty signal the moment it becomes false. */
+        data class SuppressionChanged(val suppressed: Boolean) : TxCommand
+
+        /** The GATT server/advertiser should be up. [freshActivation] is true only on the tick
+         *  this device's own radio activity first turns back on (mirrors the retry loop's old
+         *  `!wasActive` check) — see handleEnsureUp's own doc. */
+        data class EnsureUp(val freshActivation: Boolean) : TxCommand
+
+        /** The GATT server/advertiser should be torn down (bluetoothOff, no race/unsynced data,
+         *  or the radio itself went off). */
+        data object TearDown : TxCommand
+
+        /** advertiseCallback.onStartFailure's own ADVERTISE_FAILED_DATA_TOO_LARGE retry — see
+         *  that callback's own doc for why this can't just retry inline from the platform's own
+         *  callback thread. */
+        data object DataTooLargeRetry : TxCommand
+    }
+
+    // UNLIMITED — every command is tiny (at most one Boolean) and rare (at most a handful per
+    // second during the worst field-observed flapping), so every producer can use a
+    // non-suspending trySend, including advertiseCallback.onStartFailure, which runs on the BLE
+    // stack's own callback thread, not a serviceScope coroutine.
+    private val txChannel = Channel<TxCommand>(Channel.UNLIMITED)
+
     // The scan-response payload built by buildScanResponseData() reads servingState.lastLineNumber
-    // fresh each call, but nothing ever called it again once advertising first succeeded — the
+    // fresh each call, but nothing used to call it again once advertising first succeeded — the
     // BLE radio just kept re-broadcasting whatever bytes were baked in at that moment, forever.
     // A peer scanning this device therefore never saw its advertised counter move, so
     // MuleSyncEngine.shouldConnect's cheap fast path could never fire for any line recorded
     // after this device started advertising — every reconnect (to notice new data, and
     // separately to relay a sink confirmation back) fell through to its 60s VERIFY_INTERVAL
     // backstop instead, compounding into the ~1-2 minute record-to-orange-to-green delay seen
-    // in the field. This job is what actually refreshes the broadcast now.
-    private var advertisedIdentityRefreshJob: Job? = null
-
-    // Debounced rather than refreshing on every single servingState change: a fast burst of
-    // recorded lines (several bib scans in quick succession, say) would otherwise mean
-    // repeatedly stopping/restarting the radio's advertiser within the same few seconds —
-    // exactly the kind of extra radio churn already implicated in the OS Bluetooth daemon
-    // crash this whole subsystem was redesigned around (see MuleSyncEngine's connectSemaphore
-    // doc). Collapsing a burst into one refresh, a short delay after it settles, keeps the
-    // advertised hint reasonably current without that churn.
-    private fun scheduleAdvertisedIdentityRefresh() {
-        advertisedIdentityRefreshJob?.cancel()
-        advertisedIdentityRefreshJob = serviceScope.launch {
-            delay(ADVERTISED_IDENTITY_REFRESH_DEBOUNCE)
-            refreshAdvertisedIdentity()
+    // in the field. This actor loop is what actually refreshes the broadcast now, coalescing a
+    // burst of IdentityChanged signals (several bib scans in quick succession, say) into one
+    // restart rather than repeatedly stopping/restarting the radio's advertiser within the same
+    // few seconds — exactly the kind of extra radio churn already implicated in the OS
+    // Bluetooth daemon crash this whole subsystem was redesigned around (see
+    // MulePullClient.sharedConnectSemaphore's own doc).
+    //
+    // A same-group PeerSyncEngine partner being nearby suppresses the refresh entirely — see
+    // doRefreshAdvertisedIdentity's own doc for why a restart's address rotation is ruinous for
+    // that feature specifically. Becoming un-suppressed (the peer leaves) is itself treated as a
+    // dirty signal by AdvertisingRefreshCoalescer.onSuppressionChanged, which is what lets the
+    // broadcast catch back up to whatever lastLineNumber actually is, through this exact same
+    // coalescing window, with no separate "catch up" mechanism needed.
+    private fun startTxActorLoop() {
+        serviceScope.launch {
+            val coalescer = AdvertisingRefreshCoalescer(ADVERTISED_IDENTITY_REFRESH_DEBOUNCE.inWholeMilliseconds)
+            while (isActive) {
+                val waitMs = coalescer.nextCheckDelayMillis(System.currentTimeMillis())
+                val command = if (waitMs == null) {
+                    txChannel.receive()
+                } else {
+                    withTimeoutOrNull(waitMs.milliseconds) { txChannel.receive() }
+                }
+                if (command == null) {
+                    // The coalescing window elapsed with nothing new arriving — the refresh is owed now.
+                    doRefreshAdvertisedIdentity()
+                    coalescer.onRefreshed()
+                    continue
+                }
+                when (command) {
+                    TxCommand.IdentityChanged -> coalescer.onDirty(System.currentTimeMillis())
+                    is TxCommand.SuppressionChanged -> coalescer.onSuppressionChanged(command.suppressed, System.currentTimeMillis())
+                    is TxCommand.EnsureUp -> handleEnsureUp(command.freshActivation)
+                    TxCommand.TearDown -> tearDownGattServerAndAdvertising()
+                    TxCommand.DataTooLargeRetry -> {
+                        advertisingAttempt++
+                        advertiser?.let { startAdvertisingAttempt(it) }
+                    }
+                }
+            }
         }
     }
 
@@ -604,20 +752,46 @@ class PeripheralSyncService : Service() {
     // DATA_TOO_LARGE-retry negotiation that already settled on whatever attempt count is
     // current. A no-op (not an error) whenever advertising isn't actually up right now —
     // startAdvertisingRetryLoop already owns getting it started/restarted in that case, on its
-    // own cadence.
+    // own cadence. Called only from startTxActorLoop's own single-consumer coroutine — no mutex
+    // needed, since nothing else ever touches advertiser/isAdvertising concurrently with this.
+    //
+    // Confirmed live (two real phones, raw Bluetooth stack logs) that this stop+restart gets
+    // issued a brand new random BLE address immediately, not on the normal ~10+ minute privacy
+    // rotation schedule: "Unregister" followed by "StartAdvertisingSet: create advertising set"
+    // followed by "update random address for advertising set <id>: <new address>", all within a
+    // few ms of each other (see TODO.md's own "advert stop+start" entry — avoiding this at the
+    // source, rather than coalescing around it, would need startAdvertisingSet/
+    // AdvertisingSet.setAdvertisingData instead, a bigger, separate change). Harmless for Mule
+    // Mode's own relay use case (a short-lived connect, pull, disconnect — it re-scans fresh
+    // every time anyway), but ruinous for PeerSyncEngine, which holds onto a peer's address
+    // across many back-to-back reconnects over a whole counting session: every refresh
+    // invalidated whatever address the peer's own last scan still had, producing a hung
+    // connect() that eventually fails with status=133 — chronic, not occasional, since Count
+    // Mode triggers a refresh on nearly every recorded beacon event. PeerSyncEngine's own
+    // convergence doesn't read this device's advertised lastLineNumber at all (unlike
+    // MuleSyncEngine's fast path), so there's nothing it loses by this broadcast going stale
+    // while it's active — see startTxActorLoop's own doc for what catches it back up once no
+    // peer is nearby to be disrupted by it.
     @SuppressLint("MissingPermission")
-    private fun refreshAdvertisedIdentity() {
+    private suspend fun doRefreshAdvertisedIdentity() {
         if (!isAdvertising) return
         val advertiserLocal = advertiser ?: return
         if (!hasAdvertisePermission()) return
         advertiserLocal.stopAdvertising(advertiseCallback)
+        // stopAdvertising() is fire-and-forget (no "stop confirmed" callback at all, unlike the
+        // GATT server's own onServiceAdded this class already awaits elsewhere) — this settle
+        // gap is what keeps the immediately-following startAdvertisingAttempt from racing the
+        // stop itself. Safe to rely on alone now (no mutex needed): this whole function only
+        // ever runs inside startTxActorLoop's single consumer, so there is no concurrent caller
+        // left to race against in the first place — see that function's own doc.
+        delay(ADVERTISING_RESTART_SETTLE_DELAY)
         startAdvertisingAttempt(advertiserLocal)
     }
 
     // --- GATT server setup -------------------------------------------------------------
 
     @SuppressLint("MissingPermission")
-    private fun startGattServerAndAdvertising() {
+    private suspend fun startGattServerAndAdvertising() {
         // Belt-and-braces alongside the call-site ordering in onCreate() — a nameless
         // device has nothing meaningful to identify itself with in the nearby-devices list
         // (see MuleModeScreen), so it shouldn't be discoverable at all until it has one.
@@ -684,7 +858,28 @@ class PeripheralSyncService : Service() {
             addCharacteristic(ackCharacteristic)
             addCharacteristic(progressCharacteristic)
         }
+        // addService() is fire-and-forget — it returns immediately, with the real result
+        // delivered later via onServiceAdded, and nothing here used to wait for that before
+        // advertising. Confirmed as a real, reproducible bug against these two actual phones (not
+        // just a theoretical race): a client connecting in that window gets a genuinely correct
+        // answer from the server's own GATT stack — "no, I don't have that service" — because
+        // registration truly hadn't finished, surfacing as
+        // java.util.NoSuchElementException("Service ... not found") on the puller's side, with no
+        // way for *that* side to tell such a transient server-side gap apart from a real,
+        // permanent mismatch. Waiting here (bounded — onServiceAdded not firing at all, on some
+        // chipset, is a plausible failure mode in its own right, same reasoning as every other
+        // BLE callback this class already treats as "might just never come") closes the window at
+        // its actual source instead of leaving every puller to somehow work around a server that
+        // occasionally, briefly, lies about its own service table.
+        val serviceAdded = CompletableDeferred<Int>()
+        pendingServiceAdded = serviceAdded
         server.addService(service)
+        val status = withTimeoutOrNull(SERVICE_ADD_TIMEOUT) { serviceAdded.await() }
+        pendingServiceAdded = null
+        when {
+            status == null -> Log.w(TAG, "addService() never confirmed via onServiceAdded within $SERVICE_ADD_TIMEOUT — advertising anyway")
+            status != BluetoothGatt.GATT_SUCCESS -> Log.w(TAG, "addService() failed with status=$status")
+        }
 
         startAdvertising(adapter)
     }
@@ -702,8 +897,20 @@ class PeripheralSyncService : Service() {
     @Volatile
     private var advertisingAttempt = 0
 
+    // Called only from startTxActorLoop's own single-consumer coroutine (via handleEnsureUp) —
+    // no mutex needed here any more. This used to guard against a real, confirmed field race:
+    // a concurrent call from startAdvertisingRetryLoop's independent every-
+    // BLUETOOTH_RECHECK_INTERVAL health check (noticing !isAdvertising in the brief window
+    // before a different, concurrent restart's own success had been reported) could issue its
+    // own startAdvertising() while a different in-flight stop+restart hadn't actually taken
+    // effect yet — observed directly as "BLE advertising failed to start: 3"
+    // (ADVERTISE_FAILED_ALREADY_STARTED) immediately followed by a *different* call's own
+    // onStartSuccess a couple milliseconds later. That's structurally impossible now: the
+    // health check only ever sends a TxCommand, it never calls this function itself, so there
+    // is exactly one caller left, ever, for the whole process's life — see startTxActorLoop's
+    // own doc.
     @SuppressLint("MissingPermission")
-    private fun startAdvertising(adapter: BluetoothAdapter) {
+    private suspend fun startAdvertising(adapter: BluetoothAdapter) {
         if (!hasAdvertisePermission()) return
         val advertiserLocal = adapter.bluetoothLeAdvertiser ?: return
         advertiser = advertiserLocal
@@ -794,7 +1001,7 @@ class PeripheralSyncService : Service() {
     // both need a live BluetoothAdapter reference — pulled out so the checks stay identical
     // rather than duplicated/drifting between the two call sites.
     @SuppressLint("MissingPermission")
-    private fun retryAdvertisingOnly() {
+    private suspend fun retryAdvertisingOnly() {
         if (!hasAdvertisePermission()) return
         val bluetoothManager = getSystemService(BluetoothManager::class.java) ?: return
         val adapter = bluetoothManager.adapter ?: return
@@ -810,9 +1017,13 @@ class PeripheralSyncService : Service() {
         }
 
         override fun onStartFailure(errorCode: Int) {
+            // Runs on the BLE stack's own callback thread, not a serviceScope coroutine — sends
+            // a command rather than mutating advertisingAttempt/calling startAdvertisingAttempt
+            // itself, so this retry is also serialized through startTxActorLoop's single
+            // consumer like every other touch of the advertiser, instead of being the one
+            // remaining call site that could still race it.
             if (errorCode == ADVERTISE_FAILED_DATA_TOO_LARGE && advertisingAttempt < MAX_SCAN_RESPONSE_ATTEMPTS) {
-                advertisingAttempt++
-                advertiser?.let { startAdvertisingAttempt(it) }
+                txChannel.trySend(TxCommand.DataTooLargeRetry)
                 return
             }
             isAdvertising = false
@@ -844,6 +1055,11 @@ class PeripheralSyncService : Service() {
     // --- GATT server callback -----------------------------------------------------------
 
     private val gattServerCallback = object : BluetoothGattServerCallback() {
+        // See startGattServerAndAdvertising's own doc for why this is awaited before advertising.
+        override fun onServiceAdded(status: Int, service: BluetoothGattService?) {
+            pendingServiceAdded?.complete(status)
+        }
+
         @SuppressLint("MissingPermission")
         override fun onCharacteristicReadRequest(
             device: BluetoothDevice,
@@ -883,6 +1099,7 @@ class PeripheralSyncService : Service() {
                     relayCount = freshRelayManifest().size + selfTombstones.size,
                     relayManifestVersion = relayManifestVersion,
                     progressGeneratedAt = container.progressRepository.generatedAtFor(servingState.raceId),
+                    lastCountStatusLineNumber = cachedLastCountStatusLineNumber,
                 )
                 json.encodeToString(info).toByteArray(Charsets.UTF_8).also { fresh ->
                     deviceInfoSnapshots[device.address] = fresh
@@ -978,7 +1195,9 @@ class PeripheralSyncService : Service() {
                                     respondWithCache(device, request.requestKey) {
                                         when {
                                             request.requestRelayManifest -> computeRelayManifestPayload()
-                                            originDeviceId == null -> computeRecordsPayload(request.sinceLineNumber)
+                                            originDeviceId == null && request.countStatusOnly ->
+                                                computeCountStatusEventsPayload(request.sinceLineNumber, request.maxRecords)
+                                            originDeviceId == null -> computeRecordsPayload(request.sinceLineNumber, request.maxRecords)
                                             else -> computeRelayedRecordsPayload(originDeviceId, request.originRaceLabel.orEmpty(), request.sinceLineNumber)
                                         }
                                     }
@@ -1253,10 +1472,28 @@ class PeripheralSyncService : Service() {
     // everything this device holds over BLE, regardless of which mode's screen the
     // operator currently has open. Fixes a latent bug: this used to only ever stream
     // whichever category matched the currently displayed screen.
-    private suspend fun computeRecordsPayload(sinceLineNumber: Long): String? {
+    // maxRecords caps the response to this many of the earliest not-yet-sent lines — see
+    // PullRequest.maxRecords's own doc for why a requester caps this at all (PeerSyncEngine's own
+    // Count Mode sync path, catching up a backlog in bounded pages rather than one unbounded
+    // pull). Null (every other caller) keeps the original unbounded behavior.
+    private suspend fun computeRecordsPayload(sinceLineNumber: Long, maxRecords: Int? = null): String? {
         val raceId = servingState.raceId ?: return null
         val race = container.raceRepository.getRace(raceId)
         val records = container.raceRepository.getHistorySinceLineNumber(raceId, sinceLineNumber)
+            .let { if (maxRecords != null) it.take(maxRecords) else it }
+            .map { row -> row.toSyncRecord(race?.timeModeStartedAtMillis) }
+        return json.encodeToString(records)
+    }
+
+    // PullRequest.countStatusOnly's own responder — see that field's own doc. Deliberately a
+    // separate function from computeRecordsPayload above rather than a branch inside it: this one
+    // goes through CountModeRepository.countStatusEventsSince's own current-segment filtering
+    // (COUNT_SEEN/COUNT_EJECTED/COUNT_UNEJECTED only), never RaceRepository.getHistorySinceLineNumber's
+    // raw, unfiltered race history.
+    private suspend fun computeCountStatusEventsPayload(sinceLineNumber: Long, maxRecords: Int?): String? {
+        val raceId = servingState.raceId ?: return null
+        val race = container.raceRepository.getRace(raceId)
+        val records = container.countModeRepository.countStatusEventsSince(raceId, sinceLineNumber, maxRecords)
             .map { row -> row.toSyncRecord(race?.timeModeStartedAtMillis) }
         return json.encodeToString(records)
     }
@@ -1589,8 +1826,22 @@ class PeripheralSyncService : Service() {
         private val CHUNK_SEND_TIMEOUT = 8_000.milliseconds
         private val CHUNK_WATCHDOG_INTERVAL = 3_000.milliseconds
 
-        // See scheduleAdvertisedIdentityRefresh's own doc for why this is debounced rather
-        // than immediate.
+        // See startGattServerAndAdvertising's own doc. Generous relative to how quickly
+        // onServiceAdded normally fires (near-instant in practice) — this only ever costs real
+        // time on the rare device where the callback doesn't fire at all.
+        private val SERVICE_ADD_TIMEOUT = 5_000.milliseconds
+        // See doRefreshAdvertisedIdentity's own doc — a short, fixed wait rather than anything
+        // event-driven since stopAdvertising() exposes no "actually stopped" signal to wait on
+        // at all. Confirmed in the field as enough to stop seeing ADVERTISE_FAILED_ALREADY_STARTED
+        // from this same sequence; kept modest since this runs on the hot path of every
+        // lastLineNumber-driven refresh, unlike the much rarer GATT-server-registration case
+        // SERVICE_ADD_TIMEOUT above exists for.
+        private val ADVERTISING_RESTART_SETTLE_DELAY = 300.milliseconds
+
+        // See AdvertisingRefreshCoalescer's own doc for what this actually controls now — the
+        // coalescing window a burst of TxCommand.IdentityChanged signals collapses into one
+        // eventual doRefreshAdvertisedIdentity call, rather than refreshing immediately on
+        // every single one.
         private val ADVERTISED_IDENTITY_REFRESH_DEBOUNCE = 2_000.milliseconds
         val CLIENT_CHARACTERISTIC_CONFIG_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 

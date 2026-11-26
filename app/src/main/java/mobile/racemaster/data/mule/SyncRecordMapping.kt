@@ -67,7 +67,9 @@ fun HistoryLineEntity.toSyncRecord(raceStartedAtMillis: Long?): SyncRecord {
     )
 }
 
-private fun HistoryAction.toServerAction(): String = when (this) {
+// internal, not private, so tests can build a realistic PeerSeenRecordEntity.action/SyncRecord.action
+// wire string directly from a HistoryAction rather than duplicating this mapping by hand.
+internal fun HistoryAction.toServerAction(): String = when (this) {
     // Time Mode
     HistoryAction.SPLIT -> "Split"
     // Bibs Mode

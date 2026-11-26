@@ -136,6 +136,22 @@ class MulePullClientTest {
     }
 
     @Test
+    fun differentMaxRecordsProducesDifferentKey() {
+        val unbounded = computeRequestKey("mule-a", null, null, 42L)
+        val bounded = computeRequestKey("mule-a", null, null, 42L, maxRecords = 25)
+
+        assertTrue(unbounded != bounded)
+    }
+
+    @Test
+    fun differentCountStatusOnlyProducesDifferentKey() {
+        val general = computeRequestKey("mule-a", null, null, 42L)
+        val countStatusOnly = computeRequestKey("mule-a", null, null, 42L, countStatusOnly = true)
+
+        assertTrue(general != countStatusOnly)
+    }
+
+    @Test
     fun pullRequestEncodesRequestKeyOnTheWire() {
         val request = PullRequest(sinceLineNumber = 5L, requestKey = computeRequestKey("mule-a", null, null, 5L))
         val encoded = json.encodeToString(request)

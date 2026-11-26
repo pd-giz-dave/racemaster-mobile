@@ -18,12 +18,12 @@ import org.junit.Test
 private class UncalledPeerSeenRecordDao : PeerSeenRecordDao {
     override suspend fun insertAll(rows: List<PeerSeenRecordEntity>) = error("not used by this test")
     override suspend fun getLastMergedLineNumber(originDeviceId: String) = error("not used by this test")
+    override suspend fun getLastMergedCountStatusLineNumber(originDeviceId: String) = error("not used by this test")
     override fun observeSeenBeaconNumbers(raceGroupId: String, mode: HistoryMode): Flow<List<Int>> = flowOf(emptyList())
     override fun observeSeenBibNumbers(raceGroupId: String, mode: HistoryMode): Flow<List<Int>> = flowOf(emptyList())
     override fun observeForBeacon(raceGroupId: String, mode: HistoryMode, beaconNumber: Int): Flow<List<PeerSeenRecordEntity>> = flowOf(emptyList())
     override fun observeForBib(raceGroupId: String, mode: HistoryMode, bibNumber: Int): Flow<List<PeerSeenRecordEntity>> = flowOf(emptyList())
     override fun observeGroup(raceGroupId: String, mode: HistoryMode): Flow<List<PeerSeenRecordEntity>> = flowOf(emptyList())
-    override suspend fun deleteForOrigin(originDeviceId: String) = error("not used by this test")
 }
 
 class PeerGroupDetectorTest {

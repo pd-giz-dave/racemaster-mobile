@@ -77,6 +77,7 @@ class ModePickerViewModel(
         bluetoothStateRepository.lastPolledAtMillis,
         locationServicesEnabledFlow(locationStateRepository),
         settingsRepository.bluetoothOff,
+        bluetoothStateRepository.observeEnabled(),
         ::BtPollingStatus,
     ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BtPollingStatus())
 

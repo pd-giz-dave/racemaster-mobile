@@ -368,15 +368,17 @@ In outline the 'beacon plan' consists of:
       close-station phone is identifiable in `~racemaster`'s own device list, since it never logs
       a Bib/Time entry of its own.
 - [x] in this mode each beacon visible is shown in nearest first order, when selected
-          after confirmation, the beacons battery level is read and then its turned off,
-          the battery level and turn off time is logged for later transfer to ~racemaster for
-          analysis (the transfer via bt or the server and analysis is already implemented there)
-          — **done**: logged as an ordinary `CLOSE` history row (`CloseModeRepository`), synced
-          to the server by the existing device-sync pipeline like any other row, not a bespoke
-          endpoint. `~racemaster`'s own `progress.json` handling for these rows is still open
-          (see docs/beacon-detection-plan.md's own Part E).
+      after confirmation, the beacons battery level is read and then its turned off,
+      the battery level and turn off time is logged for later transfer to ~racemaster for
+      analysis (the transfer via bt or the server and analysis is already implemented there)
+      — **done**: logged as an ordinary `CLOSE` history row (`CloseModeRepository`), synced
+      to the server by the existing device-sync pipeline like any other row, not a bespoke
+      endpoint. `~racemaster`'s own `progress.json` handling for these rows is still open
+      (see docs/beacon-detection-plan.md's own Part E).
 - [x] this mode needs to be aware of the issued beacons and show a list of outstanding ones
-          in bib number order
+      in bib number order
+- [x] need to be able to see the peer lines pulled from nearby devices in the history
+      (as a diagnostic aid)
 
 ## Count mode
 
@@ -404,6 +406,36 @@ In outline the 'beacon plan' consists of:
       per the "Ejection bugs/tweaks" section below: an ejected beacon stays excluded from the
       count indefinitely (no cooldown) until the operator explicitly un-ejects it via its own
       link in the 'to be seen' list.
+- [x] allow for multiple count mode phones at the pen and sync between them, in particular if
+      a beacon is ejected it must be flagged as such on all phones counting beacons, do this
+      via bluetooth so its instant — **done**: builds on the existing same-mode peer-sync engine
+      (`PeerSyncEngine`/`PeerSyncRepository`) — a beacon's own eject/uneject status is now merged
+      across this device's own rows and a same-group peer's own reported rows
+      (`CountModeRepository.mergedStatusByBeacon`, ordered by wall-clock timestamp since each
+      device's own `lineNumber` sequence starts over at 1 and isn't comparable across devices),
+      so an eject on one phone shows as EJECTED on every other same-race/same-mode phone within
+      one `PeerSyncEngine` pull tick, over Bluetooth, with no server round-trip.
+- [x] a bib must be ejectable no matter what phone did the initial detection — **done**:
+      `CountModeViewModel.ejectBeacon`/`unejectBeacon` now gate on the peer-merged union/status,
+      not just this device's own local rows, and `CountModeRepository.recordEject`/`recordUneject`
+      take an `allowWithoutLocalRecord` flag so a beacon only ever counted by a peer can still be
+      ejected (and a peer's own eject un-ejected) from this phone, writing a plain
+      non-fold-targeting row with the race-wide beacon→bib mapping standing in for the bib number
+      a local row would otherwise have supplied.
+- [x] detect and rectify two count phones going out of sync with each other about beacons
+      seen/ejected (eg. after one wanders out of BLE range and back), keeping the normal
+      inter-change delta based — **done**: `DeviceInfo.countStatusDigest` carries a cheap content
+      fingerprint of a device's own whole-race Count Mode history
+      (`CountModeRepository.countStatusDigest`/`countStatusDigestForPeerRows`, a hash over every
+      COUNT_SEEN/COUNT_EJECTED/COUNT_UNEJECTED row's own lineNumber/action/note); `PeerSyncEngine`
+      compares a peer's self-reported digest against this device's own already-merged mirror of
+      it on every pull tick, even once the ordinary `since`/`lastMergedLineNumber` delta cursor
+      has already caught all the way up to that peer's `lastLineNumber` — a mismatch at that
+      point means real drift, not "haven't caught up yet". On a mismatch it calls the
+      already-existing `PeerSyncRepository.forgetOrigin` (previously unused by anything) to wipe
+      this device's mirror of that one peer and re-pulls everything from scratch, safe and
+      idempotent per that function's own doc — the everyday path is untouched, still a plain
+      delta pull.
 
 # Tweaks/Bugs
 
@@ -504,13 +536,56 @@ In outline the 'beacon plan' consists of:
   gone.
 - [x] drop the Eject All link, its redundant now there is a RESET option — **done**.
 
+## Factor out all the BLe stuff so there is a single source of truth
+
+- [x] there should be a single thread responsible to bt tx and another for rx, with a queueing
+  system to drive them, so then not possible to get advert race conditions and the threads
+  can easily serialise operations with appropriate time gaps
+
 # ToDo
+
+## Tweaks
+
+- [ ] amalgamate Bibs, Count and Close modes into a single Bibs mode that is sensitive to location,
+      the location repertoire is: pen, start, CPn, finish, close and the location implies the mode,
+      pen==count, start==start, CPn==cp, finish==finish,
+      the 'relocate' link in bibs mode should be renamed 'move' and allow moving to/from any of
+      these locations and their implied modes, the location drop-down in setup race should include
+      'Pen'
+- [ ] implement the nearby peer sync mechanism for all modes except close
+- [ ] add the race name as a feedback line to the setup device screen
+- [ ] shorten the app name in the title bar from 'RaceMaster Mobile' to 'RM Mobile' 
 
 ## Factor out all the BLe stuff so there is a single source of truth
 
-- [ ] Mule mode uses BLE to transport data when there is no mobile signal
-- [ ] Other modes use BLE to detect nearby peers
-- [ ] Document how all this hangs together so a niaive code reader can work out what is going on
+- [ ] Mule mode uses BLE to transport data when there is no mobile signal,
+      Other modes use BLE to detect nearby peers,
+      Document how all this hangs together so a niaive code reader can work out what is going on
+- [ ] refreshing the advertised payload (lastLineNumber etc.) currently tears the whole
+      advertising set down and brings up a new one (stopAdvertising + startAdvertising), which
+      gets issued a brand new random BLE address immediately rather than waiting for the normal
+      ~10+ minute rotation — confirmed live via raw Bluetooth stack logs. The coalescing fix
+      only reduces how often this happens; it doesn't stop a device's address from still
+      changing on every restart. BluetoothLeAdvertiser.startAdvertisingSet/AdvertisingSet.
+      setAdvertisingData (Android 8+) can update the broadcast payload without a full teardown,
+      which would avoid the address churn at the source — bigger change (new API surface,
+      minSdk 24 compatibility to keep working on older devices), worth doing separately
+- [ ] PeripheralSyncService's self-healing (handleEnsureUp) only retries advertising when
+      gattServer is null or isAdvertising is false, and isAdvertising only ever flips false
+      inside AdvertiseCallback.onStartFailure or an explicit stopAdvertising() call — so a
+      native BLE stack stall that never calls back at all (neither onStartSuccess nor
+      onStartFailure) leaves isAdvertising stuck stale at true forever, invisible to every
+      retry/warning path that exists today (including BluetoothStateRepository's "5
+      consecutive failures -> restart the phone" warning, since that also needs a reported
+      failure to count). Suspected live: on the beacon-tracking field test, one phone's
+      advertiser went fully dark — stopped being seen by its peer entirely — coincident with a
+      cluster of status=133 connection collisions, and only recovered after a force-stop +
+      relaunch, not via any self-healing; could not be conclusively confirmed via logs (logcat
+      ring-buffer eviction under heavy ambient BLE scan traffic). Add a callback-independent
+      liveness check: after issuing startAdvertising(), if neither onStartSuccess nor
+      onStartFailure has fired within a few seconds, treat it as failed (log it, feed
+      recordAdvertisingFailure(), and let the existing retry loop take it from there) instead
+      of trusting the stale isAdvertising flag indefinitely
 
 ## Count mode
 
@@ -520,10 +595,17 @@ In outline the 'beacon plan' consists of:
       web app, beacons not counted can be determined from the progress.json file
 - [ ] bibs retired at CPn should not be expected to be seen at CPn+ or the finish, but should
       be expected at the close station, this is irrespective of the timing method
-- [ ] allow for multiple count mode phones at the pen and sync between them, in particular if
-      a beacon is ejected it must be flagged as such on all phones counting beacons, do this
-      via bluetooth so its instant
-- [ ] a bib must be ejectable no matter what phone did the initial detection
+- [ ] count mode lines need to follow the red->orange->green colour scheme to reflect not sync'd
+      picked up by a mule, sync'd to the server/sink
+- [ ] add an "Ejected" heading above the ejected beacons list
+- [ ] add a "Not Seen" heading below the "n unique beacons seen" line and above the 
+      "None - every issued beacon has been seen" line
+- [ ] the wording of "0 of 5 yet to be seen" is confusing, say something more specific when all
+      have been seen
+- [ ] CountUnejected lines should contain the bib number and ref line to the ejection (if it
+      is local) 
+- [ ] move the peer activity view from the count mode screen to the history screen, and add a
+      delete facility (so forces a re-sync)
 
 ## Start line
 
@@ -627,8 +709,8 @@ from the browser (as that is not universally available). This is two-way, so the
 send data to the phone via its server and the other modes in the phone can pick it up from there.
 
 In fact, make this local server always the way other modes send/receive data, and when the phone
-is online it just relays to/from the remote server from/to the local one. The the web-browser
-bluetooth stuff can be dropped.
+is online it just relays to/from the remote server from/to the local one. The web-browser
+bluetooth stuff can then be dropped.
 
 An auto way to detect the phone when it connects to the dongle Wifi would be nice,
 if not it can show its address and that be entered into the web-app manually.

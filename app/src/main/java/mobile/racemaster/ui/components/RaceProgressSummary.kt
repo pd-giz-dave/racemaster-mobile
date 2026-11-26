@@ -75,6 +75,7 @@ fun RaceProgressSummary(
     onGoToLocation: ((String) -> Unit)? = null,
 ) {
     ServerStatusLine(serverStatus)
+    BluetoothRadioStatusLine(btPollingStatus)
     BtPollingStatusLine(btPollingStatus)
     if (!deviceName.isNullOrBlank()) {
         Text(text = "Device name: $deviceName", style = MaterialTheme.typography.labelMedium)

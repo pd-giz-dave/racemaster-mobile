@@ -9,6 +9,8 @@ import mobile.racemaster.data.db.dao.RaceDao
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryLineEntity
 import mobile.racemaster.data.db.entity.HistoryMode
+import mobile.racemaster.data.db.entity.PeerSeenRecordEntity
+import mobile.racemaster.data.mule.toHistoryAction
 
 // Optional trailing " seen=<n> of=<m>" accepted (and always written — see recordCount) alongside
 // the bare "beacon=<n>" this regex has always matched, so a pre-this-change row (bare form) still
@@ -70,6 +72,82 @@ fun statusByBeacon(rawCurrentSegmentRows: List<HistoryLineEntity>): Map<Int, Cou
         }
     }.toMap()
 }
+
+/** Cross-device counterpart of [statusByBeacon] (TODO.md: "if a beacon is ejected it must be
+ *  flagged as such on all phones counting beacons ... do this via bluetooth so its instant") —
+ *  merges this device's own unfolded current-segment rows ([localRows], see
+ *  [CountModeRepository.observeStatusEvents]) with a same-group peer's own already-merged rows
+ *  ([peerRows], see [mobile.racemaster.data.peersync.PeerSyncRepository.observeGroup]), ordered by
+ *  wall-clock [HistoryLineEntity.timestampMillis]/[PeerSeenRecordEntity.timestampMillis] rather
+ *  than [HistoryLineEntity.lineNumber] the way [statusByBeacon] itself orders — unlike a single
+ *  device's own gapless, clock-skew-immune sequence number, lineNumber starts over at 1 on every
+ *  device and carries no meaning once rows from more than one device are mixed together;
+ *  timestamp is the only ordering they share (same reasoning
+ *  [mobile.racemaster.data.peersync.PeerSyncRepository]'s own `latestOriginByKey` already applies
+ *  for "most recent reporting peer"). A beacon eject/uneject race between two phones is resolved
+ *  the same "whichever happened last, by clock" way a same-device race already was — there is no
+ *  stronger ordering available across independent devices' clocks, same tradeoff this whole
+ *  feature already accepts for "most recent reporting peer" elsewhere. */
+fun mergedStatusByBeacon(localRows: List<HistoryLineEntity>, peerRows: List<PeerSeenRecordEntity>): Map<Int, CountBeaconStatus> {
+    data class Event(val beaconNumber: Int, val action: HistoryAction, val timestampMillis: Long)
+    val localEvents = localRows.mapNotNull { row ->
+        if (row.action != HistoryAction.COUNT_SEEN && row.action != HistoryAction.COUNT_EJECTED && row.action != HistoryAction.COUNT_UNEJECTED) {
+            return@mapNotNull null
+        }
+        parseBeaconCount(row.note)?.let { Event(it, row.action, row.timestampMillis) }
+    }
+    val peerEvents = peerRows.mapNotNull { row ->
+        // row.action is the wire string (e.g. "CountEjected" — see toServerAction/toHistoryAction's
+        // own doc), never the HistoryAction enum's own .name ("COUNT_EJECTED") — HistoryAction.valueOf
+        // here silently failed on every single peer row via runCatching{}.getOrNull(), so no peer
+        // eject/uneject/seen ever once reached this merge; confirmed live as a same-group eject
+        // that synced correctly into peer_seen_records but never once showed as ejected in the UI.
+        val action = row.toHistoryAction()
+        if (action != HistoryAction.COUNT_SEEN && action != HistoryAction.COUNT_EJECTED && action != HistoryAction.COUNT_UNEJECTED) return@mapNotNull null
+        row.beaconNumber?.let { Event(it, action, row.timestampMillis) }
+    }
+    val latest = LinkedHashMap<Int, Event>()
+    for (event in (localEvents + peerEvents).sortedBy { it.timestampMillis }) {
+        latest[event.beaconNumber] = event
+    }
+    return latest.mapNotNull { (beaconNumber, event) ->
+        when (event.action) {
+            HistoryAction.COUNT_EJECTED -> beaconNumber to CountBeaconStatus.EJECTED
+            HistoryAction.COUNT_UNEJECTED -> beaconNumber to CountBeaconStatus.WAS_EJECTED
+            else -> null
+        }
+    }.toMap()
+}
+
+/** Count Mode peer-sync's own filtered view of [rawCurrentSegmentRows] — just the COUNT_SEEN/
+ *  COUNT_EJECTED/COUNT_UNEJECTED rows a peer's "seen" union (see
+ *  [mobile.racemaster.data.peersync.PeerSyncRepository.extractBeaconNumber]/
+ *  observeSeenBeaconNumbers, which only ever look at these three actions) actually needs — never
+ *  the Ping/Location/Mode-start/etc. noise the race's *full* history otherwise carries (confirmed
+ *  live: a Count Mode peer-sync pull reusing the general relay-sync computeRecordsPayload path
+ *  was transferring routine Ping keepalive rows alongside the real seen/ejected events, wasting
+ *  BLE chunk budget on data no Count Mode reader ever consults). A pure top-level function (like
+ *  [statusByBeacon] above), not an instance method, so it's directly unit-testable against a
+ *  plain row list without a fake DAO — [CountModeRepository.countStatusEventsSince] is a thin
+ *  wrapper supplying [rawCurrentSegmentRows] from [CountModeRepository.currentSegmentRaw].
+ *  [sinceLineNumber]/[maxRecords] page the same way computeRecordsPayload's general path does —
+ *  see PullRequest.maxRecords's own doc. */
+fun countStatusEventsFrom(rawCurrentSegmentRows: List<HistoryLineEntity>, sinceLineNumber: Long, maxRecords: Int?): List<HistoryLineEntity> {
+    val relevant = rawCurrentSegmentRows.filter {
+        (it.action == HistoryAction.COUNT_SEEN || it.action == HistoryAction.COUNT_EJECTED || it.action == HistoryAction.COUNT_UNEJECTED) &&
+            it.lineNumber > sinceLineNumber
+    }.sortedBy { it.lineNumber }
+    return if (maxRecords != null) relevant.take(maxRecords) else relevant
+}
+
+/** The highest lineNumber among [countStatusEventsFrom]'s own filtered rows (0 if none) — what a
+ *  Count Mode peer-sync pull compares its own cursor against instead of the race's raw
+ *  DeviceInfo.lastLineNumber, which also counts every Ping/Location/etc. line this feature has no
+ *  use for and would otherwise never stop reporting as "something new to pull". */
+fun lastCountStatusLineNumberFrom(rawCurrentSegmentRows: List<HistoryLineEntity>): Long =
+    rawCurrentSegmentRows
+        .filter { it.action == HistoryAction.COUNT_SEEN || it.action == HistoryAction.COUNT_EJECTED || it.action == HistoryAction.COUNT_UNEJECTED }
+        .maxOfOrNull { it.lineNumber } ?: 0L
 
 /** Count Mode's own write path — same shape as [CloseModeRepository]. A beacon is only ever
  *  counted once per race *since the last Reset* (unlike Close, re-presentation isn't a concern
@@ -197,10 +275,21 @@ class CountModeRepository(
      *  A no-op for any other beacon (never seen, or already EJECTED) — the caller
      *  (CountModeViewModel.ejectBeacon) only ever offers this from the seen list or a
      *  WAS_EJECTED tag, but this stays safe to call either way, mirroring undoMostRecent's own
-     *  defensive `?: return@withTransaction`. */
+     *  defensive `?: return@withTransaction`.
+     *
+     *  TODO.md "a bib must be ejectable no matter what phone did the initial detection": a beacon
+     *  only ever counted by a same-group peer, never locally, has no local COUNT_SEEN [target]
+     *  row for this device to point refLineNumber at — [allowWithoutLocalRecord] is the caller's
+     *  (CountModeViewModel) own assurance, already verified against the peer-merged union/status,
+     *  that ejecting it anyway is legitimate; this device then writes a plain, non-fold-targeting
+     *  COUNT_EJECTED row (same shape the WAS_EJECTED re-eject case already uses) with [fallbackBibNumber]
+     *  (the race-wide beacon→bib mapping, not scoped to any one device) standing in for the bib
+     *  number a local [target] row would otherwise have supplied. */
     suspend fun recordEject(
         raceId: Long,
         beaconNumber: Int,
+        fallbackBibNumber: Int? = null,
+        allowWithoutLocalRecord: Boolean = false,
         timestampMillis: Long = System.currentTimeMillis(),
     ) {
         db.withTransaction {
@@ -209,7 +298,10 @@ class CountModeRepository(
                 it.action == HistoryAction.COUNT_SEEN && parseBeaconCount(it.note) == beaconNumber
             }
             val race = raceDao.getById(raceId) ?: return@withTransaction
-            if (target == null && statusByBeacon(currentSegmentRaw(raw))[beaconNumber] != CountBeaconStatus.WAS_EJECTED) {
+            if (target == null &&
+                statusByBeacon(currentSegmentRaw(raw))[beaconNumber] != CountBeaconStatus.WAS_EJECTED &&
+                !allowWithoutLocalRecord
+            ) {
                 return@withTransaction
             }
             historyLineDao.insert(
@@ -217,7 +309,7 @@ class CountModeRepository(
                     raceId = raceId,
                     mode = HistoryMode.COUNT,
                     action = HistoryAction.COUNT_EJECTED,
-                    bibNumber = target?.bibNumber,
+                    bibNumber = target?.bibNumber ?: fallbackBibNumber,
                     splitNumber = null,
                     lineNumber = race.nextLineNumber,
                     note = "beacon=$beaconNumber",
@@ -233,15 +325,22 @@ class CountModeRepository(
      *  own doc for why this is a plain status marker, not another refLineNumber/undo-fold row. A
      *  no-op unless [beaconNumber]'s current [statusByBeacon] status is actually EJECTED — the
      *  caller (CountModeViewModel.unejectBeacon) only ever offers this for an ejected beacon, but
-     *  this stays safe to call either way. */
+     *  this stays safe to call either way. [allowWithoutLocalRecord] mirrors [recordEject]'s own
+     *  parameter — a beacon ejected only by a same-group peer has no local COUNT_EJECTED row for
+     *  this device's own [statusByBeacon] to see, so without it this device could never un-eject
+     *  a peer's own ejection (TODO.md's "flagged as such on all phones" cuts both ways: the
+     *  un-eject link that flag offers must actually work from any phone too). */
     suspend fun recordUneject(
         raceId: Long,
         beaconNumber: Int,
+        allowWithoutLocalRecord: Boolean = false,
         timestampMillis: Long = System.currentTimeMillis(),
     ) {
         db.withTransaction {
             val raw = historyLineDao.getAllForRaceAndMode(raceId, HistoryMode.COUNT)
-            if (statusByBeacon(currentSegmentRaw(raw))[beaconNumber] != CountBeaconStatus.EJECTED) return@withTransaction
+            if (statusByBeacon(currentSegmentRaw(raw))[beaconNumber] != CountBeaconStatus.EJECTED && !allowWithoutLocalRecord) {
+                return@withTransaction
+            }
             val race = raceDao.getById(raceId) ?: return@withTransaction
             historyLineDao.insert(
                 HistoryLineEntity(
@@ -295,9 +394,33 @@ class CountModeRepository(
         historyLineDao.observeAllForRaceAndMode(raceId, HistoryMode.COUNT).map(::currentSegment)
 
     /** See [statusByBeacon]/[currentSegmentRaw]'s own docs — a separate, unfolded read of the
-     *  same current-segment window [observeCounts] folds away the eject/uneject rows from. */
-    fun observeStatusByBeacon(raceId: Long): Flow<Map<Int, CountBeaconStatus>> =
-        historyLineDao.observeAllForRaceAndMode(raceId, HistoryMode.COUNT).map { statusByBeacon(currentSegmentRaw(it)) }
+     *  same current-segment window [observeCounts] folds away the eject/uneject rows from.
+     *  Returns the raw rows themselves (not [statusByBeacon]'s own collapsed map) so
+     *  [CountModeViewModel] can merge them with a same-group peer's own equivalent rows via
+     *  [mergedStatusByBeacon] — see that function's own doc for why the merge needs raw,
+     *  timestamped events rather than either side's own already-collapsed-by-lineNumber result. */
+    fun observeStatusEvents(raceId: Long): Flow<List<HistoryLineEntity>> =
+        historyLineDao.observeAllForRaceAndMode(raceId, HistoryMode.COUNT).map(::currentSegmentRaw)
+
+    /** Count Mode peer-sync's own filtered view of [currentSegmentRaw] — just the COUNT_SEEN/
+     *  COUNT_EJECTED/COUNT_UNEJECTED rows a peer's "seen" union (see
+     *  [mobile.racemaster.data.peersync.PeerSyncRepository.extractBeaconNumber]/
+     *  observeSeenBeaconNumbers, which only ever look at these three actions) actually needs —
+     *  never the Ping/Location/Mode-start/etc. noise the race's *full* history otherwise carries
+     *  (confirmed live: a Count Mode peer-sync pull reusing the general relay-sync
+     *  computeRecordsPayload path was transferring routine Ping keepalive rows alongside the real
+     *  seen/ejected events, wasting BLE chunk budget on data no Count Mode reader ever consults).
+     *  [sinceLineNumber]/[maxRecords] page the same way computeRecordsPayload's general path
+     *  does — see PullRequest.maxRecords's own doc. */
+    suspend fun countStatusEventsSince(raceId: Long, sinceLineNumber: Long, maxRecords: Int?): List<HistoryLineEntity> =
+        countStatusEventsFrom(currentSegmentRaw(historyLineDao.getAllForRaceAndMode(raceId, HistoryMode.COUNT)), sinceLineNumber, maxRecords)
+
+    /** The highest lineNumber among [countStatusEventsSince]'s own filtered rows (0 if none) —
+     *  what a Count Mode peer-sync pull compares its own cursor against instead of the race's raw
+     *  DeviceInfo.lastLineNumber, which also counts every Ping/Location/etc. line this feature has
+     *  no use for and would otherwise never stop reporting as "something new to pull". */
+    suspend fun lastCountStatusLineNumber(raceId: Long): Long =
+        lastCountStatusLineNumberFrom(currentSegmentRaw(historyLineDao.getAllForRaceAndMode(raceId, HistoryMode.COUNT)))
 
     fun observeUnsyncedCount(raceId: Long): Flow<Int> =
         historyLineDao.observeUnsyncedCountForRace(raceId, HistoryMode.COUNT)

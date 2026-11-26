@@ -25,8 +25,6 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeout
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
@@ -259,18 +257,21 @@ class MuleSyncEngine(
     // started) until the first startScan() actually launches one.
     private var scanStartedAtMillis: Long = 0L
 
-    // Caps how many GATT connects (first-sighting resolves and pullAllVisibleDevices' own
-    // periodic re-checks alike) this engine has in flight at once, app-wide. Before this
-    // existed, every newly-sighted peer got its own unthrottled connect the instant it was
-    // seen — fine for one or two peers, but several phones sitting near each other (the
-    // common case: a Bibs, a Time, and a Mule phone all at the finish line) all get sighted
-    // in the same scan burst, so their connects landed on the radio simultaneously. Android
-    // BLE centrals only support a handful of concurrent GATT links (chipset-dependent, often
-    // ~4-7) shared with this phone's own simultaneous scanning/advertising/GATT-server roles,
-    // so that stampede saturated it, connects piled up until MulePullClient's own connect
-    // timeout, and devices sat at "Discovering…" indefinitely — confirmed in testing as
-    // "sometimes works" with 3 phones, "never resolves" with 6.
-    private val connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
+    // GATT connects (first-sighting resolves and pullAllVisibleDevices' own periodic
+    // re-checks alike) are bounded app-wide by MulePullClient.sharedConnectSemaphore now,
+    // not by anything this engine owns itself — see that field's own doc. Before that existed,
+    // this engine held its own independent permit pool, and every newly-sighted peer got its
+    // own unthrottled connect the instant it was seen — fine for one or two peers, but several
+    // phones sitting near each other (the common case: a Bibs, a Time, and a Mule phone all at
+    // the finish line) all get sighted in the same scan burst, so their connects landed on the
+    // radio simultaneously. Android BLE centrals only support a handful of concurrent GATT
+    // links (chipset-dependent, often ~4-7) shared with this phone's own simultaneous
+    // scanning/advertising/GATT-server roles, so that stampede saturated it, connects piled up
+    // until MulePullClient's own connect timeout, and devices sat at "Discovering…"
+    // indefinitely — confirmed in testing as "sometimes works" with 3 phones, "never resolves"
+    // with 6. This engine's own former permit pool was separate from PeerSyncEngine's — up to
+    // two concurrent connects (one from each engine, to two different peers) could still run at
+    // once; sharing one pool in MulePullClient itself closes that.
 
     // Push-phase busy flag — see pushIfNeeded. A genuinely separate MutableStateFlow from
     // busyFlow above, not just a second reader of it: pulling (BLE, can legitimately run for up
@@ -560,8 +561,8 @@ class MuleSyncEngine(
     // and never drift apart on their own, since nothing here ever re-randomizes a fixed, repeated
     // delay. That means their scan/advertise/GATT radio activity can keep landing on the same
     // instant, tick after tick, rather than just occasionally — a standing, avoidable source of
-    // contention on top of whatever this phone's own connectSemaphore is already managing for
-    // its own connects. Re-randomizing the delay on every single iteration (not just once at
+    // contention on top of whatever MulePullClient's own sharedConnectSemaphore is already
+    // managing for this phone's own connects. Re-randomizing the delay on every single iteration (not just once at
     // startup) is what actually breaks that lock: two loops that started in phase would still be
     // in phase after only one jittered wait, so this has to be recomputed every time around, same
     // reasoning FIRST_SIGHTING_JITTER already applies to a newly-discovered device's own first
@@ -580,8 +581,9 @@ class MuleSyncEngine(
     // chained after the pull loop's own autoPullIfArmed() any more (see git history: it used to
     // be the last step of that same function, called from startAutoSyncLoop). Confirmed in the
     // field: with several BLE peers visible, pullAllVisibleDevices can legitimately run for tens
-    // of seconds (MAX_CONCURRENT_CONNECTS serializes one connect at a time, each bounded by its
-    // own CONNECT_TIMEOUT/PULL_TIMEOUT, capped overall by OVERALL_TICK_TIMEOUT at 90s) — with
+    // of seconds (MulePullClient.MAX_CONCURRENT_CENTRAL_CONNECTS serializes one connect at a
+    // time app-wide, each bounded by its own CONNECT_TIMEOUT/PULL_TIMEOUT, capped overall by
+    // OVERALL_TICK_TIMEOUT at 90s) — with
     // push chained after it, this device's own newly-recorded rows sat unconfirmed (red) for a
     // full pull cycle before pushToServer's own status check even got a chance to run, then
     // another full cycle again before that same check could come back around and actually
@@ -705,8 +707,9 @@ class MuleSyncEngine(
         // Several peers can all be first-sighted within the same scan burst (the common
         // "several phones already sitting near each other" case) — each spawns its own
         // independent launch{} in startScan(), so without this jitter they'd all queue on
-        // connectSemaphore in the same instant and release in lockstep every time a permit
-        // frees, rather than spreading naturally across FIRST_SIGHTING_JITTER's window.
+        // MulePullClient's shared connect bound in the same instant and release in lockstep
+        // every time a permit frees, rather than spreading naturally across
+        // FIRST_SIGHTING_JITTER's window.
         delay(Random.nextLong(FIRST_SIGHTING_JITTER.inWholeMilliseconds))
         val device = discoveredFlow.value[key] ?: return
         // Whatever progress this Mule is currently holding (BLE delivery or direct server
@@ -719,23 +722,23 @@ class MuleSyncEngine(
         // Falls back to the raw key (a BLE address, pre-resolve) when there's no name yet —
         // see BluetoothStateRepository.recordConnectAttempt's own doc for what this identifies.
         val peerLabel = device.deviceName.ifBlank { key }
-        // Shares connectSemaphore with pullAllVisibleDevices' own connects — see that
-        // function's own comment at its withPermit call for why one bound has to cover both.
-        // Temporary/diagnostic logging around this connect — see MulePullClient.scanForDevices'
-        // own doc for the matching raw-scan-level logging; together these two spots make a
-        // silently-swallowed runCatching failure (previously invisible from outside the app)
-        // distinguishable from a device that never scans in at all.
+        // muleRepository.readDeviceInfo below now gates its own concurrent-connect bound
+        // inside MulePullClient — see sharedConnectSemaphore's own doc — shared app-wide with
+        // pullAllVisibleDevices' own connects and PeerSyncEngine's, so nothing needs to be
+        // acquired at this call site itself. Temporary/diagnostic logging around this connect —
+        // see MulePullClient.scanForDevices' own doc for the matching raw-scan-level logging;
+        // together these two spots make a silently-swallowed runCatching failure (previously
+        // invisible from outside the app) distinguishable from a device that never scans in at
+        // all.
         Log.d(TAG, "first-sighting connect attempt: key=$key")
-        val result = connectSemaphore.withPermit {
-            runCatching {
-                muleRepository.readDeviceInfo(
-                    device.requiredAdvertisement,
-                    progressToDeliver = heldProgress?.toPayload(), progressRaceLabel = heldProgress?.raceLabel,
-                )
-            }
-                .recordingAttempt(peerLabel)
-                .onFailure { Log.w(TAG, "first-sighting connect failed: key=$key", it) }
+        val result = runCatching {
+            muleRepository.readDeviceInfo(
+                device.requiredAdvertisement,
+                progressToDeliver = heldProgress?.toPayload(), progressRaceLabel = heldProgress?.raceLabel,
+            )
         }
+            .recordingAttempt(peerLabel)
+            .onFailure { Log.w(TAG, "first-sighting connect failed: key=$key", it) }
         val info = result.getOrNull()
         if (info == null) {
             markUnreachable(key, device, result.exceptionOrNull())
@@ -910,8 +913,8 @@ class MuleSyncEngine(
             // startAutoSyncLoop) is one coroutine, so if this call ever failed to return (any
             // unbounded suspend anywhere in its call chain, present or future), every future
             // pull tick would wedge forever, with nothing left to recover it. Deliberately
-            // generous: with several peers queued behind connectSemaphore's small permit pool,
-            // a legitimate tick can take a while without that being a bug — which is exactly
+            // generous: with several peers queued behind MulePullClient's shared connect
+            // permit pool, a legitimate tick can take a while without that being a bug — which is exactly
             // why push no longer waits behind this (see startPushLoop's own doc).
             try {
                 withTimeout(OVERALL_TICK_TIMEOUT) { pullAllVisibleDevices() }
@@ -1019,12 +1022,11 @@ class MuleSyncEngine(
             ) {
                 continue
             }
-            // Bounds how many devices this phone is actively GATT-connected to at once —
-            // shared with refreshDeviceInfo's own first-sighting connects below, since an
-            // unbounded pile of simultaneous connects (this loop's own connects included) is
-            // what saturates the radio and stalls resolution entirely once more than a
-            // handful of peers are visible at once (see MAX_CONCURRENT_CONNECTS's own doc).
-            connectSemaphore.withPermit {
+            // Concurrent connects app-wide (across this engine and PeerSyncEngine) are now
+            // bounded inside MulePullClient itself (see its sharedConnectSemaphore doc) — every
+            // muleRepository call below routes through one of its gated primitives, so nothing
+            // extra needs to be acquired at this call site.
+            run {
                 // This peer is being freshly checked this tick — drop whatever relay rows it
                 // contributed last time so they don't linger alongside (or diverge from) what it's
                 // about to report now; replaced below if it still has any to offer.
@@ -1070,7 +1072,7 @@ class MuleSyncEngine(
                 val freshInfo = periodicResult.getOrNull()
                 if (freshInfo == null) {
                     markUnreachable(key, device, periodicResult.exceptionOrNull())
-                    return@withPermit
+                    return@run
                 }
                 val since = muleRepository.lastPulledLineNumber(freshInfo.deviceId, freshInfo.raceLabel)
                 // See effectiveSince's own doc for what a reset here means and why. Computed
@@ -1258,7 +1260,7 @@ class MuleSyncEngine(
         // schedule variance on top of everything else already competing for this radio. Only
         // widen this after real field evidence shows the current spread isn't enough, not
         // preemptively — this loop's timing has a documented history of causing real crashes
-        // when tuned too aggressively (see MAX_CONCURRENT_CONNECTS' own doc).
+        // when tuned too aggressively (see MulePullClient.sharedConnectSemaphore's own doc).
         private const val AUTO_SYNC_JITTER_FRACTION = 0.125
 
         // How often startProgressPollLoop() above hits the server directly for progress —
@@ -1305,24 +1307,9 @@ class MuleSyncEngine(
         // either clears the hangs or doesn't.
         private val SCAN_REFRESH_INTERVAL = 90.seconds
 
-        // Dropped from 2 to 1 (fully serializing every central-role connect) as a direct test —
-        // TODO.md's Sony-Mule investigation traced Kable's own internal disconnect() (see
-        // Connection.kt: it waits up to disconnectTimeout, 5s, for taskScope's own in-flight
-        // tasks — including a discoverServices() call — to finish before it ever calls
-        // gatt.disconnect()) logging "Timed out after 5s waiting for disconnect" back to the
-        // exact same phenomenon behind the original diagnosis: discoverServices() occasionally
-        // getting no OS callback at all, this time surfacing at the *disconnect* end of a
-        // connection's life instead of the connect end (and, when it does, skipping the clean
-        // disconnect handshake for a forceful close instead — plausibly compounding whatever
-        // makes the next attempt's odds worse). This phone's own concurrent scanning,
-        // advertising, and GATT-server roles (serving other phones' pulls) already compete for
-        // one controller even at 2; fully serializing central-role connects is the cheapest,
-        // most reversible way to test whether reduced contention is what lets discoverServices()
-        // complete reliably. Revisit upward only once real data shows this actually helped.
-        private const val MAX_CONCURRENT_CONNECTS = 1
-
         // See refreshDeviceInfo's own doc for why first-sighting connects need to be spread
-        // out even with connectSemaphore already bounding how many run at once.
+        // out even with MulePullClient.sharedConnectSemaphore already bounding how many run at
+        // once, app-wide.
         private val FIRST_SIGHTING_JITTER = 2.seconds
 
         // See autoPullIfArmed's own doc for why this ceiling exists at all.

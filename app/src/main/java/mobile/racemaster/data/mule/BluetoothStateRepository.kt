@@ -2,9 +2,12 @@ package mobile.racemaster.data.mule
 
 import android.bluetooth.BluetoothManager
 import android.content.Context
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flow
 
 /** A rolling snapshot of this device's own recent BLE *central* connect attempts (see
  *  [BluetoothStateRepository.recordConnectAttempt]) — every [MuleRepository.readDeviceInfo]/
@@ -80,12 +83,21 @@ data class ConnectHealth(
  *  indistinguishable from "nobody's nearby yet" — since nothing surfaced this setting outside
  *  the one screen that can actually flip it. Takes priority over [advertisingWarning] when both
  *  are set (advertising never even attempts to start while this is on, so any
- *  [advertisingWarning] showing is stale, from before it was switched on). */
+ *  [advertisingWarning] showing is stale, from before it was switched on).
+ *
+ *  [radioEnabled] mirrors [BluetoothStateRepository.isEnabled] (the OS radio itself, via
+ *  [BluetoothStateRepository.observeEnabled]) — distinct from [bluetoothOff] above, which is
+ *  this app's own in-app kill switch. Same gap confirmed in the field as the in-app one: a fresh
+ *  phone whose Bluetooth was simply never turned on has bluetoothOff == false (kill switch not
+ *  engaged, default) but the radio itself off, so nothing is actually being advertised despite
+ *  that. Defaults true, same "assume fine before the first poll lands" reasoning as
+ *  [locationServicesEnabled]. */
 data class BtPollingStatus(
     val advertisingWarning: String? = null,
     val lastPolledAtMillis: Long? = null,
     val locationServicesEnabled: Boolean = true,
     val bluetoothOff: Boolean = false,
+    val radioEnabled: Boolean = true,
 )
 
 /** Whether the device's Bluetooth radio is currently on — checked before starting a Kable
@@ -96,6 +108,24 @@ class BluetoothStateRepository(private val context: Context) {
     fun isEnabled(): Boolean {
         val manager = context.getSystemService(BluetoothManager::class.java) ?: return false
         return manager.adapter?.isEnabled == true
+    }
+
+    /** A live, polled view of [isEnabled] — for a UI status line to combine against, rather than
+     *  the one-shot read every other caller uses (gate loops that just need the current value on
+     *  each of their own poll ticks). Confirmed in the field as a real gap: Mule Mode's own
+     *  "Bluetooth: ON/OFF — visible to nearby devices" status line used to be driven entirely by
+     *  [mobile.racemaster.data.settings.SettingsRepository.bluetoothOff] — this app's own in-app
+     *  kill switch — with no check of the actual OS radio at all, so a fresh phone whose
+     *  Bluetooth had simply never been turned on (kill switch off by default, radio also off)
+     *  showed "ON — visible to nearby Mule devices" while genuinely broadcasting nothing.
+     *  Same poll interval as [mobile.racemaster.data.peersync.PeerSyncEngine]'s/
+     *  [mobile.racemaster.data.beacon.BeaconScanEngine]'s own bluetoothOff gate loops, since
+     *  that's already the established cadence this app checks this exact value on elsewhere. */
+    fun observeEnabled(): Flow<Boolean> = flow {
+        while (true) {
+            emit(isEnabled())
+            delay(RADIO_STATE_POLL_INTERVAL)
+        }
     }
 
     // Tracks whether PeripheralSyncService's own BLE advertising (this device being visible to
@@ -126,7 +156,7 @@ class BluetoothStateRepository(private val context: Context) {
         consecutiveAdvertisingFailures++
         if (consecutiveAdvertisingFailures >= ADVERTISING_FAILURE_THRESHOLD) {
             advertisingWarningFlow.value =
-                "Not visible to nearby devices — if turning Bluetooth off/on doesn't fix it, restart the phone"
+                "Not visible to nearby devices — restart the phone to fix it (a Bluetooth off/on toggle alone won't)"
         }
     }
 
@@ -247,6 +277,7 @@ class BluetoothStateRepository(private val context: Context) {
     private companion object {
         const val ADVERTISING_FAILURE_THRESHOLD = 5
         const val CONNECT_HEALTH_WINDOW = 20
+        const val RADIO_STATE_POLL_INTERVAL = 3_000L
     }
 }
 

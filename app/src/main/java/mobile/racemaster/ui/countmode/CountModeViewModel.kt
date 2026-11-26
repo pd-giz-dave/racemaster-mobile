@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import mobile.racemaster.data.beacon.BeaconScanDecoder
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.HistoryMode
+import mobile.racemaster.data.db.entity.PeerSeenRecordEntity
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.data.mule.LocationStateRepository
@@ -36,16 +37,19 @@ import mobile.racemaster.data.mule.ProgressRepository
 import mobile.racemaster.data.mule.ServerStatus
 import mobile.racemaster.data.mule.ServerStatusRepository
 import mobile.racemaster.data.mule.ServerStatusState
+import mobile.racemaster.data.mule.toHistoryAction
 import mobile.racemaster.data.peersync.PeerGroupDetector
 import mobile.racemaster.data.peersync.PeerSyncEngine
 import mobile.racemaster.data.peersync.PeerSyncRepository
 import mobile.racemaster.data.repository.CountBeaconStatus
 import mobile.racemaster.data.repository.CountModeRepository
 import mobile.racemaster.data.repository.RaceRepository
+import mobile.racemaster.data.repository.mergedStatusByBeacon
 import mobile.racemaster.data.repository.parseBeaconCount
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.di.appContainer
+import mobile.racemaster.ui.bibsmode.displayName
 import mobile.racemaster.ui.btPollingStatusFlow
 import mobile.racemaster.ui.deviceNameFlow
 
@@ -62,6 +66,34 @@ data class OutstandingBeaconUi(
 // existed. A peer-sourced entry has no local row to target, so CountModeScreen must not offer
 // its own "Eject" link for one (ejectBeacon would just silently no-op against it).
 data class SeenBeaconUi(val bibNumber: Int?, val beaconNumber: Int, val originDeviceName: String? = null)
+
+// TODO.md "need to be able to see the peer lines pulled from nearby devices in the history (as a
+// diagnostic aid)" — the raw feed [peerStatusRowsFlow] already pulls for mergedStatusByBeacon's
+// own merge, now also surfaced to CountModeScreen directly rather than only ever being folded
+// into statusByBeacon/peerSeenOriginByBeacon. [actionLabel] reuses HistoryAction.displayName()
+// via row.toHistoryAction() (the row's own action string is the wire format, e.g. "CountEjected"
+// — see SyncRecordMapping's own doc, not the enum's .name — HistoryAction.valueOf against it
+// always failed silently here, same bug mergedStatusByBeacon's own doc describes).
+data class PeerActivityLineUi(
+    val originDeviceName: String,
+    val actionLabel: String,
+    val beaconNumber: Int?,
+    val bibNumber: Int?,
+    val timestampMillis: Long,
+)
+
+// Pure, directly testable (like isSkippedAsStale/staleDeletionSummary in RaceHistoryViewModel) —
+// newest first, since this is a diagnostic log an operator scans top-down for "what just arrived."
+internal fun peerActivityFrom(rows: List<PeerSeenRecordEntity>): List<PeerActivityLineUi> =
+    rows.sortedByDescending { it.timestampMillis }.map { row ->
+        PeerActivityLineUi(
+            originDeviceName = row.originDeviceName,
+            actionLabel = row.toHistoryAction().displayName(),
+            beaconNumber = row.beaconNumber,
+            bibNumber = row.bibNumber,
+            timestampMillis = row.timestampMillis,
+        )
+    }
 
 // See CountModeViewModel's own race-progress collector — packed into one small holder rather
 // than combine()'s own 6th/7th argument, same Triple/Pair-packing reasoning BibsModeViewModel's
@@ -101,6 +133,9 @@ data class CountModeUiState(
     val unsyncedCount: Int = 0,
     val lastSyncedAtMillis: Long? = null,
     val serverStatus: ServerStatusState = ServerStatusState(ServerStatus.UNKNOWN, null),
+    // TODO.md "need to be able to see the peer lines pulled from nearby devices in the history
+    // (as a diagnostic aid)" — see PeerActivityLineUi's own doc.
+    val peerActivity: List<PeerActivityLineUi> = emptyList(),
 )
 
 /**
@@ -286,15 +321,19 @@ class CountModeViewModel(
                 combine(
                     progressRepository.observeIssuedBeacons(raceId),
                     countModeRepository.observeCounts(raceId),
-                    countModeRepository.observeStatusByBeacon(raceId),
+                    countModeRepository.observeStatusEvents(raceId),
                     peerSeenBeaconsFlow(raceId),
-                ) { issued, rows, status, peerSeen ->
+                    peerStatusRowsFlow(raceId),
+                ) { issued, rows, statusEvents, peerSeen, peerStatusRows ->
                     bibByBeaconNumber = issued.associate { it.beaconNumber!! to it.bibNumber }
                     seenBeaconNumbers = rows.filter { it.action == HistoryAction.COUNT_SEEN }
                         .mapNotNull { parseBeaconCount(it.note) }.toSet()
-                    statusByBeacon = status
+                    // TODO.md "if a beacon is ejected it must be flagged as such on all phones
+                    // counting beacons" — merged across this device's own events and a same-group
+                    // peer's own reported events, see mergedStatusByBeacon's own doc.
+                    statusByBeacon = mergedStatusByBeacon(statusEvents, peerStatusRows)
                     peerSeenOriginByBeacon = peerSeen
-                    _uiState.update { it.copy(totalIssued = issued.size) }
+                    _uiState.update { it.copy(totalIssued = issued.size, peerActivity = peerActivityFrom(peerStatusRows)) }
                     recomputeOutstanding()
                 }.collect { }
             }
@@ -326,7 +365,15 @@ class CountModeViewModel(
     private fun recomputeOutstanding() {
         val now = System.currentTimeMillis()
         val peerSeen = peerSeenOriginByBeacon
-        val unionSeen = seenBeaconNumbers + peerSeen.keys
+        // peerSeen (observeLatestOriginByBeacon) tags a beacon by whichever peer row is most
+        // recent for it regardless of action — a peer's own COUNT_EJECTED row for a beacon it
+        // previously counted makes that row the most recent one, so without this subtraction the
+        // beacon would wrongly stay in unionSeen (and so out of `outstanding`) even though
+        // statusByBeacon (merged the same way, see mergedStatusByBeacon) already says EJECTED —
+        // which must always revert a beacon to outstanding, same as a local-only eject already
+        // does via its own fold dropping the COUNT_SEEN row entirely.
+        val ejectedBeacons = statusByBeacon.filterValues { it == CountBeaconStatus.EJECTED }.keys
+        val unionSeen = (seenBeaconNumbers + peerSeen.keys) - ejectedBeacons
         val outstanding = bibByBeaconNumber.entries
             .filter { (beaconNumber, _) -> beaconNumber !in unionSeen }
             .map { (beaconNumber, bibNumber) ->
@@ -363,6 +410,19 @@ class CountModeViewModel(
             .distinctUntilChanged()
             .flatMapLatest { groupKey ->
                 if (groupKey == null) flowOf(emptyMap()) else peerSyncRepository.observeLatestOriginByBeacon(groupKey, HistoryMode.COUNT)
+            }
+
+    // TODO.md "if a beacon is ejected it must be flagged as such on all phones counting beacons":
+    // the raw peer rows mergedStatusByBeacon needs, same groupKey derivation as
+    // peerSeenBeaconsFlow above (duplicated rather than shared — see BibsModeViewModel's own
+    // observeLatestOriginByBib/observeGroup pair for the same already-established "two separate
+    // reads of the same underlying group, for two different purposes" precedent).
+    private fun peerStatusRowsFlow(raceId: Long): Flow<List<PeerSeenRecordEntity>> =
+        raceRepository.observeRace(raceId)
+            .map { race -> race?.let { peerGroupDetector.ownGroupKey(it.label, it.location, HistoryMode.COUNT) } }
+            .distinctUntilChanged()
+            .flatMapLatest { groupKey ->
+                if (groupKey == null) flowOf(emptyList()) else peerSyncRepository.observeGroup(groupKey, HistoryMode.COUNT)
             }
 
     private suspend fun collectAdvertisements() {
@@ -415,24 +475,38 @@ class CountModeViewModel(
 
     /** "Eject" one seen beacon (TODO.md), or re-eject one already tagged WAS_EJECTED (TODO.md:
      *  the outstanding list's own "was-ejected" tag is itself a re-eject link) — [beaconNumber]
-     *  must currently be seen or WAS_EJECTED; a no-op otherwise. The UI only ever offers this
-     *  from the seen list or a WAS_EJECTED tag, both behind their own confirm dialog. */
+     *  must currently be seen (by this device OR a same-group peer, see [statusByBeacon]/
+     *  [peerSeenOriginByBeacon] — TODO.md: "a bib must be ejectable no matter what phone did the
+     *  initial detection") or WAS_EJECTED; a no-op otherwise. The UI only ever offers this from
+     *  the seen list or a WAS_EJECTED tag, both behind their own confirm dialog. */
     fun ejectBeacon(beaconNumber: Int) {
-        if (beaconNumber !in seenBeaconNumbers && statusByBeacon[beaconNumber] != CountBeaconStatus.WAS_EJECTED) return
+        val unionSeen = seenBeaconNumbers + peerSeenOriginByBeacon.keys
+        if (beaconNumber !in unionSeen && statusByBeacon[beaconNumber] != CountBeaconStatus.WAS_EJECTED) return
         val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch { countModeRepository.recordEject(raceId, beaconNumber) }
+        viewModelScope.launch {
+            countModeRepository.recordEject(
+                raceId,
+                beaconNumber,
+                fallbackBibNumber = bibByBeaconNumber[beaconNumber],
+                // Already verified above against the peer-merged union/status, so this device's
+                // own lack of a local COUNT_SEEN row for a peer-only beacon is not itself a
+                // reason to refuse — see recordEject's own doc.
+                allowWithoutLocalRecord = true,
+            )
+        }
     }
 
     /** The operator's own "let this one back in" (TODO.md) — [beaconNumber] must currently be
-     *  EJECTED; a no-op otherwise (the UI only ever offers this via the outstanding list's own
-     *  "ejected" link, behind its own confirm dialog). Once this returns, [beaconNumber] is a
-     *  normal outstanding beacon again — the next detection recounts it exactly like one that was
-     *  never ejected at all; only its WAS_EJECTED tag (see [CountBeaconStatus]) marks it as having
-     *  been ejected before, until that happens. */
+     *  EJECTED (by this device OR a same-group peer — same TODO.md reasoning [ejectBeacon] itself
+     *  documents, applied symmetrically to un-eject); a no-op otherwise (the UI only ever offers
+     *  this via the outstanding list's own "ejected" link, behind its own confirm dialog). Once
+     *  this returns, [beaconNumber] is a normal outstanding beacon again — the next detection
+     *  recounts it exactly like one that was never ejected at all; only its WAS_EJECTED tag (see
+     *  [CountBeaconStatus]) marks it as having been ejected before, until that happens. */
     fun unejectBeacon(beaconNumber: Int) {
         if (statusByBeacon[beaconNumber] != CountBeaconStatus.EJECTED) return
         val raceId = raceIdFlow.value ?: return
-        viewModelScope.launch { countModeRepository.recordUneject(raceId, beaconNumber) }
+        viewModelScope.launch { countModeRepository.recordUneject(raceId, beaconNumber, allowWithoutLocalRecord = true) }
     }
 
     /** "Stop" — see [CountModeUiState.canStopCountMode]'s own doc for why this is gated on the

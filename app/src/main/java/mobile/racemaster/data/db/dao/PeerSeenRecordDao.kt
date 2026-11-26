@@ -25,6 +25,29 @@ interface PeerSeenRecordDao {
     @Query("SELECT MAX(lineNumber) FROM peer_seen_records WHERE originDeviceId = :originDeviceId")
     suspend fun getLastMergedLineNumber(originDeviceId: String): Long?
 
+    // Count Mode peer-sync's own cursor, scoped to just the three actions it actually merges
+    // off CountModeRepository.countStatusEventsSince (COUNT_SEEN/COUNT_EJECTED/COUNT_UNEJECTED)
+    // — deliberately a SEPARATE query from getLastMergedLineNumber above, not an extra WHERE
+    // clause bolted onto it: a plain MAX(lineNumber) across every action this origin has ever
+    // reported (Ping included, from before this filtering existed) could sit well past a
+    // still-unmerged, lower-lineNumbered COUNT_EJECTED row and permanently hide it from this
+    // forward-only cursor — confirmed live as exactly why a 230+/758-row-and-growing
+    // peer_seen_records table, almost entirely Ping noise, had still never once merged a
+    // COUNT_EJECTED row from the same origin.
+    // NB: these are HistoryAction.toServerAction()'s wire strings, not the enum's own .name —
+    // this column is populated straight from SyncRecord.action (see PeerSyncRepository.mergeRecords),
+    // never through Converters' HistoryAction TypeConverter, so it never reads "COUNT_SEEN" etc.
+    // A prior version of this query used the enum .name spelling, which never matched anything:
+    // the cursor stayed stuck at 0 forever, so every Count Mode peer pull re-fetched the entire
+    // history from scratch each cycle — confirmed live as a 10,000+-row and climbing
+    // peer_seen_records table (duplicate CountSeen rows re-merged every pull tick) pegging a
+    // phone's CPU and freezing its UI after an overnight run.
+    @Query(
+        "SELECT MAX(lineNumber) FROM peer_seen_records WHERE originDeviceId = :originDeviceId " +
+            "AND action IN ('CountSeen', 'CountEjected', 'CountUnejected')",
+    )
+    suspend fun getLastMergedCountStatusLineNumber(originDeviceId: String): Long?
+
     // Every beacon any peer in this group has reported as COUNT_SEEN — the Count Mode union
     // view's own peer half (see CountModeRepository's local-only equivalent). Distinct beacon
     // numbers only; which specific peer(s) reported it is a separate, UI-only lookup
@@ -66,10 +89,4 @@ interface PeerSeenRecordDao {
         "SELECT * FROM peer_seen_records WHERE raceGroupId = :raceGroupId AND mode = :mode ORDER BY lineNumber",
     )
     fun observeGroup(raceGroupId: String, mode: HistoryMode): Flow<List<PeerSeenRecordEntity>>
-
-    // Purges every row ever merged from this origin — offered the same "always safe, at any
-    // time" way PulledRecordDao.deleteForSource is: the ground truth still lives on the
-    // originating device, so the very next accelerated pull just re-merges from scratch.
-    @Query("DELETE FROM peer_seen_records WHERE originDeviceId = :originDeviceId")
-    suspend fun deleteForOrigin(originDeviceId: String)
 }
