@@ -184,7 +184,7 @@ fun RaceDetailsScreen(
             HistoryTextField(
                 value = location,
                 onValueChange = { location = it },
-                label = if (mode == AppMode.BIBS) "Location (e.g. Start, Finish, CP1, CP2-Bridge)" else "Location (e.g. Finish, CP1, CP2, et al)",
+                label = if (mode == AppMode.BIBS) "Location (e.g. Start, Finish, Pen, Close, CP1, CP2-Bridge)" else "Location (e.g. Finish, CP1, CP2, et al)",
                 history = locationHistory,
                 enabled = fieldsEnabled,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
@@ -193,7 +193,7 @@ fun RaceDetailsScreen(
             )
             if (mode == AppMode.BIBS && location.isNotBlank() && !locationValid) {
                 Text(
-                    "Bibs Mode's location must be \"Start\", \"Finish\", or look like CP1, CP2-Bridge, etc.",
+                    "Bibs Mode's location must be \"Start\", \"Finish\", \"Pen\", \"Close\", or look like CP1, CP2-Bridge, etc.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )

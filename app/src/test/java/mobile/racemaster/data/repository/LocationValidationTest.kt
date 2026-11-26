@@ -60,6 +60,14 @@ class LocationValidationTest {
     }
 
     @Test
+    fun bibsAcceptsPenAndCloseCaseInsensitively() {
+        assertTrue(isValidLocationForMode("Pen", AppMode.BIBS))
+        assertTrue(isValidLocationForMode("pen", AppMode.BIBS))
+        assertTrue(isValidLocationForMode("Close", AppMode.BIBS))
+        assertTrue(isValidLocationForMode("CLOSE", AppMode.BIBS))
+    }
+
+    @Test
     fun bibsRejectsFreeTextAndBlank() {
         assertFalse(isValidLocationForMode("Water Station", AppMode.BIBS))
         assertFalse(isValidLocationForMode("", AppMode.BIBS))

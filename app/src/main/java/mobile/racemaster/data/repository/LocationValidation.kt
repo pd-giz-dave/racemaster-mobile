@@ -15,14 +15,18 @@ fun isValidCpLocation(location: String): Boolean = CP_LOCATION_REGEX.matches(loc
 /** Location validation against the chosen mode — the one shared check Setup Race and Relocate
  *  both need now that mode is picked alongside location on the same screen. Bibs enforces a real
  *  format constraint — the literal "Start"/"Finish" labels that drive [defaultActionForLocation],
- *  or else a CP-shaped location (see [isValidCpLocation]'s own doc). Time accepts any non-blank
- *  free text. [mode] null (nothing chosen yet) is never valid — Setup Race's own Save button
- *  stays disabled until a mode is picked regardless of location. */
+ *  the literal "Pen"/"Close" labels (TODO.md: "amalgamate Bibs, Count and Close modes" — these
+ *  two are accepted here ahead of that amalgamation actually changing what Bibs Mode's own screen
+ *  does at them), or else a CP-shaped location (see [isValidCpLocation]'s own doc). Time accepts
+ *  any non-blank free text. [mode] null (nothing chosen yet) is never valid — Setup Race's own
+ *  Save button stays disabled until a mode is picked regardless of location. */
 fun isValidLocationForMode(location: String, mode: AppMode?): Boolean = when (mode) {
     null -> false
     AppMode.BIBS -> {
         val trimmed = location.trim()
-        trimmed.equals("Start", ignoreCase = true) || trimmed.equals("Finish", ignoreCase = true) || isValidCpLocation(location)
+        trimmed.equals("Start", ignoreCase = true) || trimmed.equals("Finish", ignoreCase = true) ||
+            trimmed.equals("Pen", ignoreCase = true) || trimmed.equals("Close", ignoreCase = true) ||
+            isValidCpLocation(location)
     }
     // Count/Close have no course-position meaning (see CloseModeRepository/CountModeRepository's
     // own doc) — same permissive, free-text treatment as Time.
@@ -30,8 +34,9 @@ fun isValidLocationForMode(location: String, mode: AppMode?): Boolean = when (mo
 }
 
 /** Bibs mode's location-driven default action (TODO.md: "A rationalisation") — "Start"/"Finish"
- *  map onto their own matching action, and anything else (guaranteed CP-shaped by
- *  [isValidLocationForMode]'s own Bibs branch) maps onto Pass, CP's own equivalent of Finish.
+ *  map onto their own matching action, and anything else — CP-shaped, or (pending TODO.md's
+ *  "amalgamate Bibs, Count and Close modes") "Pen"/"Close" — maps onto Pass, CP's own equivalent
+ *  of Finish, as a placeholder until that amalgamation gives Pen/Close their own real behavior.
  *  Called once, from RaceRepository.recordModeStart, to seed a freshly sensible default the
  *  moment location changes — the operator's own later picks via Bibs' default-action selector
  *  simply overwrite the same setting afterward, same as always. */
@@ -53,7 +58,9 @@ fun defaultActionForLocation(location: String): HistoryAction {
  *  not-yet-CP-shaped location (a transient uiState before a race is selected, or before Bibs' own
  *  stricter [isValidLocationForMode] check has had a chance to run) is permissive rather than
  *  hiding every option — Bibs Mode's actual running location is always one of the two concrete
- *  branches above by the time this matters. */
+ *  branches above by the time this matters. "Pen"/"Close" also fall into this permissive branch
+ *  for now (same placeholder reasoning as [defaultActionForLocation]) — TODO.md's "amalgamate
+ *  Bibs, Count and Close modes" is what will eventually give them their own restricted set. */
 fun isBibsActionAllowedAtLocation(action: HistoryAction, location: String): Boolean {
     val trimmed = location.trim()
     return when {

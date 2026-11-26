@@ -30,8 +30,11 @@ data class SetupRaceDraft(val name: String = "", val location: String = "", val 
 private const val MAX_HISTORY_ENTRIES = 20
 
 // Offered in the Location field's history dropdown even before the operator has ever typed
-// one — the common finish/start/checkpoint stations. See locationHistory's own doc.
-private val DEFAULT_LOCATIONS = listOf("Finish", "Start") + (1..9).map { "CP$it" }
+// one — the common finish/start/checkpoint/pen/close stations, in course order (TODO.md:
+// "amalgamate Bibs, Count and Close modes" — "Pen"/"Close" are Bibs-valid locations ahead of that
+// amalgamation actually changing what Bibs Mode's own screen does at them). See locationHistory's
+// own doc.
+private val DEFAULT_LOCATIONS = listOf("Pen", "Start") + (1..9).map { "CP$it" } + listOf("Finish", "Close")
 
 // See SettingsRepository.raceStaleAfterDays's own doc.
 const val DEFAULT_RACE_STALE_AFTER_DAYS = 2
