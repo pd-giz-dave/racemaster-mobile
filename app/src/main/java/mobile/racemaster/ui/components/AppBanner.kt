@@ -71,7 +71,7 @@ fun AppBanner(
         )
         Text(
             buildAnnotatedString {
-                append("RaceMaster Mobile ")
+                append("RM Mobile ")
                 withStyle(SpanStyle(fontSize = 11.sp, fontWeight = FontWeight.Normal)) {
                     append("v${BuildConfig.VERSION_NAME}")
                 }
