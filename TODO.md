@@ -255,6 +255,9 @@ chipset capability, not an OS one.
       eg. for "123" speak: one two three, this needs to be a persistent option (it may not be
       practical on the finish line but will be at an on-course checkpoint)
 - [x] shorten the app name in the title bar from 'RaceMaster Mobile' to 'RM Mobile'
+- [x] add a start-up option to set the phone in kiosk mode if not in it, or to exit kiosk mode
+      if it is, the objective is to lock things down so only this app can send/recieve data
+      either as mobile, wifi or bt - dropped the idea, too risky on bricking the phone
 
 ## Programming the DX-CP27 Bluetooth Beacon
 
@@ -624,11 +627,11 @@ In outline the 'beacon plan' consists of:
       the 'relocate' link in bibs mode should be renamed 'move' and allow moving to/from any of
       these locations and their implied modes, the location drop-down in setup race should include
       'Pen'
+- [x] when setup race completes and the user set a mode/location, go straight to that mode when
+      the screen exits
 - [ ] implement the nearby peer sync mechanism for all modes except close
 - [ ] add the race name as a feedback line to the setup device screen
-- [ ] add a start-up option to set the phone in kiosk mode if not in it, or to exit kiosk mode
-      if it is, the objective is to lock things down so only this app can send/recieve data
-      either as mobile, wifi or bt
+- [ ] need a battery health check on the phone - one of the XCover4 is a bit dodgy
 
 ## Factor out all the BLe stuff so there is a single source of truth
 

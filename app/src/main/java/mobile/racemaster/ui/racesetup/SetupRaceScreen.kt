@@ -64,6 +64,7 @@ import mobile.racemaster.util.withClickSound
 fun SetupRaceScreen(
     onDone: () -> Unit,
     onHome: () -> Unit,
+    onModeStarted: (AppMode) -> Unit,
     viewModel: SetupRaceViewModel = viewModel(factory = SetupRaceViewModel.Factory),
 ) {
     val hasActiveRace by viewModel.hasActiveRace.collectAsStateWithLifecycle()
@@ -271,7 +272,7 @@ fun SetupRaceScreen(
                     isSaving = true
                     scope.launch {
                         viewModel.save(effectiveName, location, chosenMode)
-                        onDone()
+                        onModeStarted(chosenMode)
                     }
                 },
                 enabled = canSave,

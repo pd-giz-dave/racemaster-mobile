@@ -161,6 +161,11 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                     SetupRaceScreen(
                         onDone = { navController.popBackStack() },
                         onHome = { navController.navigateHome() },
+                        onModeStarted = { mode ->
+                            navController.navigate(mode.toRoute()) {
+                                popUpTo(Routes.MODE_PICKER) { inclusive = false }
+                            }
+                        },
                     )
                 }
                 composable(
