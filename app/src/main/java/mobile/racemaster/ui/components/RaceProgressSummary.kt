@@ -58,6 +58,10 @@ import mobile.racemaster.util.withClickSound
 fun RaceProgressSummary(
     deviceName: String?,
     nearbyPeerNames: List<String> = emptyList(),
+    // Count Mode's own feedback on the same-group peer-sync feature (TODO.md: "put the peer
+    // activity feedback line under the nearby devices line and in the same style") — null (every
+    // other caller) omits the line entirely, same as nearbyPeerNames' own empty-list convention.
+    peerActivityCount: Int? = null,
     raceLabel: String,
     raceLocation: String,
     nextSplitNumber: Int,
@@ -85,6 +89,9 @@ fun RaceProgressSummary(
     // "none" when empty, matching every other optional line in this block.
     if (nearbyPeerNames.isNotEmpty()) {
         Text(text = "Nearby: ${nearbyPeerNames.joinToString(", ")}", style = MaterialTheme.typography.labelMedium)
+    }
+    if (peerActivityCount != null) {
+        Text(text = "Peer activity: $peerActivityCount lines received", style = MaterialTheme.typography.labelMedium)
     }
     Text(text = "Race name: $raceLabel", style = MaterialTheme.typography.labelMedium)
     if (showLocation) {

@@ -8,6 +8,23 @@ import kotlinx.coroutines.flow.Flow
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.PeerSeenRecordEntity
 
+// One row per distinct (raceGroupId, mode, originDeviceId) this device has ever merged peer
+// records for — what Race History's own list page surfaces as a "Peers" item (TODO.md: "the
+// activity history should be a separate item (one per device)"), the peer-sync counterpart of
+// PulledRecordDao's own PulledSourceSummary. raceGroupId is an opaque hash (see
+// PeerSyncRepository.groupKey's own doc) — it carries no race label of its own, so
+// RaceHistoryViewModel resolves one by recomputing every locally-known race's own group key and
+// matching, the same way RaceHistoryDetailViewModel's own (now-removed) embedded section used to
+// for a single race at a time.
+data class PeerOriginSummary(
+    val raceGroupId: String,
+    val mode: HistoryMode,
+    val originDeviceId: String,
+    val originDeviceName: String,
+    val lineCount: Int,
+    val lastSeenAtMillis: Long,
+)
+
 @Dao
 interface PeerSeenRecordDao {
     // No uniqueness constraint to IGNORE against — unlike PulledRecordDao's insertAll, a peer's
@@ -89,4 +106,42 @@ interface PeerSeenRecordDao {
         "SELECT * FROM peer_seen_records WHERE raceGroupId = :raceGroupId AND mode = :mode ORDER BY lineNumber",
     )
     fun observeGroup(raceGroupId: String, mode: HistoryMode): Flow<List<PeerSeenRecordEntity>>
+
+    // Every row reported by one specific device within one group — what a "Peers" item's own
+    // detail screen shows (PeerActivityDetailScreen), newest first (same diagnostic-log reading
+    // peerActivityFrom's own doc already establishes).
+    @Query(
+        "SELECT * FROM peer_seen_records WHERE raceGroupId = :raceGroupId AND mode = :mode " +
+            "AND originDeviceId = :originDeviceId ORDER BY timestampMillis DESC",
+    )
+    fun observeForOrigin(raceGroupId: String, mode: HistoryMode, originDeviceId: String): Flow<List<PeerSeenRecordEntity>>
+
+    // Race History's own "Peers" list items (see PeerOriginSummary's own doc) — one row per
+    // device this device has ever merged peer records for, across every group/mode. The
+    // subquery resolves each origin's most recently-used device name the same way
+    // PulledRecordDao.observeSourceSummaries' own deviceName subquery does, rather than an
+    // arbitrary MAX/MIN pick, since a device can rename itself mid-race.
+    @Query(
+        """
+        SELECT raceGroupId, mode, originDeviceId,
+               (SELECT originDeviceName FROM peer_seen_records p2
+                WHERE p2.raceGroupId = p.raceGroupId AND p2.mode = p.mode AND p2.originDeviceId = p.originDeviceId
+                ORDER BY p2.timestampMillis DESC LIMIT 1) AS originDeviceName,
+               COUNT(*) AS lineCount,
+               MAX(timestampMillis) AS lastSeenAtMillis
+        FROM peer_seen_records p
+        GROUP BY raceGroupId, mode, originDeviceId
+        ORDER BY lastSeenAtMillis DESC
+        """,
+    )
+    fun observeOriginSummaries(): Flow<List<PeerOriginSummary>>
+
+    // TODO.md "the activity history should be ... with the same dustbin for delete" — clearing
+    // just this one origin's rows also implicitly resets its own
+    // getLastMergedLineNumber/getLastMergedCountStatusLineNumber back to "nothing merged yet"
+    // (MAX(lineNumber) over an empty filtered set is null), so the next pull from this one peer
+    // re-fetches its full current-segment history from scratch, same as a brand new device
+    // would — every OTHER origin still in the same group is untouched.
+    @Query("DELETE FROM peer_seen_records WHERE raceGroupId = :raceGroupId AND mode = :mode AND originDeviceId = :originDeviceId")
+    suspend fun deleteGroupOrigin(raceGroupId: String, mode: HistoryMode, originDeviceId: String)
 }

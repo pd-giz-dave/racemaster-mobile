@@ -30,6 +30,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.ui.components.ItemTypeBadge
+import mobile.racemaster.ui.components.PeersTypeIcon
+import mobile.racemaster.ui.components.ProgressTypeIcon
+import mobile.racemaster.ui.components.RaceTypeIcon
 import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.util.formatWallClock
@@ -42,6 +46,7 @@ fun RaceHistoryScreen(
     onRaceSelected: (Long) -> Unit,
     onMuleSourceSelected: (raceLabel: String, sourceDeviceId: String) -> Unit,
     onProgressSelected: (raceId: Long) -> Unit,
+    onPeerActivitySelected: (HistoryItemUi.PeerActivity) -> Unit,
     // Called right after switching this device's active race back to a resumed one — see
     // RaceHistoryViewModel.resumeRace's own doc. The caller decides where that lands (the Mode
     // Picker, so the operator picks whichever mode it was recording in).
@@ -54,6 +59,7 @@ fun RaceHistoryScreen(
     var pendingDeleteNow by remember { mutableStateOf<HistoryItemUi.LocalRace?>(null) }
     var pendingMuleSourceDelete by remember { mutableStateOf<HistoryItemUi.MuleSource?>(null) }
     var pendingProgressDelete by remember { mutableStateOf<HistoryItemUi.ProgressFile?>(null) }
+    var pendingPeerActivityDelete by remember { mutableStateOf<HistoryItemUi.PeerActivity?>(null) }
     // A separate dialog from pendingDelete above — an active race needs its stuck mode(s)
     // cleared first (see RaceRepository.forceResetActiveModes' own doc), not immediate deletion.
     var pendingForceReset by remember { mutableStateOf<HistoryItemUi.LocalRace?>(null) }
@@ -96,11 +102,13 @@ fun RaceHistoryScreen(
                             is HistoryItemUi.LocalRace -> "race-${it.id}"
                             is HistoryItemUi.MuleSource -> "mule-${it.raceLabel}-${it.sourceDeviceId}"
                             is HistoryItemUi.ProgressFile -> "progress-${it.raceId}"
+                            is HistoryItemUi.PeerActivity -> "peer-${it.raceGroupId}-${it.mode}-${it.originDeviceId}"
                         }
                     },
                 ) { item ->
                     when (item) {
                         is HistoryItemUi.LocalRace -> ListItem(
+                            overlineContent = { ItemTypeBadge("Race") { RaceTypeIcon() } },
                             headlineContent = { Text(item.label) },
                             supportingContent = {
                                 val entryWord = if (item.entryCount == 1) "entry" else "entries"
@@ -184,6 +192,7 @@ fun RaceHistoryScreen(
                             modifier = Modifier.clickable(onClick = withClickSound { onRaceSelected(item.id) }),
                         )
                         is HistoryItemUi.MuleSource -> ListItem(
+                            overlineContent = { ItemTypeBadge("Race") { RaceTypeIcon() } },
                             headlineContent = { Text(item.raceLabel.ifEmpty { "Mule" }) },
                             supportingContent = {
                                 Column {
@@ -217,12 +226,16 @@ fun RaceHistoryScreen(
                         )
                         // Progress files — race-wide bib-allocation/status data received from the
                         // server or web app (see ProgressRepository's own doc) — get the same
-                        // plain race-name-headline shape as a LocalRace/MuleSource row above (no
-                        // leading icon of their own any more), just tertiary-colored so they
-                        // still read as a genuinely different kind of entry at a glance.
+                        // plain race-name-headline shape as a LocalRace/MuleSource row above,
+                        // just tertiary-colored so they still read as a genuinely different kind
+                        // of entry at a glance. Headline echoes the full race label (TODO.md:
+                        // "all items should echo the full race name in their title"), not the
+                        // short raceName the server's own progress.json separately carries —
+                        // raceName is still shown, just demoted to the supporting line below.
                         is HistoryItemUi.ProgressFile -> ListItem(
+                            overlineContent = { ItemTypeBadge("Progress") { ProgressTypeIcon() } },
                             headlineContent = {
-                                Text(item.raceName.ifBlank { item.raceLabel }, color = MaterialTheme.colorScheme.tertiary)
+                                Text(item.raceLabel.ifBlank { item.raceName }, color = MaterialTheme.colorScheme.tertiary)
                             },
                             supportingContent = {
                                 Text("Progress as at ${formatGeneratedAt(item.generatedAt)}, ${item.entryCount} entries")
@@ -239,6 +252,26 @@ fun RaceHistoryScreen(
                                 }
                             },
                             modifier = Modifier.clickable(onClick = withClickSound { onProgressSelected(item.raceId) }),
+                        )
+                        // TODO.md "the activity history should be a separate item (one per
+                        // device) ... with the same dustbin for delete rather than embedded in
+                        // the race history" — see HistoryItemUi.PeerActivity's own doc.
+                        is HistoryItemUi.PeerActivity -> ListItem(
+                            overlineContent = { ItemTypeBadge("Peers") { PeersTypeIcon() } },
+                            headlineContent = { Text(item.raceLabel) },
+                            supportingContent = {
+                                Text("From ${item.originDeviceName} — ${item.lineCount} lines, last ${formatWallClock(item.lastSeenAtMillis)}")
+                            },
+                            trailingContent = {
+                                IconButton(onClick = withClickSound { pendingPeerActivityDelete = item }) {
+                                    Icon(
+                                        Icons.Filled.Delete,
+                                        contentDescription = "Delete peer activity",
+                                        tint = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                            },
+                            modifier = Modifier.clickable(onClick = withClickSound { onPeerActivitySelected(item) }),
                         )
                     }
                     HorizontalDivider()
@@ -371,6 +404,30 @@ fun RaceHistoryScreen(
             },
             dismissButton = {
                 TextButton(onClick = withClickSound { pendingProgressDelete = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    pendingPeerActivityDelete?.let { peer ->
+        AlertDialog(
+            onDismissRequest = { pendingPeerActivityDelete = null },
+            title = { Text("Delete this peer activity?") },
+            text = {
+                Text(
+                    "This clears the records held locally for \"${peer.raceLabel}\" from ${peer.originDeviceName}, " +
+                        "so the next pull from it starts fresh. Nothing is deleted on ${peer.originDeviceName} itself.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = withClickSound {
+                        viewModel.deletePeerActivityOrigin(peer.raceGroupId, peer.mode, peer.originDeviceId)
+                        pendingPeerActivityDelete = null
+                    },
+                ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = withClickSound { pendingPeerActivityDelete = null }) { Text("Cancel") }
             },
         )
     }

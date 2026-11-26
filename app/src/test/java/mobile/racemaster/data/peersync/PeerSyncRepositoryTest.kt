@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
+import mobile.racemaster.data.db.dao.PeerOriginSummary
 import mobile.racemaster.data.db.dao.PeerSeenRecordDao
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.PeerSeenRecordEntity
@@ -43,6 +44,27 @@ private class FakePeerSeenRecordDao : PeerSeenRecordDao {
 
     override fun observeGroup(raceGroupId: String, mode: HistoryMode): Flow<List<PeerSeenRecordEntity>> =
         flowOf(rows.filter { it.raceGroupId == raceGroupId && it.mode == mode })
+
+    override fun observeForOrigin(raceGroupId: String, mode: HistoryMode, originDeviceId: String): Flow<List<PeerSeenRecordEntity>> =
+        flowOf(rows.filter { it.raceGroupId == raceGroupId && it.mode == mode && it.originDeviceId == originDeviceId })
+
+    override fun observeOriginSummaries(): Flow<List<PeerOriginSummary>> = flowOf(
+        rows.groupBy { Triple(it.raceGroupId, it.mode, it.originDeviceId) }.map { (key, group) ->
+            val (raceGroupId, mode, originDeviceId) = key
+            PeerOriginSummary(
+                raceGroupId = raceGroupId,
+                mode = mode,
+                originDeviceId = originDeviceId,
+                originDeviceName = group.maxBy { it.timestampMillis }.originDeviceName,
+                lineCount = group.size,
+                lastSeenAtMillis = group.maxOf { it.timestampMillis },
+            )
+        },
+    )
+
+    override suspend fun deleteGroupOrigin(raceGroupId: String, mode: HistoryMode, originDeviceId: String) {
+        rows.removeAll { it.raceGroupId == raceGroupId && it.mode == mode && it.originDeviceId == originDeviceId }
+    }
 }
 
 class PeerSyncRepositoryTest {
@@ -161,6 +183,45 @@ class PeerSyncRepositoryTest {
             listOf(syncRecord("FINISH", 42, 1L, null, timestampMillis = 9_000L)),
         )
         assertEquals(mapOf(42 to "brave-reef"), repository.observeLatestOriginByBib("group-1", HistoryMode.BIBS).first())
+    }
+
+    // TODO.md "the activity history should be ... with the same dustbin for delete" (one Race
+    // History list item per device) — deleteGroupOrigin must clear only its own
+    // group/mode/origin, leaving every other device in the same group untouched, so deleting one
+    // device's own Peers item can never silently wipe a groupmate's.
+    @Test
+    fun deleteGroupOriginClearsOnlyItsOwnGroupModeAndOrigin() = runTest {
+        repository.mergeRecords(
+            "group-1", HistoryMode.COUNT, "device-a", "brave-reef",
+            listOf(syncRecord("COUNT_SEEN", null, 1L, "beacon=7", timestampMillis = 1_000L)),
+        )
+        repository.mergeRecords(
+            "group-1", HistoryMode.COUNT, "device-b", "calm-dune",
+            listOf(syncRecord("COUNT_SEEN", null, 1L, "beacon=9", timestampMillis = 1_000L)),
+        )
+        repository.deleteGroupOrigin("group-1", HistoryMode.COUNT, "device-a")
+        val remaining = repository.observeGroup("group-1", HistoryMode.COUNT).first()
+        assertEquals(1, remaining.size)
+        assertEquals("device-b", remaining.single().originDeviceId)
+    }
+
+    @Test
+    fun observeOriginSummariesGroupsByRaceGroupModeAndOrigin() = runTest {
+        repository.mergeRecords(
+            "group-1", HistoryMode.COUNT, "device-a", "brave-reef",
+            listOf(
+                syncRecord("COUNT_SEEN", null, 1L, "beacon=7", timestampMillis = 1_000L),
+                syncRecord("COUNT_SEEN", null, 2L, "beacon=8", timestampMillis = 2_000L),
+            ),
+        )
+        val summaries = repository.observeOriginSummaries().first()
+        val summary = summaries.single()
+        assertEquals("group-1", summary.raceGroupId)
+        assertEquals(HistoryMode.COUNT, summary.mode)
+        assertEquals("device-a", summary.originDeviceId)
+        assertEquals("brave-reef", summary.originDeviceName)
+        assertEquals(2, summary.lineCount)
+        assertEquals(2_000L, summary.lastSeenAtMillis)
     }
 
 }

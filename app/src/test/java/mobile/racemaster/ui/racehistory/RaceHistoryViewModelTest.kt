@@ -1,8 +1,17 @@
 package mobile.racemaster.ui.racehistory
 
 import kotlin.time.Duration.Companion.days
+import mobile.racemaster.data.db.entity.HistoryMode
+import mobile.racemaster.data.db.entity.RaceEntity
+import mobile.racemaster.data.peersync.PeerGroupDetector
+import mobile.racemaster.data.peersync.PeerSyncRepository
+import mobile.racemaster.data.db.dao.PeerSeenRecordDao
+import mobile.racemaster.data.db.entity.PeerSeenRecordEntity
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -131,5 +140,73 @@ class RaceHistoryViewModelTest {
         assertEquals(1, summary.localRaceCount)
         assertEquals(1, summary.muleSourceCount)
         assertEquals(2, summary.total)
+    }
+
+    // PeerActivity — same "never swept up by Delete stale" treatment as ProgressFile (see
+    // isStaleAndDeletable's own doc); it has its own individual delete button on the Races page
+    // instead.
+
+    private fun peerActivity(raceGroupId: String = "group-1") = HistoryItemUi.PeerActivity(
+        raceGroupId = raceGroupId,
+        mode = HistoryMode.COUNT,
+        originDeviceId = "device-a",
+        originDeviceName = "brave-reef",
+        raceLabel = "race-1",
+        lineCount = 3,
+        lastSeenAtMillis = 1_000L,
+    )
+
+    @Test
+    fun peerActivityIsNeverDeletableViaDeleteStale() {
+        assertFalse(peerActivity().isStaleAndDeletable())
+    }
+
+    // resolveRaceGroupLabel — pure, directly testable (see its own doc for why raceGroupId
+    // can't just be reversed back into a label).
+
+    private class UncalledPeerSeenRecordDao : PeerSeenRecordDao {
+        override suspend fun insertAll(rows: List<PeerSeenRecordEntity>) = error("not used by this test")
+        override suspend fun getLastMergedLineNumber(originDeviceId: String) = error("not used by this test")
+        override suspend fun getLastMergedCountStatusLineNumber(originDeviceId: String) = error("not used by this test")
+        override fun observeSeenBeaconNumbers(raceGroupId: String, mode: HistoryMode): Flow<List<Int>> = flowOf(emptyList())
+        override fun observeSeenBibNumbers(raceGroupId: String, mode: HistoryMode): Flow<List<Int>> = flowOf(emptyList())
+        override fun observeForBeacon(raceGroupId: String, mode: HistoryMode, beaconNumber: Int): Flow<List<PeerSeenRecordEntity>> = flowOf(emptyList())
+        override fun observeForBib(raceGroupId: String, mode: HistoryMode, bibNumber: Int): Flow<List<PeerSeenRecordEntity>> = flowOf(emptyList())
+        override fun observeGroup(raceGroupId: String, mode: HistoryMode): Flow<List<PeerSeenRecordEntity>> = flowOf(emptyList())
+        override fun observeForOrigin(raceGroupId: String, mode: HistoryMode, originDeviceId: String): Flow<List<PeerSeenRecordEntity>> = flowOf(emptyList())
+        override fun observeOriginSummaries() = flowOf(emptyList<mobile.racemaster.data.db.dao.PeerOriginSummary>())
+        override suspend fun deleteGroupOrigin(raceGroupId: String, mode: HistoryMode, originDeviceId: String) = error("not used by this test")
+    }
+
+    private val detector = PeerGroupDetector(PeerSyncRepository(UncalledPeerSeenRecordDao()))
+
+    private fun race(id: Long, label: String, location: String = "Pen") = RaceEntity(
+        id = id,
+        label = label,
+        location = location,
+        createdAtMillis = 0L,
+    )
+
+    @Test
+    fun resolveRaceGroupLabelFindsTheMatchingLocalRace() {
+        val race = race(1, "lmv-23-08-2026")
+        val groupKey = detector.ownGroupKey(race.label, race.location, HistoryMode.COUNT)
+
+        assertEquals("lmv-23-08-2026", resolveRaceGroupLabel(listOf(race), detector, groupKey, HistoryMode.COUNT))
+    }
+
+    @Test
+    fun resolveRaceGroupLabelIsNullWhenNoLocalRaceMatches() {
+        val groupKey = detector.ownGroupKey("some-other-race", "Pen", HistoryMode.COUNT)
+
+        assertNull(resolveRaceGroupLabel(listOf(race(1, "lmv-23-08-2026")), detector, groupKey, HistoryMode.COUNT))
+    }
+
+    @Test
+    fun resolveRaceGroupLabelDistinguishesModeForTheSameRace() {
+        val race = race(1, "lmv-23-08-2026")
+        val countKey = detector.ownGroupKey(race.label, race.location, HistoryMode.COUNT)
+
+        assertNull(resolveRaceGroupLabel(listOf(race), detector, countKey, HistoryMode.BIBS))
     }
 }

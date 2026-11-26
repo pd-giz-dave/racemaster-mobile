@@ -2,6 +2,7 @@ package mobile.racemaster.data.peersync
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import mobile.racemaster.data.db.dao.PeerOriginSummary
 import mobile.racemaster.data.db.dao.PeerSeenRecordDao
 import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.PeerSeenRecordEntity
@@ -102,6 +103,20 @@ class PeerSyncRepository(
      *  rows it already covers. */
     fun observeGroup(raceGroupId: String, mode: HistoryMode): Flow<List<PeerSeenRecordEntity>> =
         peerSeenRecordDao.observeGroup(raceGroupId, mode)
+
+    /** One specific device's own raw rows within [raceGroupId]/[mode] — what a "Peers" list
+     *  item's own detail screen shows (PeerActivityDetailScreen). */
+    fun observeOrigin(raceGroupId: String, mode: HistoryMode, originDeviceId: String): Flow<List<PeerSeenRecordEntity>> =
+        peerSeenRecordDao.observeForOrigin(raceGroupId, mode, originDeviceId)
+
+    /** Race History's own "Peers" list items — see [PeerOriginSummary]'s own doc. */
+    fun observeOriginSummaries(): Flow<List<PeerOriginSummary>> = peerSeenRecordDao.observeOriginSummaries()
+
+    /** TODO.md's own "the activity history should be ... with the same dustbin for delete" —
+     *  see [PeerSeenRecordDao.deleteGroupOrigin]'s own doc for why clearing just this one
+     *  origin's rows is enough to make the next pull from it start fresh. */
+    suspend fun deleteGroupOrigin(raceGroupId: String, mode: HistoryMode, originDeviceId: String) =
+        peerSeenRecordDao.deleteGroupOrigin(raceGroupId, mode, originDeviceId)
 
     /** Every beacon any peer in [raceGroupId]/[mode] has reported, mapped to whichever peer
      *  reported it *most recently* — what

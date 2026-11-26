@@ -5,12 +5,16 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.RaceEntity
+import mobile.racemaster.data.db.dao.PeerOriginSummary
 import mobile.racemaster.data.db.dao.PulledSourceSummary
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.ProgressRepository
 import mobile.racemaster.data.mule.StoredProgress
 import mobile.racemaster.data.mule.isRaceStale
+import mobile.racemaster.data.peersync.PeerGroupDetector
+import mobile.racemaster.data.peersync.PeerSyncRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.repository.activeModeLabels
 import mobile.racemaster.data.repository.isRaceActive
@@ -97,7 +101,40 @@ sealed interface HistoryItemUi {
         val generatedAt: String,
         val entryCount: Int,
     ) : HistoryItemUi
+    // One same-mode peer's own cross-device activity for a race this device also knows (TODO.md:
+    // "the activity history should be a separate item (one per device) on the race history/
+    // progress page with the same dustbin for delete rather than embedded in the race history")
+    // — the peer-sync counterpart of MuleSource above, one row per [PeerOriginSummary] whose
+    // [raceGroupId] RaceHistoryViewModel managed to resolve back to a locally-known race (see
+    // resolveRaceGroupLabel's own doc; an unresolvable one — e.g. the matching race has since
+    // been deleted locally — is simply left off this list, same as a MuleSource row has nothing
+    // to show for a race label this device has never heard of). [raceGroupId]/[mode]/
+    // [originDeviceId] together are this item's own delete/detail-screen key (see
+    // PeerSyncRepository.deleteGroupOrigin/observeOrigin).
+    data class PeerActivity(
+        val raceGroupId: String,
+        val mode: HistoryMode,
+        val originDeviceId: String,
+        val originDeviceName: String,
+        val raceLabel: String,
+        val lineCount: Int,
+        val lastSeenAtMillis: Long,
+    ) : HistoryItemUi
 }
+
+// PeerSeenRecordEntity.raceGroupId is an opaque hash (see PeerSyncRepository.groupKey's own doc)
+// with no race label of its own baked in — resolved here by recomputing every locally-known
+// race's own current group key for [mode] and matching, the same derivation
+// CountModeViewModel.peerSeenBeaconsFlow/RaceHistoryDetailViewModel's own (now-removed) embedded
+// section each already used for a single, already-known race. Null if no local race's current
+// label/location still produces this key — e.g. the race was deleted locally, or (BIBS only,
+// where location is part of the key) it's since been Relocated to a different station; the
+// mode-forced-to-0 locationCode for every other mode (see PeerSyncRepository.groupKey) means this
+// can never happen for Count/Time/Close just from a location change. A pure, directly-testable
+// function (like isSkippedAsStale above), not an instance method, so it needs no ViewModel/Flow
+// graph to exercise.
+internal fun resolveRaceGroupLabel(races: List<RaceEntity>, peerGroupDetector: PeerGroupDetector, raceGroupId: String, mode: HistoryMode): String? =
+    races.firstOrNull { peerGroupDetector.ownGroupKey(it.label, it.location, mode) == raceGroupId }?.label
 
 // Thin, directly-testable name for this screen's own display badge — see isRaceStale's own
 // doc for the actual rule, shared with MuleRepository.pushToServer and PeripheralSyncService's
@@ -119,6 +156,9 @@ internal fun HistoryItemUi.isStaleAndDeletable(): Boolean = when (this) {
     // touching), and it's cheap enough (one small Room row) that there's no real clutter cost
     // to leaving that decision to its own individual delete button instead.
     is HistoryItemUi.ProgressFile -> false
+    // Same reasoning as ProgressFile above — a diagnostic view, not a sync-staleness concern;
+    // its own individual delete button is enough.
+    is HistoryItemUi.PeerActivity -> false
 }
 
 // What RaceHistoryScreen's "Delete stale" confirmation dialog shows — split by kind since the
@@ -146,6 +186,7 @@ private data class HistorySources(
     val activeRaceId: Long?,
     val pendingDeleteIds: Set<Long>,
     val tombstonedSources: Set<Pair<String, String>>,
+    val peerOriginSummaries: List<PeerOriginSummary>,
 )
 
 private data class ExtraSources(
@@ -153,6 +194,7 @@ private data class ExtraSources(
     val activeRaceId: Long?,
     val pendingDeleteIds: Set<Long>,
     val tombstonedSources: Set<Pair<String, String>>,
+    val peerOriginSummaries: List<PeerOriginSummary>,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -161,6 +203,8 @@ class RaceHistoryViewModel(
     private val muleRepository: MuleRepository,
     private val progressRepository: ProgressRepository,
     private val settingsRepository: SettingsRepository,
+    private val peerSyncRepository: PeerSyncRepository,
+    private val peerGroupDetector: PeerGroupDetector,
 ) : ViewModel() {
 
     val historyItems: StateFlow<List<HistoryItemUi>> = combine(
@@ -176,16 +220,18 @@ class RaceHistoryViewModel(
             settingsRepository.activeRaceId,
             raceRepository.observePendingDeleteRaceIds(),
             muleRepository.tombstonedSources,
-        ) { progressFiles, activeRaceId, pendingDeleteIds, tombstonedSources ->
-            ExtraSources(progressFiles, activeRaceId, pendingDeleteIds.toSet(), tombstonedSources)
+            peerSyncRepository.observeOriginSummaries(),
+        ) { progressFiles, activeRaceId, pendingDeleteIds, tombstonedSources, peerOriginSummaries ->
+            ExtraSources(progressFiles, activeRaceId, pendingDeleteIds.toSet(), tombstonedSources, peerOriginSummaries)
         },
     ) { races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, extra ->
         HistorySources(
             races, sourceSummaries, lastTouchedAtMillis, maxAgeDays,
             extra.progressFiles, extra.activeRaceId, extra.pendingDeleteIds, extra.tombstonedSources,
+            extra.peerOriginSummaries,
         )
     }
-        .flatMapLatest { (races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, progressFiles, activeRaceId, pendingDeleteIds, tombstonedSources) ->
+        .flatMapLatest { (races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, progressFiles, activeRaceId, pendingDeleteIds, tombstonedSources, peerOriginSummaries) ->
             // A relayed source held only as a deletion tombstone — its device deleted that race.
             val muleItems = sourceSummaries.filterNot { (it.sourceDeviceId to it.sourceRaceLabel) in tombstonedSources }.map {
                 HistoryItemUi.MuleSource(
@@ -204,8 +250,23 @@ class RaceHistoryViewModel(
                     entryCount = it.entries.size,
                 )
             }
+            // TODO.md "the activity history should be a separate item (one per device)" — see
+            // resolveRaceGroupLabel's own doc for why an unresolvable raceGroupId is simply left
+            // off the list rather than shown with no usable title.
+            val peerItems = peerOriginSummaries.mapNotNull { summary ->
+                val raceLabel = resolveRaceGroupLabel(races, peerGroupDetector, summary.raceGroupId, summary.mode) ?: return@mapNotNull null
+                HistoryItemUi.PeerActivity(
+                    raceGroupId = summary.raceGroupId,
+                    mode = summary.mode,
+                    originDeviceId = summary.originDeviceId,
+                    originDeviceName = summary.originDeviceName,
+                    raceLabel = raceLabel,
+                    lineCount = summary.lineCount,
+                    lastSeenAtMillis = summary.lastSeenAtMillis,
+                )
+            }
             if (races.isEmpty()) {
-                flowOf(muleItems + progressItems)
+                flowOf(muleItems + progressItems + peerItems)
             } else {
                 // One flow per race — its own last-activity timestamp (for staleness — a local
                 // race's own real history, not any Mule-inbox bookkeeping; see
@@ -233,7 +294,7 @@ class RaceHistoryViewModel(
                             )
                         }
                     },
-                ) { localRaces -> localRaces.toList() + muleItems + progressItems }
+                ) { localRaces -> localRaces.toList() + muleItems + progressItems + peerItems }
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -284,6 +345,14 @@ class RaceHistoryViewModel(
         viewModelScope.launch { progressRepository.delete(raceId) }
     }
 
+    // TODO.md "the same dustbin for delete" for a "Peers" list item — see
+    // PeerSyncRepository.deleteGroupOrigin's own doc; always deletable, same reasoning as
+    // deleteMuleSource/deleteProgress above (a diagnostic view of someone else's own reports, not
+    // this device's own sync bookkeeping).
+    fun deletePeerActivityOrigin(raceGroupId: String, mode: HistoryMode, originDeviceId: String) {
+        viewModelScope.launch { peerSyncRepository.deleteGroupOrigin(raceGroupId, mode, originDeviceId) }
+    }
+
     // Bulk counterpart to deleteRace/deleteMuleSource above, for RaceHistoryScreen's own
     // "Delete stale" action. Reads historyItems.value fresh at call time — not whatever
     // snapshot the confirmation dialog was opened against — so an item that changed state
@@ -298,9 +367,10 @@ class RaceHistoryViewModel(
                     is HistoryItemUi.LocalRace -> raceRepository.deleteRace(item.id)
                     is HistoryItemUi.MuleSource -> muleRepository.deleteSource(item.raceLabel, item.sourceDeviceId)
                     // Never actually reached — isStaleAndDeletable() always returns false for
-                    // one of these, so the filter above already excludes it; listed only so this
-                    // stays an exhaustive `when` rather than needing an `else`.
+                    // either of these, so the filter above already excludes them; listed only so
+                    // this stays an exhaustive `when` rather than needing an `else`.
                     is HistoryItemUi.ProgressFile -> Unit
+                    is HistoryItemUi.PeerActivity -> Unit
                 }
             }
         }
@@ -315,6 +385,8 @@ class RaceHistoryViewModel(
                     container.muleRepository,
                     container.progressRepository,
                     container.settingsRepository,
+                    container.peerSyncRepository,
+                    container.peerGroupDetector,
                 )
             }
         }

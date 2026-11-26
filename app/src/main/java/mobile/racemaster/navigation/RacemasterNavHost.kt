@@ -19,6 +19,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.ui.beacon.BeaconProgrammerScreen
 import mobile.racemaster.ui.beaconidentify.IdentifyFobScreen
@@ -37,6 +38,7 @@ import mobile.racemaster.ui.mulemode.MuleServerSetupScreen
 import mobile.racemaster.ui.mulemode.SetupOptionsScreen
 import mobile.racemaster.ui.racedetails.RaceDetailsScreen
 import mobile.racemaster.ui.racehistory.MuleSourceDetailScreen
+import mobile.racemaster.ui.racehistory.PeerActivityDetailScreen
 import mobile.racemaster.ui.racehistory.ProgressDetailScreen
 import mobile.racemaster.ui.racehistory.RaceHistoryDetailScreen
 import mobile.racemaster.ui.racehistory.RaceHistoryScreen
@@ -275,6 +277,13 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                             navController.navigate(Routes.muleSourceDetail(raceLabel, sourceDeviceId))
                         },
                         onProgressSelected = { raceId -> navController.navigate(Routes.progressDetail(raceId)) },
+                        onPeerActivitySelected = { peer ->
+                            navController.navigate(
+                                Routes.peerActivityDetail(
+                                    peer.raceGroupId, peer.mode, peer.originDeviceId, peer.raceLabel, peer.originDeviceName,
+                                ),
+                            )
+                        },
                         // Resuming a past race lands back on the Mode Picker (not straight into
                         // a mode) — the operator picks whichever mode that race was recording
                         // in, same as landing there for any other already-active race; see
@@ -317,6 +326,31 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                     MuleSourceDetailScreen(
                         raceLabel = URLDecoder.decode(encodedRaceLabel, "UTF-8"),
                         sourceDeviceId = URLDecoder.decode(encodedSourceDeviceId, "UTF-8"),
+                        onBack = { navController.popBackStack() },
+                        onHome = { navController.navigateHome() },
+                    )
+                }
+                composable(
+                    route = Routes.PEER_ACTIVITY_DETAIL,
+                    arguments = listOf(
+                        navArgument("raceGroupId") { type = NavType.StringType },
+                        navArgument("mode") { type = NavType.StringType },
+                        navArgument("originDeviceId") { type = NavType.StringType },
+                        navArgument("raceLabel") { type = NavType.StringType },
+                        navArgument("originDeviceName") { type = NavType.StringType },
+                    ),
+                ) { backStackEntry ->
+                    val encodedRaceGroupId = backStackEntry.arguments?.getString("raceGroupId") ?: return@composable
+                    val mode = backStackEntry.arguments?.getString("mode")?.let { HistoryMode.valueOf(it) } ?: return@composable
+                    val encodedOriginDeviceId = backStackEntry.arguments?.getString("originDeviceId") ?: return@composable
+                    val encodedRaceLabel = backStackEntry.arguments?.getString("raceLabel") ?: return@composable
+                    val encodedOriginDeviceName = backStackEntry.arguments?.getString("originDeviceName") ?: return@composable
+                    PeerActivityDetailScreen(
+                        raceGroupId = URLDecoder.decode(encodedRaceGroupId, "UTF-8"),
+                        mode = mode,
+                        originDeviceId = URLDecoder.decode(encodedOriginDeviceId, "UTF-8"),
+                        raceLabel = URLDecoder.decode(encodedRaceLabel, "UTF-8"),
+                        originDeviceName = URLDecoder.decode(encodedOriginDeviceName, "UTF-8"),
                         onBack = { navController.popBackStack() },
                         onHome = { navController.navigateHome() },
                     )

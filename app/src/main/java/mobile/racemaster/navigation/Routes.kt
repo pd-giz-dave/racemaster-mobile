@@ -12,6 +12,8 @@ object Routes {
     const val RACE_HISTORY = "race_history"
     const val RACE_HISTORY_DETAIL = "race_history_detail/{raceId}"
     const val MULE_SOURCE_DETAIL = "mule_source_detail/{raceLabel}/{sourceDeviceId}"
+    const val PEER_ACTIVITY_DETAIL =
+        "peer_activity_detail/{raceGroupId}/{mode}/{originDeviceId}/{raceLabel}/{originDeviceName}"
     const val PROGRESS_DETAIL = "progress_detail/{raceId}"
     // Rename-only now (see RaceDetailsScreen's own doc — course/bib fields dropped, creation
     // moved to Setup Race) — always an existing race, no more `mode`/nullable-raceId sentinel.
@@ -82,6 +84,14 @@ object Routes {
     fun muleSourceDetail(raceLabel: String, sourceDeviceId: String) =
         "mule_source_detail/${java.net.URLEncoder.encode(raceLabel, "UTF-8")}/" +
             java.net.URLEncoder.encode(sourceDeviceId, "UTF-8")
+
+    // raceGroupId is an opaque-but-punctuated string (see PeerSyncRepository.groupKey's own
+    // doc — colons), so it needs URL-encoding like raceLabel does above; mode's own enum name
+    // has no special characters and travels as-is, same as HistoryMode is passed elsewhere.
+    fun peerActivityDetail(raceGroupId: String, mode: mobile.racemaster.data.db.entity.HistoryMode, originDeviceId: String, raceLabel: String, originDeviceName: String) =
+        "peer_activity_detail/${java.net.URLEncoder.encode(raceGroupId, "UTF-8")}/${mode.name}/" +
+            "${java.net.URLEncoder.encode(originDeviceId, "UTF-8")}/${java.net.URLEncoder.encode(raceLabel, "UTF-8")}/" +
+            java.net.URLEncoder.encode(originDeviceName, "UTF-8")
 
     fun raceDetails(raceId: Long) = "race_details/$raceId"
 }

@@ -26,7 +26,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -35,21 +34,21 @@ import mobile.racemaster.data.repository.CountBeaconStatus
 import mobile.racemaster.ui.components.RaceProgressSummary
 import mobile.racemaster.ui.components.ResetButton
 import mobile.racemaster.ui.components.ScreenTopBar
+import mobile.racemaster.ui.components.rowColorFor
 import mobile.racemaster.ui.help.HelpTopics
-import mobile.racemaster.ui.theme.SyncedGreen
-import mobile.racemaster.ui.theme.UnsyncedRed
-import mobile.racemaster.util.formatTimeOfDay
 import mobile.racemaster.util.withClickSound
 
 /** Pre-start headcount — see [CountModeViewModel]'s own doc. One running count, a list of
  *  issued-but-not-yet-seen bibs — including any ejected beacon, tagged with its own "ejected"
- *  link (tap to un-eject, behind a yes/no confirm, see [CountModeViewModel.unejectBeacon]) and
- *  highlighted red while it's currently detected (the operator's cue this runner is back and
- *  ready to be un-ejected), or "was-ejected" once un-ejected but not yet re-seen — itself a
- *  tappable re-eject link (confirmed the same way) until it's genuinely re-seen, highlighted
- *  green while NOT currently detected (reusing [SyncedGreen]/[UnsyncedRed]'s own fixed,
- *  theme-independent "status at a glance" convention from Mule Mode's sync rows — a different
- *  status here, but the same "red needs attention, green is settled" reading) — and a "Seen"
+ *  link (tap to un-eject, behind a yes/no confirm, see [CountModeViewModel.unejectBeacon]),
+ *  bolded while it's currently detected (the operator's cue this runner is back and ready to be
+ *  un-ejected — TODO.md: "an ejected beacon that is visible should be highlighted"), or
+ *  "was-ejected" once un-ejected but not yet re-seen — itself a tappable re-eject link (confirmed
+ *  the same way) until it's genuinely re-seen. Colour itself follows the same red->orange->green
+ *  sync-status scheme as the "Seen" list below (TODO.md: "the ejected lines should follow the
+ *  same colouring scheme as the seen lines and not just be red" — see
+ *  [OutstandingBeaconUi.syncState]'s own doc), independent of the bold "currently visible" cue —
+ *  and a "Seen"
  *  list, each row ejectable behind its own plain yes/no confirm (TODO.md: a previous version's
  *  dialog here "shows a confusing dialog", simplified). There is no bulk "Eject All" any more
  *  (TODO.md: redundant now there's Reset) and no other per-beacon dialog or result banner for an
@@ -88,11 +87,6 @@ fun CountModeScreen(
     var showStopConfirm by remember { mutableStateOf(false) }
     var pendingEjectBeaconNumber by remember { mutableStateOf<Int?>(null) }
     var pendingUnejectBeaconNumber by remember { mutableStateOf<Int?>(null) }
-    // TODO.md "need to be able to see the peer lines pulled from nearby devices in the history
-    // (as a diagnostic aid)" — collapsed by default (this is a diagnostic, not something an
-    // operator needs open during ordinary counting).
-    var showPeerActivity by remember { mutableStateOf(false) }
-    val locale = LocalConfiguration.current.locales[0]
 
     if (showStopConfirm) {
         AlertDialog(
@@ -183,6 +177,10 @@ fun CountModeScreen(
                     RaceProgressSummary(
                         deviceName = deviceName,
                         nearbyPeerNames = nearbyPeerNames,
+                        // TODO.md "put the peer activity feedback line under the nearby devices
+                        // line and in the same style" — RaceProgressSummary renders it directly
+                        // under "Nearby: ..." using that same line's own style; see its own doc.
+                        peerActivityCount = uiState.peerActivityCount,
                         raceLabel = uiState.raceLabel,
                         raceLocation = uiState.raceLocation,
                         nextSplitNumber = 0,
@@ -191,7 +189,15 @@ fun CountModeScreen(
                         lastSyncedAtMillis = uiState.lastSyncedAtMillis,
                         serverStatus = uiState.serverStatus,
                         btPollingStatus = btPollingStatus,
-                        progressText = "${uiState.outstanding.size} of ${uiState.totalIssued} yet to be seen",
+                        // TODO.md: "the wording of '0 of 5 yet to be seen' is confusing, say
+                        // something more specific when all have been seen" — totalIssued == 0
+                        // (nothing expected yet) is a third, separate case from "0 of 5", already
+                        // told apart below where the outstanding list's own empty-state text is.
+                        progressText = when {
+                            uiState.totalIssued == 0 -> "0 of 0 yet to be seen"
+                            uiState.outstanding.isEmpty() -> "All ${uiState.totalIssued} beacons have been seen"
+                            else -> "${uiState.outstanding.size} of ${uiState.totalIssued} yet to be seen"
+                        },
                     )
                     // Count's own distinctive large running tally — nothing else on this screen
                     // (or RaceProgressSummary) shows this number, so it stays its own prominent
@@ -202,10 +208,38 @@ fun CountModeScreen(
                     )
                     HorizontalDivider(modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
                 }
-                if (uiState.outstanding.isEmpty()) {
+                // TODO.md: "add an 'Ejected' heading above the ejected beacons list" / "add a
+                // 'Not Seen' heading below the 'n unique beacons seen' line and above the 'None
+                // ...' line" — splits what used to be one combined outstanding list into two,
+                // genuinely different in nature: a beacon that's ever been ejected (actionable,
+                // needs the operator's attention) vs. one that simply hasn't shown up yet.
+                val ejected = uiState.outstanding.filter { it.status != null }
+                val notSeen = uiState.outstanding.filter { it.status == null }
+                if (ejected.isNotEmpty()) {
                     item {
                         Text(
-                            // Both an empty outstanding list AND totalIssued == 0 look identical
+                            "Ejected",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(top = 16.dp),
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(top = 4.dp))
+                    }
+                    items(ejected, key = { it.beaconNumber }) { outstanding ->
+                        OutstandingBeaconRow(outstanding, onUneject = { pendingUnejectBeaconNumber = outstanding.beaconNumber }, onReeject = { pendingEjectBeaconNumber = outstanding.beaconNumber })
+                    }
+                }
+                item {
+                    Text(
+                        "Not Seen",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(top = 16.dp),
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(top = 4.dp))
+                }
+                if (notSeen.isEmpty()) {
+                    item {
+                        Text(
+                            // Both an empty Not Seen list AND totalIssued == 0 look identical
                             // here (there's nothing to show either way) — but they mean opposite
                             // things: the former is genuine completion, the latter is "no beacon
                             // expectations loaded for this race at all yet" (e.g. the server's
@@ -221,55 +255,8 @@ fun CountModeScreen(
                         )
                     }
                 } else {
-                    items(uiState.outstanding, key = { it.beaconNumber }) { outstanding ->
-                        // Red while EJECTED and currently detected — TODO.md: "an ejected beacon
-                        // that is visible should be highlighted" (the operator's cue that this
-                        // runner is back and ready to be un-ejected). Green once un-ejected
-                        // (WAS_EJECTED) and NOT currently detected — the settled state once an
-                        // un-eject has genuinely taken, before a fresh detection clears the tag
-                        // entirely. Reuses the same fixed, theme-independent SyncedGreen/
-                        // UnsyncedRed pair Mule Mode's own sync rows use for an unrelated status,
-                        // for the same "red needs attention, green is settled" reading.
-                        val highlightColor = when {
-                            outstanding.status == CountBeaconStatus.EJECTED && outstanding.currentlyVisible -> UnsyncedRed
-                            outstanding.status == CountBeaconStatus.WAS_EJECTED && !outstanding.currentlyVisible -> SyncedGreen
-                            else -> null
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                "Bib ${outstanding.bibNumber} — beacon %03d".format(outstanding.beaconNumber),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = if (highlightColor != null) FontWeight.Bold else FontWeight.Normal,
-                                color = highlightColor ?: MaterialTheme.colorScheme.onSurface,
-                            )
-                            when (outstanding.status) {
-                                // Tap to un-eject, behind its own confirm (TODO.md: "so the user
-                                // can check they hit the right one") — an actionable link, not a
-                                // button, matching this screen's other labelled-link convention.
-                                CountBeaconStatus.EJECTED -> Text(
-                                    "ejected",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.clickable(onClick = withClickSound { pendingUnejectBeaconNumber = outstanding.beaconNumber }),
-                                )
-                                // Also a link (TODO.md) — tap to re-eject, behind the same eject
-                                // confirm the "Seen" list's own Eject link uses
-                                // (CountModeViewModel.ejectBeacon accepts either a currently-seen
-                                // or a WAS_EJECTED beacon). Clears on its own, same as before,
-                                // once a fresh detection genuinely re-counts this beacon instead.
-                                CountBeaconStatus.WAS_EJECTED -> Text(
-                                    "was-ejected",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.clickable(onClick = withClickSound { pendingEjectBeaconNumber = outstanding.beaconNumber }),
-                                )
-                                null -> {}
-                            }
-                        }
+                    items(notSeen, key = { it.beaconNumber }) { outstanding ->
+                        OutstandingBeaconRow(outstanding, onUneject = { pendingUnejectBeaconNumber = outstanding.beaconNumber }, onReeject = { pendingEjectBeaconNumber = outstanding.beaconNumber })
                     }
                 }
                 // Seen beacons, each ejectable behind its own confirm (TODO.md: "a means to eject
@@ -284,6 +271,11 @@ fun CountModeScreen(
                     HorizontalDivider(modifier = Modifier.padding(top = 4.dp))
                 }
                 items(uiState.seen, key = { it.beaconNumber }) { seen ->
+                    // TODO.md "count mode lines need to follow the red->orange->green colour
+                    // scheme to reflect not sync'd / picked up by a mule / sync'd to the
+                    // server/sink" — null (a peer-sourced entry, see SeenBeaconUi's own doc) is
+                    // shown in the ordinary onSurface colour, same as before this existed.
+                    val rowColor = seen.syncState?.let { rowColorFor(it) } ?: MaterialTheme.colorScheme.onSurface
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -293,6 +285,7 @@ fun CountModeScreen(
                             (seen.bibNumber?.let { "Bib $it" } ?: "Bib ?") + " — beacon %03d".format(seen.beaconNumber) +
                                 (seen.originDeviceName?.let { " (via $it)" } ?: ""),
                             style = MaterialTheme.typography.bodySmall,
+                            color = rowColor,
                         )
                         // A peer-sourced entry (same-mode peer-sync feature, Phase 4 — see
                         // SeenBeaconUi's own doc) has no local row of this device's own for
@@ -304,38 +297,6 @@ fun CountModeScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.clickable(onClick = withClickSound { pendingEjectBeaconNumber = seen.beaconNumber }),
-                            )
-                        }
-                    }
-                }
-                // TODO.md "need to be able to see the peer lines pulled from nearby devices in
-                // the history (as a diagnostic aid)" — the raw feed behind statusByBeacon/
-                // peerSeenOriginByBeacon above, shown here unfiltered/unfolded so an operator or
-                // developer can confirm peer-sync is actually landing anything at all, without
-                // needing an adb/sqlite pull.
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp).clickable(onClick = withClickSound { showPeerActivity = !showPeerActivity }),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("Peer activity (diagnostic) — ${uiState.peerActivity.size}", style = MaterialTheme.typography.titleMedium)
-                        Text(if (showPeerActivity) "hide" else "show", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                    }
-                    HorizontalDivider(modifier = Modifier.padding(top = 4.dp))
-                }
-                if (showPeerActivity) {
-                    if (uiState.peerActivity.isEmpty()) {
-                        item {
-                            Text("None yet.", style = MaterialTheme.typography.bodySmall)
-                        }
-                    } else {
-                        items(uiState.peerActivity, key = { "${it.originDeviceName}:${it.timestampMillis}:${it.actionLabel}" }) { line ->
-                            Text(
-                                formatTimeOfDay(line.timestampMillis, locale) + " " + line.originDeviceName + " — " + line.actionLabel +
-                                    (line.beaconNumber?.let { " beacon %03d".format(it) } ?: "") +
-                                    (line.bibNumber?.let { " bib $it" } ?: ""),
-                                style = MaterialTheme.typography.bodySmall,
                             )
                         }
                     }
@@ -362,6 +323,60 @@ fun CountModeScreen(
                     modifier = Modifier.weight(1f),
                 )
             }
+        }
+    }
+}
+
+/** One row of the "Ejected" or "Not Seen" list — pulled out since both are now the same row
+ *  shape, just two different filters over [CountModeUiState.outstanding] (see CountModeScreen's
+ *  own "Ejected"/"Not Seen" TODO.md entries for why they're now two separate sections rather than
+ *  one combined list). [onUneject]/[onReeject] back the EJECTED/WAS_EJECTED tags' own confirm
+ *  dialogs; neither is ever invoked for a plain (status == null) Not Seen row, which has no tag
+ *  at all. */
+@Composable
+private fun OutstandingBeaconRow(outstanding: OutstandingBeaconUi, onUneject: () -> Unit, onReeject: () -> Unit) {
+    // TODO.md "the ejected lines should follow the same colouring scheme as the seen lines and
+    // not just be red" — same rowColorFor(syncState) the "Seen" list uses (see
+    // OutstandingBeaconUi.syncState's own doc); null (a peer-sourced status, or this device's own
+    // local row doesn't match the currently-shown merged status) falls back to the ordinary
+    // onSurface colour, same convention SeenBeaconUi's own null case already follows.
+    val rowColor = outstanding.syncState?.let { rowColorFor(it) } ?: MaterialTheme.colorScheme.onSurface
+    // Bold is now purely the "ready to act" attention cue (TODO.md: "an ejected beacon that is
+    // visible should be highlighted" — the operator's cue this runner is back and ready to be
+    // un-ejected) — independent of colour, which is sync status now.
+    val attentionCue = outstanding.status == CountBeaconStatus.EJECTED && outstanding.currentlyVisible
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "Bib ${outstanding.bibNumber} — beacon %03d".format(outstanding.beaconNumber),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = if (attentionCue) FontWeight.Bold else FontWeight.Normal,
+            color = rowColor,
+        )
+        when (outstanding.status) {
+            // Tap to un-eject, behind its own confirm (TODO.md: "so the user can check they hit
+            // the right one") — an actionable link, not a button, matching this screen's other
+            // labelled-link convention.
+            CountBeaconStatus.EJECTED -> Text(
+                "ejected",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable(onClick = withClickSound(onUneject)),
+            )
+            // Also a link (TODO.md) — tap to re-eject, behind the same eject confirm the "Seen"
+            // list's own Eject link uses (CountModeViewModel.ejectBeacon accepts either a
+            // currently-seen or a WAS_EJECTED beacon). Clears on its own, same as before, once a
+            // fresh detection genuinely re-counts this beacon instead.
+            CountBeaconStatus.WAS_EJECTED -> Text(
+                "was-ejected",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable(onClick = withClickSound(onReeject)),
+            )
+            null -> {}
         }
     }
 }

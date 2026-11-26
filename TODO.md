@@ -231,8 +231,8 @@ server) support, which Mule Mode's hosting role (`PeripheralSyncService.kt`) nee
 chipset capability, not an OS one.
 
 - [x] confirm BLE peripheral/advertising hardware support (quick, no app needed):
-  `adb shell dumpsys bluetooth_manager | grep -iE "state|address|le_audio|advertis|multiple"`
-  and look for any "LE Advertising not supported" line (not fully reliable on its own, see next)
+      `adb shell dumpsys bluetooth_manager | grep -iE "state|address|le_audio|advertis|multiple"`
+      and look for any "LE Advertising not supported" line (not fully reliable on its own, see next)
 - [x] battery health: `adb shell dumpsys battery`, check `level`/`temperature`/`health` (want
       `GOOD`); also do a real check - charge to 100%, screen off, see how much it drops in an
       hour (check every unit received, not just this one - used 2017 batteries vary)
@@ -254,6 +254,7 @@ chipset capability, not an OS one.
 - [x] when a bib number is recorded, the speak the number as 3 separate digits in a loud male or female voice,
       eg. for "123" speak: one two three, this needs to be a persistent option (it may not be
       practical on the finish line but will be at an on-course checkpoint)
+- [x] shorten the app name in the title bar from 'RaceMaster Mobile' to 'RM Mobile'
 
 ## Programming the DX-CP27 Bluetooth Beacon
 
@@ -357,7 +358,7 @@ In outline the 'beacon plan' consists of:
 - [x] mobile app programs the beacons
 - [x] mobile app detects and records beacons passing checkpoints (time not critical)
       (bibs mode at a CP location)
-  - [x] at a checkpoint the detection algorithm is 'first seen'
+- [x] at a checkpoint the detection algorithm is 'first seen'
 
 ## Close mode
 
@@ -436,6 +437,44 @@ In outline the 'beacon plan' consists of:
       this device's mirror of that one peer and re-pulls everything from scratch, safe and
       idempotent per that function's own doc — the everyday path is untouched, still a plain
       delta pull.
+- [x] count mode lines need to follow the red->orange->green colour scheme to reflect not sync'd
+      picked up by a mule, sync'd to the server/sink — done: the "Seen" list's own local rows
+      (SeenBeaconUi.syncState) now use the same lineSyncState/rowColorFor Bibs/Time already use;
+      a peer-sourced row has no local sync lifecycle of its own, so it stays uncoloured
+- [x] add an "Ejected" heading above the ejected beacons list
+- [x] add a "Not Seen" heading below the "n unique beacons seen" line and above the
+      "None - every issued beacon has been seen" line — done: the old combined outstanding list
+      is now two sections (Ejected — only shown when non-empty — then Not Seen, always shown)
+- [x] the wording of "0 of 5 yet to be seen" is confusing, say something more specific when all
+      have been seen — done: "All N beacons have been seen" once outstanding is empty
+- [x] CountUnejected lines should contain the bib number and ref line to the ejection (if it
+      is local) — done: CountModeRepository.recordUneject now looks up the most recent local
+      COUNT_EJECTED row for the beacon (if any) and carries its bibNumber/lineNumber onto the
+      COUNT_UNEJECTED row as bibNumber/refLineNumber; Race History already renders refLineNumber
+      generically as "Edited from L{n}", no further UI wiring needed
+- [x] move the peer activity view from the count mode screen to the history screen, and add a
+      delete facility (so forces a re-sync), but leave a feedback line on the count mode screen
+      on the number of lines received — done, then revised: rather than an embedded section on
+      RaceHistoryDetailScreen, each same-group peer this device has ever merged records for is
+      now its own "Peers" list item on the Races page (one per device, full race name in its
+      title, same red trash-can delete as every other item there — see
+      PeerSyncRepository.deleteGroupOrigin, which clears just that one origin's rows and resets
+      its own merge cursor), tapping through to a small read-only detail screen
+      (PeerActivityDetailScreen) for the raw lines; CountModeScreen keeps its one-line "Peer
+      activity: N lines received" count, now shown directly under the "Nearby: ..." line in the
+      same style (see RaceProgressSummary)
+- [x] count mode lines need to follow the red->orange->green colour scheme to reflect not sync'd
+      picked up by a mule, sync'd to the server/sink: extended to the "Ejected"/"Not Seen" list
+      too, which previously coloured an ejected beacon flat red while visible (now the same
+      sync-status colour the "Seen" list uses — see OutstandingBeaconUi.syncState — with the
+      "currently visible, ready to un-eject" cue kept as bold text instead of colour)
+- [x] label Race History's list items as Race/Progress/Peers with a small hand-drawn icon (not
+      from the Material icons library — see ui/components/ItemTypeBadge.kt) and echo each item's
+      full race name/label in its title, including the Progress detail screen's own title
+- [x] the Progress detail screen's own per-bib rows should match the rest of the app's history
+      rows: one compact line per bib instead of a stacked multi-line ListItem card — see
+      ProgressDetailScreen.kt's ProgressEntryRow, now a single Row reusing
+      ui/components/HistoryRowStyle.kt's historyRowModifier
 
 # Tweaks/Bugs
 
@@ -500,68 +539,48 @@ In outline the 'beacon plan' consists of:
       count rather than `bibsModeStartedAtMillis`, which Reset clears back to null and so can't
       tell "never started" apart from "started before, now reset" on its own) — so a genuine
       Relocate goes straight into the keypad, while the race's first-ever Bibs setup still shows
-     the manual Start button.
+      the manual Start button.
 
 ## Ejection bugs/tweaks
 
 - [x] the seen list is too sparse vertically, tighten it up — **done**: the Count Mode list's own
-  `verticalArrangement` dropped from 8dp to 2dp; section headers ("Seen") carry their own
-  explicit top padding instead so sections still read as separated.
+      `verticalArrangement` dropped from 8dp to 2dp; section headers ("Seen") carry their own
+      explicit top padding instead so sections still read as separated.
 - [x] use the refLineNumber system when ejecting in a similar manner to Undo Last in bibs mode —
-  **done**: `CountModeRepository.recordEject` writes `HistoryAction.COUNT_EJECTED` with
-  `refLineNumber` pointing at the beacon's own `COUNT_SEEN` row, the exact shape
-  `EntryLogModeEngine.undoMostRecent` already uses; `currentSegment`'s own fold now treats
-  `COUNT_EJECTED` as an undo-marker alongside `UNDO`, so the targeted row's whole group drops
-  out of the live counted set automatically (`HistoryFold.foldLatestVisible`), replacing the
-  previous bespoke "latest row by lineNumber" comparison.
+      **done**: `CountModeRepository.recordEject` writes `HistoryAction.COUNT_EJECTED` with
+      `refLineNumber` pointing at the beacon's own `COUNT_SEEN` row, the exact shape
+      `EntryLogModeEngine.undoMostRecent` already uses; `currentSegment`'s own fold now treats
+      `COUNT_EJECTED` as an undo-marker alongside `UNDO`, so the targeted row's whole group drops
+      out of the live counted set automatically (`HistoryFold.foldLatestVisible`), replacing the
+      previous bespoke "latest row by lineNumber" comparison.
 - [x] use a labelled link on the seen list 'Eject' rather than the ^ icon — **done**.
 - [x] selecting eject shows a confusing dialog - i would expect just an eject yes/no confirm —
-  **done**: a plain "Eject beacon NNN? Yes/No", no extra explanatory text.
+      **done**: a plain "Eject beacon NNN? Yes/No", no extra explanatory text.
 - [x] a beacon ejected should appear in the 'to be seen' list with an 'ejected' link — **done**:
-  tapping it calls `CountModeViewModel.unejectBeacon`.
+      tapping it calls `CountModeViewModel.unejectBeacon`.
 - [x] an ejected beacon that is visible should be highlighted in the 'to be seen' list — **done**:
-  a separate, purely cosmetic live-presence signal (`lastDetectedAtMillis`, a periodic ticker,
-  nothing to do with detection/counting gating) bolds and colors the row while true.
+      a separate, purely cosmetic live-presence signal (`lastDetectedAtMillis`, a periodic ticker,
+      nothing to do with detection/counting gating) bolds and colors the row while true.
 - [x] selecting the ejected link should un-eject it so it becomes a normal to-be-seen
-  beacon but should remain tagged as 'was-ejected' until its re-seen — **done**: writes a new
-  `HistoryAction.COUNT_UNEJECTED` status marker (not another refLineNumber/undo row — see its
-  own doc); `CountModeRepository.statusByBeacon` reads each beacon's own most recent
-  SEEN/EJECTED/UNEJECTED row (from an unfolded, current-segment-scoped read —
-  `observeStatusByBeacon`/`currentSegmentRaw` — since the live counted-set fold above
-  deliberately hides the eject/uneject rows themselves) to decide EJECTED vs WAS_EJECTED vs
-  (absent) plain outstanding.
+      beacon but should remain tagged as 'was-ejected' until its re-seen — **done**: writes a new
+      `HistoryAction.COUNT_UNEJECTED` status marker (not another refLineNumber/undo row — see its
+      own doc); `CountModeRepository.statusByBeacon` reads each beacon's own most recent
+      SEEN/EJECTED/UNEJECTED row (from an unfolded, current-segment-scoped read —
+      `observeStatusByBeacon`/`currentSegmentRaw` — since the live counted-set fold above
+      deliberately hides the eject/uneject rows themselves) to decide EJECTED vs WAS_EJECTED vs
+      (absent) plain outstanding.
 - [x] the above replaces the cooldown idea, drop it and its constant — **done**: `commitDetection`
-  now just checks the beacon's own status is not EJECTED; `RECOUNT_COOLDOWN_MILLIS`,
-  `PROMPT_SNOOZE_MILLIS`, the recount confirm/deny dialog, and all their supporting state are
-  gone.
+      now just checks the beacon's own status is not EJECTED; `RECOUNT_COOLDOWN_MILLIS`,
+      `PROMPT_SNOOZE_MILLIS`, the recount confirm/deny dialog, and all their supporting state are
+      gone.
 - [x] drop the Eject All link, its redundant now there is a RESET option — **done**.
 
 ## Factor out all the BLe stuff so there is a single source of truth
 
 - [x] there should be a single thread responsible to bt tx and another for rx, with a queueing
-  system to drive them, so then not possible to get advert race conditions and the threads
-  can easily serialise operations with appropriate time gaps
-
-# ToDo
-
-## Tweaks
-
-- [ ] amalgamate Bibs, Count and Close modes into a single Bibs mode that is sensitive to location,
-      the location repertoire is: pen, start, CPn, finish, close and the location implies the mode,
-      pen==count, start==start, CPn==cp, finish==finish,
-      the 'relocate' link in bibs mode should be renamed 'move' and allow moving to/from any of
-      these locations and their implied modes, the location drop-down in setup race should include
-      'Pen'
-- [ ] implement the nearby peer sync mechanism for all modes except close
-- [ ] add the race name as a feedback line to the setup device screen
-- [ ] shorten the app name in the title bar from 'RaceMaster Mobile' to 'RM Mobile' 
-
-## Factor out all the BLe stuff so there is a single source of truth
-
-- [ ] Mule mode uses BLE to transport data when there is no mobile signal,
-      Other modes use BLE to detect nearby peers,
-      Document how all this hangs together so a niaive code reader can work out what is going on
-- [ ] refreshing the advertised payload (lastLineNumber etc.) currently tears the whole
+      system to drive them, so then not possible to get advert race conditions and the threads
+      can easily serialise operations with appropriate time gaps
+- [x] refreshing the advertised payload (lastLineNumber etc.) currently tears the whole
       advertising set down and brings up a new one (stopAdvertising + startAdvertising), which
       gets issued a brand new random BLE address immediately rather than waiting for the normal
       ~10+ minute rotation — confirmed live via raw Bluetooth stack logs. The coalescing fix
@@ -569,8 +588,13 @@ In outline the 'beacon plan' consists of:
       changing on every restart. BluetoothLeAdvertiser.startAdvertisingSet/AdvertisingSet.
       setAdvertisingData (Android 8+) can update the broadcast payload without a full teardown,
       which would avoid the address churn at the source — bigger change (new API surface,
-      minSdk 24 compatibility to keep working on older devices), worth doing separately
-- [ ] PeripheralSyncService's self-healing (handleEnsureUp) only retries advertising when
+      minSdk 24 compatibility to keep working on older devices), worth doing separately —
+      done: PeripheralSyncService now starts advertising via startAdvertisingSet (legacyMode)
+      on API 26+ (every real device this app ships to) and updates its payload in place via
+      AdvertisingSet.setAdvertisingData/setScanResponseData instead of stop+restart, falling
+      back to the old legacy stop+restart path on API 24/25 or if a chipset's BLE controller
+      ever reports ADVERTISE_FAILED_FEATURE_UNSUPPORTED for the advertising-set path
+- [x] PeripheralSyncService's self-healing (handleEnsureUp) only retries advertising when
       gattServer is null or isAdvertising is false, and isAdvertising only ever flips false
       inside AdvertiseCallback.onStartFailure or an explicit stopAdvertising() call — so a
       native BLE stack stall that never calls back at all (neither onStartSuccess nor
@@ -585,7 +609,32 @@ In outline the 'beacon plan' consists of:
       liveness check: after issuing startAdvertising(), if neither onStartSuccess nor
       onStartFailure has fired within a few seconds, treat it as failed (log it, feed
       recordAdvertisingFailure(), and let the existing retry loop take it from there) instead
-      of trusting the stale isAdvertising flag indefinitely
+      of trusting the stale isAdvertising flag indefinitely — done: startAdvertisingAttempt now
+      wraps both the legacy and advertising-set start paths in a bounded wait
+      (ADVERTISING_START_LIVENESS_TIMEOUT, 5s) on a pendingAdvertisingStart CompletableDeferred
+      that either callback completes; a timeout is now treated exactly like a reported failure
+
+# ToDo
+
+## More Tweaks
+
+- [ ] amalgamate Bibs, Count and Close modes into a single Bibs mode that is sensitive to location,
+      the location repertoire is: pen, start, CPn, finish, close and the location implies the mode,
+      pen==count, start==start, CPn==cp, finish==finish,
+      the 'relocate' link in bibs mode should be renamed 'move' and allow moving to/from any of
+      these locations and their implied modes, the location drop-down in setup race should include
+      'Pen'
+- [ ] implement the nearby peer sync mechanism for all modes except close
+- [ ] add the race name as a feedback line to the setup device screen
+- [ ] add a start-up option to set the phone in kiosk mode if not in it, or to exit kiosk mode
+      if it is, the objective is to lock things down so only this app can send/recieve data
+      either as mobile, wifi or bt
+
+## Factor out all the BLe stuff so there is a single source of truth
+
+- [ ] Mule mode uses BLE to transport data when there is no mobile signal or no wifi,
+      Other modes use BLE to detect nearby peers and to update the mule,
+      Document how all this hangs together so a niaive code reader can work out what is going on
 
 ## Count mode
 
@@ -595,17 +644,6 @@ In outline the 'beacon plan' consists of:
       web app, beacons not counted can be determined from the progress.json file
 - [ ] bibs retired at CPn should not be expected to be seen at CPn+ or the finish, but should
       be expected at the close station, this is irrespective of the timing method
-- [ ] count mode lines need to follow the red->orange->green colour scheme to reflect not sync'd
-      picked up by a mule, sync'd to the server/sink
-- [ ] add an "Ejected" heading above the ejected beacons list
-- [ ] add a "Not Seen" heading below the "n unique beacons seen" line and above the 
-      "None - every issued beacon has been seen" line
-- [ ] the wording of "0 of 5 yet to be seen" is confusing, say something more specific when all
-      have been seen
-- [ ] CountUnejected lines should contain the bib number and ref line to the ejection (if it
-      is local) 
-- [ ] move the peer activity view from the count mode screen to the history screen, and add a
-      delete facility (so forces a re-sync)
 
 ## Start line
 

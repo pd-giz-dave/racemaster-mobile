@@ -57,20 +57,31 @@ enum class CountBeaconStatus { EJECTED, WAS_EJECTED }
  *  Undo makes its own target vanish rather than visibly "crossed out" — this status tag is a
  *  separate, purely informational read of the same current-segment window, bypassing that fold
  *  on purpose. See [CountModeRepository.currentSegmentRaw]. */
-fun statusByBeacon(rawCurrentSegmentRows: List<HistoryLineEntity>): Map<Int, CountBeaconStatus> {
-    val latest = LinkedHashMap<Int, HistoryLineEntity>()
-    for (row in rawCurrentSegmentRows.sortedBy { it.lineNumber }) {
-        if (row.action != HistoryAction.COUNT_SEEN && row.action != HistoryAction.COUNT_EJECTED && row.action != HistoryAction.COUNT_UNEJECTED) continue
-        val beaconNumber = parseBeaconCount(row.note) ?: continue
-        latest[beaconNumber] = row
-    }
-    return latest.mapNotNull { (beaconNumber, row) ->
+fun statusByBeacon(rawCurrentSegmentRows: List<HistoryLineEntity>): Map<Int, CountBeaconStatus> =
+    latestCountEventRowByBeacon(rawCurrentSegmentRows).mapNotNull { (beaconNumber, row) ->
         when (row.action) {
             HistoryAction.COUNT_EJECTED -> beaconNumber to CountBeaconStatus.EJECTED
             HistoryAction.COUNT_UNEJECTED -> beaconNumber to CountBeaconStatus.WAS_EJECTED
             else -> null
         }
     }.toMap()
+
+/** The shared "latest row per beacon" sweep [statusByBeacon] itself reduces down to just the
+ *  EJECTED/WAS_EJECTED enum above — pulled out so [mobile.racemaster.ui.countmode.CountModeViewModel]
+ *  can read the full row (TODO.md "the ejected lines should follow the same colouring scheme as
+ *  the seen lines" needs each row's own lineNumber/syncedAtMillis to compute a LineSyncState,
+ *  not just the status enum [statusByBeacon] throws away). Includes the COUNT_SEEN rows too (not
+ *  just EJECTED/UNEJECTED) — a beacon re-counted since its last eject must map to its new
+ *  COUNT_SEEN row here, same as [statusByBeacon]'s own fold already drops its status entirely in
+ *  that case. */
+fun latestCountEventRowByBeacon(rawCurrentSegmentRows: List<HistoryLineEntity>): Map<Int, HistoryLineEntity> {
+    val latest = LinkedHashMap<Int, HistoryLineEntity>()
+    for (row in rawCurrentSegmentRows.sortedBy { it.lineNumber }) {
+        if (row.action != HistoryAction.COUNT_SEEN && row.action != HistoryAction.COUNT_EJECTED && row.action != HistoryAction.COUNT_UNEJECTED) continue
+        val beaconNumber = parseBeaconCount(row.note) ?: continue
+        latest[beaconNumber] = row
+    }
+    return latest
 }
 
 /** Cross-device counterpart of [statusByBeacon] (TODO.md: "if a beacon is ejected it must be
@@ -322,36 +333,56 @@ class CountModeRepository(
     }
 
     /** The operator's own "let this one back in" (TODO.md) — see [HistoryAction.COUNT_UNEJECTED]'s
-     *  own doc for why this is a plain status marker, not another refLineNumber/undo-fold row. A
-     *  no-op unless [beaconNumber]'s current [statusByBeacon] status is actually EJECTED — the
+     *  own doc for why this is a plain status marker, not another undo-fold row (it never makes
+     *  its own target vanish the way [recordEject]'s own refLineNumber does). TODO.md: "CountUnejected
+     *  lines should contain the bib number and ref line to the ejection (if it is local)" — [target]
+     *  below is the most recent local COUNT_EJECTED row for this beacon in the current segment, if
+     *  one exists; its [refLineNumber] and bib number are carried onto this row exactly the way
+     *  [recordEject] already carries its own target's bib number, which Race History already
+     *  renders generically as "Edited from L{n}" (see RaceHistoryDetailViewModel's own
+     *  `editedFromLineNumber = it.refLineNumber`) with no further UI wiring needed. A beacon
+     *  un-ejected from a peer's own report (no local ejection row at all — TODO.md's "flagged as
+     *  such on all phones" cuts both ways, see [allowWithoutLocalRecord]) has no [target] to
+     *  reference; [fallbackBibNumber] (the race-wide beacon->bib mapping, mirroring [recordEject]'s
+     *  own parameter) stands in for the bib number a local target would otherwise have supplied.
+     *
+     *  A no-op unless [beaconNumber]'s current [statusByBeacon] status is actually EJECTED — the
      *  caller (CountModeViewModel.unejectBeacon) only ever offers this for an ejected beacon, but
      *  this stays safe to call either way. [allowWithoutLocalRecord] mirrors [recordEject]'s own
      *  parameter — a beacon ejected only by a same-group peer has no local COUNT_EJECTED row for
      *  this device's own [statusByBeacon] to see, so without it this device could never un-eject
-     *  a peer's own ejection (TODO.md's "flagged as such on all phones" cuts both ways: the
-     *  un-eject link that flag offers must actually work from any phone too). */
+     *  a peer's own ejection. */
     suspend fun recordUneject(
         raceId: Long,
         beaconNumber: Int,
+        fallbackBibNumber: Int? = null,
         allowWithoutLocalRecord: Boolean = false,
         timestampMillis: Long = System.currentTimeMillis(),
     ) {
         db.withTransaction {
             val raw = historyLineDao.getAllForRaceAndMode(raceId, HistoryMode.COUNT)
-            if (statusByBeacon(currentSegmentRaw(raw))[beaconNumber] != CountBeaconStatus.EJECTED && !allowWithoutLocalRecord) {
+            val currentRaw = currentSegmentRaw(raw)
+            if (statusByBeacon(currentRaw)[beaconNumber] != CountBeaconStatus.EJECTED && !allowWithoutLocalRecord) {
                 return@withTransaction
             }
+            // The most recent local ejection for this beacon, if any — a re-eject cycle can
+            // leave more than one COUNT_EJECTED row for the same beacon in this segment, and
+            // it's always whichever happened last that this un-eject is actually undoing.
+            val target = currentRaw
+                .filter { it.action == HistoryAction.COUNT_EJECTED && parseBeaconCount(it.note) == beaconNumber }
+                .maxByOrNull { it.lineNumber }
             val race = raceDao.getById(raceId) ?: return@withTransaction
             historyLineDao.insert(
                 HistoryLineEntity(
                     raceId = raceId,
                     mode = HistoryMode.COUNT,
                     action = HistoryAction.COUNT_UNEJECTED,
-                    bibNumber = null,
+                    bibNumber = target?.bibNumber ?: fallbackBibNumber,
                     splitNumber = null,
                     lineNumber = race.nextLineNumber,
                     note = "beacon=$beaconNumber",
                     timestampMillis = timestampMillis,
+                    refLineNumber = target?.lineNumber,
                 ),
             )
             raceDao.incrementLineNumber(raceId)

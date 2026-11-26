@@ -24,6 +24,9 @@ private class UncalledPeerSeenRecordDao : PeerSeenRecordDao {
     override fun observeForBeacon(raceGroupId: String, mode: HistoryMode, beaconNumber: Int): Flow<List<PeerSeenRecordEntity>> = flowOf(emptyList())
     override fun observeForBib(raceGroupId: String, mode: HistoryMode, bibNumber: Int): Flow<List<PeerSeenRecordEntity>> = flowOf(emptyList())
     override fun observeGroup(raceGroupId: String, mode: HistoryMode): Flow<List<PeerSeenRecordEntity>> = flowOf(emptyList())
+    override fun observeForOrigin(raceGroupId: String, mode: HistoryMode, originDeviceId: String): Flow<List<PeerSeenRecordEntity>> = flowOf(emptyList())
+    override fun observeOriginSummaries(): Flow<List<mobile.racemaster.data.db.dao.PeerOriginSummary>> = flowOf(emptyList())
+    override suspend fun deleteGroupOrigin(raceGroupId: String, mode: HistoryMode, originDeviceId: String) = error("not used by this test")
 }
 
 class PeerGroupDetectorTest {
