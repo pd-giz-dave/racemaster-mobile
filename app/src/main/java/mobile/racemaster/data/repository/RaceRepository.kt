@@ -150,7 +150,7 @@ class RaceRepository(
     // segment at the same station with the counter back at 1.
     suspend fun ensureOpenSegment(raceId: Long, mode: AppMode) {
         val race = raceDao.getById(raceId) ?: return
-        val historyMode = mode.toHistoryMode()
+        val historyMode = mode.toHistoryMode(race.location)
         if (visitsSnapshot(raceId, historyMode).openVisits.isNotEmpty()) return
         recordModeStart(raceId, mode, race.location)
     }
@@ -232,27 +232,23 @@ class RaceRepository(
     // between (e.g. Finish -> CP1 -> Finish) is unaffected: its own visit(s) sit untouched, with
     // their own counter progressing independently of whatever Finish resumes to here.
     suspend fun recordModeStart(raceId: Long, mode: AppMode, location: String, timestampMillis: Long = System.currentTimeMillis()) {
-        // Time/Count/Close are never location-aware the way Bibs is (TODO.md's "A
-        // rationalisation" for Time) — each instead gets a single fixed value, forced once here,
-        // at the single place a LOCATION row/race.location is ever written, rather than
-        // overriding every later reader of it. Ignores whatever the caller actually passed (a
-        // lingering Bibs-mode value sitting in Setup Race's own hidden-for-these-modes draft, or
-        // free text still typed into Relocate's location field while one of them is selected).
-        // Count's and Close's own fixed values are deliberately real, distinct location names
-        // ("Pen"/"Close"), not both pinned to "Finish" like Time — per direct instruction, so
-        // ~racemaster's own device list lets an operator tell a Count or Close phone apart from
-        // everything else at a glance, since neither ever writes a Bib/Time entry of its own to
-        // identify it by otherwise. Count's own value is "Pen" (TODO.md's "Tweaks": the holding
-        // pen runners walk through pre-start, not "Start" itself — distinct wording avoids
-        // reading like the race's actual start line).
+        // Time is never location-aware the way Bibs is (TODO.md's "A rationalisation") — it
+        // gets a single fixed value, forced once here, at the single place a LOCATION
+        // row/race.location is ever written, rather than overriding every later reader of it.
+        // Bibs now passes location straight through, including "Pen"/"Close" — those are just
+        // two more Bibs locations since the Count/Close amalgamation (see AppMode's own doc);
+        // the Setup Race/Relocate location field is what used to force them here, now it's the
+        // operator's own typed/picked choice, already validated by isValidLocationForMode.
         val effectiveLocation = when (mode) {
             AppMode.TIME -> "Finish"
-            AppMode.COUNT -> "Pen"
-            AppMode.CLOSE -> "Close"
             AppMode.BIBS -> location
         }
         db.withTransaction {
-            val historyMode = mode.toHistoryMode()
+            // Location-aware (bucket #1 — see AppMode.toHistoryMode(location)'s own doc): a
+            // Bibs-mode race at "Pen"/"Close" still tags its rows HistoryMode.COUNT/CLOSE, so
+            // CountModeRepository/CloseModeRepository keep finding exactly the rows they always
+            // have, unchanged by the amalgamation.
+            val historyMode = mode.toHistoryMode(effectiveLocation)
             var race = raceDao.getById(raceId) ?: return@withTransaction
             val resumeCounter = if (race.mode == null) {
                 null
@@ -412,7 +408,7 @@ class RaceRepository(
         val newName = raceNameFromLabel(raceLabel)
         raceDao.updateDetails(raceId, newName, race.location, raceLabel)
         val draft = settingsRepository.setupRaceDraft.first()
-        settingsRepository.saveSetupRaceDraft(newName, draft.location, draft.mode?.let { AppMode.valueOf(it) })
+        settingsRepository.saveSetupRaceDraft(newName, draft.location, draft.mode?.let { raw -> runCatching { AppMode.valueOf(raw) }.getOrNull() })
     }
 
     fun observeRace(id: Long): Flow<RaceEntity?> = raceDao.observeById(id)
@@ -475,7 +471,7 @@ class RaceRepository(
             historyLineDao.insert(
                 HistoryLineEntity(
                     raceId = raceId,
-                    mode = race.mode?.let { AppMode.valueOf(it).toHistoryMode() } ?: HistoryMode.TIME,
+                    mode = race.mode?.let { runCatching { AppMode.valueOf(it) }.getOrNull() }?.toHistoryMode(race.location) ?: HistoryMode.TIME,
                     action = HistoryAction.NEW_RACE,
                     bibNumber = null,
                     splitNumber = null,
@@ -570,7 +566,12 @@ class RaceRepository(
         val race = raceDao.getById(raceId) ?: return
         if (race.timeModeStartedAtMillis != null) closeCurrentSegment(raceId, HistoryMode.TIME)
         if (race.bibsModeStartedAtMillis != null) closeCurrentSegment(raceId, HistoryMode.BIBS)
-        if (race.mode == AppMode.COUNT.name || race.mode == AppMode.CLOSE.name) stopMode(raceId)
+        // Pen/Close are Bibs locations with no Start button/started-flag column of their own
+        // (see CountModeRepository/CloseModeRepository's own doc) — the check above never fires
+        // for them, so this is still what force-stops a race stuck active at either.
+        if (race.mode == AppMode.BIBS.name && (race.location.equals("Pen", ignoreCase = true) || race.location.equals("Close", ignoreCase = true))) {
+            stopMode(raceId)
+        }
     }
 
     // Resolves a race label back to this device's own local race — see

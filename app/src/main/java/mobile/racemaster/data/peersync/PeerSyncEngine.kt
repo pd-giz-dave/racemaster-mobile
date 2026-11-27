@@ -308,9 +308,17 @@ class PeerSyncEngine(
                 if (raceId == null || mode == null || peerSyncOff) {
                     flowOf(OwnContext(null, null))
                 } else {
-                    val historyMode = mode.toHistoryMode()
                     raceRepository.observeRace(raceId).map { race ->
-                        OwnContext(race?.let { peerGroupDetector.ownGroupKey(it.label, it.location, historyMode) }, historyMode)
+                        // groupKey uses the plain (bucket-#2) mapping — Pen/Close both resolve to
+                        // HistoryMode.BIBS, same as any other Bibs location, with location itself
+                        // (not this mode) already doing the partitioning via
+                        // PeerSyncRepository.groupKey. OwnContext.mode below is the separate,
+                        // location-aware (bucket-#1) mapping countStatusOnly/mergeRecords need,
+                        // so a Pen-located race still drives Count Mode's own pull/cache path —
+                        // see AppMode.toHistoryMode's two overloads for why these must differ.
+                        val groupKey = race?.let { peerGroupDetector.ownGroupKey(it.label, it.location, mode.toHistoryMode()) }
+                        val dataMode = mode.toHistoryMode(race?.location.orEmpty())
+                        OwnContext(groupKey, dataMode)
                     }
                 }
             }

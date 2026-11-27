@@ -28,8 +28,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.RaceProgressSummary
-import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.util.withClickSound
 import java.text.SimpleDateFormat
@@ -52,22 +52,26 @@ private fun formatClosedAt(millis: Long): String = SimpleDateFormat("HH:mm", Loc
  *
  *  "Stop" is a body-level button at the foot of the page, below the list (direct feedback, same
  *  move [mobile.racemaster.ui.countmode.CountModeScreen] made for its own Stop/Reset pair) — the
- *  top bar itself is the same [mobile.racemaster.ui.components.ScreenTopBar] every non-mode
- *  screen uses (Help/Back/Home, direct feedback: this screen used to be the odd one out with
- *  only a Home icon), not [mobile.racemaster.ui.components.ModeScreenTopBar] (Bibs/Time's own
- *  secondary-action shape) — Back and Home both just navigate home, same reasoning
- *  [mobile.racemaster.ui.countmode.CountModeScreen]'s own doc gives for its identical pair. Stop
+ *  top bar itself is [mobile.racemaster.ui.components.ModeScreenTopBar] (Bibs/Time's own shape),
+ *  its one secondary-action slot wired to "Move" rather than Stop — TODO.md's "allow moving
+ *  to/from any of these locations [...] and their implied modes" is what gives Close Mode this
+ *  link at all, reusing the exact same [mobile.racemaster.ui.racedetails.RaceDetailsScreen]
+ *  Bibs' own "Move" link already opens, for whichever race is actually active right now (not
+ *  necessarily this one, on the Routes.CLOSE_BEACONS path — see below). Stop
  *  clears the race's mode back to null
  *  ([RaceRepository.stopMode]) — it's the *only* way to ever move this race out of Close mode once
  *  it's set up, since Close has no Reset of its own (see [CloseModeViewModel]'s own doc). Reached
- *  via Routes.CLOSE_MODE (Setup Race) and Routes.CLOSE_BEACONS (the Beacons hub's own standing
- *  shortcut) alike — see Routes.CLOSE_BEACONS's own doc for why both stay; Stop is disabled on the
- *  latter path unless the active race's own current mode genuinely is Close (see
- *  [CloseModeUiState.canStopCloseMode]'s own doc). */
+ *  via Routes.BIBS_MODE's own location dispatch at "Close" (Setup Race) and Routes.CLOSE_BEACONS
+ *  (the Beacons hub's own standing shortcut) alike — see Routes.CLOSE_BEACONS's own doc for why
+ *  both stay; Stop is disabled on the latter path unless the active race's own current
+ *  mode/location genuinely is Bibs-at-Close (see [CloseModeUiState.canStopCloseMode]'s own doc) —
+ *  Move has no such restriction, since it's just as valid to move the *actually* active race
+ *  from here as from its own screen. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CloseModeScreen(
     onHome: () -> Unit,
+    onEditRace: (raceId: Long) -> Unit,
     viewModel: CloseModeViewModel = viewModel(factory = CloseModeViewModel.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -119,9 +123,10 @@ fun CloseModeScreen(
 
     Scaffold(
         topBar = {
-            ScreenTopBar(
-                title = { Text("Close Mode") },
-                onBack = onHome,
+            ModeScreenTopBar(
+                title = "Close Mode",
+                thisRaceEnabled = uiState.raceId != null,
+                onThisRace = { uiState.raceId?.let(onEditRace) },
                 onHome = onHome,
                 helpTopic = HelpTopics.CloseMode,
             )

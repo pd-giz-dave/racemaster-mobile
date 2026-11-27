@@ -682,7 +682,7 @@ class MuleSyncEngine(
                 val raceId = settingsRepository.activeRaceId.first() ?: continue
                 val race = raceRepository.getRace(raceId) ?: continue
                 val mode = race.mode?.let { runCatching { AppMode.valueOf(it) }.getOrNull() } ?: continue
-                pingIfQuiet(raceId, mode.toHistoryMode(), intervalSeconds, System.currentTimeMillis())
+                pingIfQuiet(raceId, mode.toHistoryMode(race.location), intervalSeconds, System.currentTimeMillis())
             }
         }
     }

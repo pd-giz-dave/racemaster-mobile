@@ -3,11 +3,11 @@ package mobile.racemaster.navigation
 object Routes {
     const val MODE_PICKER = "mode_picker"
     const val TIME_MODE = "time_mode"
+    // Count/Close no longer have their own routes (TODO.md: "amalgamate Bibs, Count and Close
+    // modes" — see AppMode's own doc) — this one route now dispatches to CountModeScreen,
+    // CloseModeScreen, or Bibs' own keypad UI purely by the race's current location ("Pen",
+    // "Close", or anything else), see RacemasterNavHost's own doc for the dispatcher composable.
     const val BIBS_MODE = "bibs_mode"
-    const val COUNT_MODE = "count_mode"
-    // Setup-Race-driven Close entry point — see CLOSE_BEACONS's own doc for the other (kept)
-    // entry point; both resolve to the same CloseModeScreen.
-    const val CLOSE_MODE = "close_mode"
     const val MULE_MODE = "mule_mode"
     const val RACE_HISTORY = "race_history"
     const val RACE_HISTORY_DETAIL = "race_history_detail/{raceId}"
@@ -35,8 +35,9 @@ object Routes {
     // one's number back off it.
     const val IDENTIFY_FOB = "identify_fob"
     // Post-race tidy-up (TODO.md's "finish mode") — kept as an ad-hoc shortcut usable regardless
-    // of the active race's own mode, alongside CLOSE_MODE's Setup-Race-driven path; both resolve
-    // to the same CloseModeScreen (see that screen's own doc).
+    // of the active race's own mode, alongside BIBS_MODE's own Setup-Race-driven path to the
+    // same screen once the race's location is "Close"; both resolve to the same CloseModeScreen
+    // (see that screen's own doc).
     const val CLOSE_BEACONS = "close_beacons"
     // TODO.md's "Bluetooth Beacon range estimation" section — see RangeCalibrationScreen's own
     // doc; a data-collection tool, not a race-day operation.

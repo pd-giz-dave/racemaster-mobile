@@ -43,7 +43,7 @@ class NameDeviceViewModel(
                 flowOf(false)
             } else {
                 raceRepository.observeRace(raceId).map { race ->
-                    race != null && isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.mode)
+                    race != null && isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.mode, race.location)
                 }
             }
         }

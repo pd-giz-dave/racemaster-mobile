@@ -43,7 +43,8 @@ import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.util.withClickSound
 
-/** "Relocate" (formerly "This Race") — name/location/mode editor for the device's
+/** "Move" (formerly "Relocate"/"This Race" — TODO.md: "the 'relocate' link in bibs mode should
+ *  be renamed 'move'") — name/location/mode editor for the device's
  *  already-created race (see RaceDetailsViewModel's own doc: creation itself moved to Setup
  *  Race, and course/bib-range fields are gone entirely). Reached from any mode screen's own top
  *  bar. Name stays locked once the race is active, same as always; location and mode are both
@@ -130,7 +131,7 @@ fun RaceDetailsScreen(
     Scaffold(
         topBar = {
             ScreenTopBar(
-                title = { Text("Relocate") },
+                title = { Text("Move") },
                 onBack = { attemptExit(onCancel) },
                 onHome = { attemptExit(onHome) },
                 helpTopic = HelpTopics.SetupRace,
@@ -202,8 +203,8 @@ fun RaceDetailsScreen(
                 Text(
                     "Saving a new location and/or mode here records that this device has moved " +
                         "and/or switched — its already-recorded entries stay exactly as they are. " +
-                        "If this was a mistake, fix it by relocating again back to where you came " +
-                        "from — Undo Last never undoes a relocate.",
+                        "If this was a mistake, fix it by moving again back to where you came " +
+                        "from — Undo Last never undoes a move.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -219,7 +220,7 @@ fun RaceDetailsScreen(
                 },
                 enabled = canSave,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text(if (raceIsActive) "Save (relocate)" else "Save") }
+            ) { Text(if (raceIsActive) "Save (move)" else "Save") }
         }
     }
 

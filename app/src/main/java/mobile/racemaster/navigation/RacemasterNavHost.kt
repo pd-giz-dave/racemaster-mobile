@@ -25,9 +25,8 @@ import mobile.racemaster.ui.beacon.BeaconProgrammerScreen
 import mobile.racemaster.ui.beaconidentify.IdentifyFobScreen
 import mobile.racemaster.ui.beaconops.BeaconOperationsScreen
 import mobile.racemaster.ui.beaconops.RangeCalibrationScreen
-import mobile.racemaster.ui.bibsmode.BibsModeScreen
+import mobile.racemaster.ui.bibsmode.BibsModeDispatcher
 import mobile.racemaster.ui.closemode.CloseModeScreen
-import mobile.racemaster.ui.countmode.CountModeScreen
 import mobile.racemaster.ui.editentry.EditEntryScreen
 import mobile.racemaster.ui.help.HelpScreen
 import mobile.racemaster.ui.modepicker.ModePickerScreen
@@ -118,13 +117,10 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                     )
                 }
                 composable(Routes.CLOSE_BEACONS) {
-                    CloseModeScreen(onHome = { navController.navigateHome() })
-                }
-                composable(Routes.CLOSE_MODE) {
-                    CloseModeScreen(onHome = { navController.navigateHome() })
-                }
-                composable(Routes.COUNT_MODE) {
-                    CountModeScreen(onHome = { navController.navigateHome() })
+                    CloseModeScreen(
+                        onHome = { navController.navigateHome() },
+                        onEditRace = { raceId -> navController.navigate(Routes.raceDetails(raceId)) },
+                    )
                 }
                 composable(Routes.RANGE_CALIBRATION) {
                     RangeCalibrationScreen(
@@ -201,7 +197,7 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
                     )
                 }
                 composable(Routes.BIBS_MODE) {
-                    BibsModeScreen(
+                    BibsModeDispatcher(
                         onHome = { navController.navigateHome() },
                         onEditRace = { raceId -> navController.navigate(Routes.raceDetails(raceId)) },
                         onEditEntry = { entryId -> navController.navigate(Routes.editEntry(entryId)) },
@@ -368,11 +364,12 @@ fun RacemasterNavHost(modifier: Modifier = Modifier) {
 // Mule syncing is no longer part of AppMode (see SettingsRepository.muleSyncEnabled's own doc),
 // so it has no route here — this only ever routes a *recording* mode, and Routes.MULE_MODE is
 // reached directly via ModePickerScreen's own onMuleModeSelected instead, independent of this.
+// Count/Close no longer have their own route either (see AppMode's own doc on the amalgamation)
+// — Routes.BIBS_MODE's own BibsModeDispatcher is what picks CountModeScreen/CloseModeScreen/
+// Bibs' own keypad UI from here, purely by the race's current location.
 private fun AppMode?.toRoute(): String = when (this) {
     AppMode.TIME -> Routes.TIME_MODE
     AppMode.BIBS -> Routes.BIBS_MODE
-    AppMode.COUNT -> Routes.COUNT_MODE
-    AppMode.CLOSE -> Routes.CLOSE_MODE
     null -> Routes.MODE_PICKER
 }
 

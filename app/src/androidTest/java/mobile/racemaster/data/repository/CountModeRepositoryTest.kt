@@ -63,9 +63,11 @@ class CountModeRepositoryTest {
         db.close()
     }
 
-    // Mirrors Setup Race's own real write — see TimeModeRepositoryTest's identical helper.
+    // Mirrors Setup Race's own real write — see TimeModeRepositoryTest's identical helper. Count
+    // no longer has its own AppMode value (see AppMode's own doc on the amalgamation) — "Pen" is
+    // what still tags these rows HistoryMode.COUNT (see AppMode.toHistoryMode(location)).
     private suspend fun setupRace() {
-        raceRepository.recordModeStart(raceId, AppMode.COUNT, "Pen")
+        raceRepository.recordModeStart(raceId, AppMode.BIBS, "Pen")
     }
 
     @Test
@@ -121,8 +123,9 @@ class CountModeRepositoryTest {
     // Eject/uneject (TODO.md: "a means to eject one seen beacon" / "selecting the ejected link
     // should un-eject it ... but should remain tagged 'was-ejected' until its re-seen") —
     // CountModeRepository.observeCounts' own fold (COUNT_EJECTED as an undo-marker, same shape as
-    // Undo Last) and observeStatusByBeacon (a separate, unfolded read) are both exercised here
-    // directly against a real database, independent of any ViewModel plumbing.
+    // Undo Last) and observeStatusEvents/statusByBeacon (a separate, unfolded read, collapsed by
+    // the free statusByBeacon function) are both exercised here directly against a real database,
+    // independent of any ViewModel plumbing.
 
     @Test
     fun ejectedBeaconDropsOutOfTheCountedSeenSetAndIsTaggedEjected() = runTest {
@@ -138,7 +141,7 @@ class CountModeRepositoryTest {
         // this fold-collapsed view, exactly like an Undo'd entry — see observeCounts' own doc.
         assertTrue(rows.none { it.action == HistoryAction.COUNT_EJECTED })
 
-        assertEquals(mapOf(1 to CountBeaconStatus.EJECTED), repository.observeStatusByBeacon(raceId).first())
+        assertEquals(mapOf(1 to CountBeaconStatus.EJECTED), statusByBeacon(repository.observeStatusEvents(raceId).first()))
     }
 
     @Test
@@ -187,7 +190,7 @@ class CountModeRepositoryTest {
         repository.recordEject(raceId, beaconNumber = 1)
 
         repository.recordUneject(raceId, beaconNumber = 1)
-        assertEquals(mapOf(1 to CountBeaconStatus.WAS_EJECTED), repository.observeStatusByBeacon(raceId).first())
+        assertEquals(mapOf(1 to CountBeaconStatus.WAS_EJECTED), statusByBeacon(repository.observeStatusEvents(raceId).first()))
         // Still outstanding, not counted — un-ejecting alone doesn't recount it.
         assertTrue(repository.observeCounts(raceId).first().none { it.action == HistoryAction.COUNT_SEEN })
 
@@ -195,7 +198,7 @@ class CountModeRepositoryTest {
         // longer EJECTED) genuinely re-counts it, and the WAS_EJECTED tag is gone — nothing left
         // to show once it's been seen again.
         repository.recordCount(raceId, beaconNumber = 1, bibNumber = 101, totalCount = 1)
-        assertTrue(repository.observeStatusByBeacon(raceId).first().isEmpty())
+        assertTrue(statusByBeacon(repository.observeStatusEvents(raceId).first()).isEmpty())
         assertTrue(repository.observeCounts(raceId).first().any { it.action == HistoryAction.COUNT_SEEN })
     }
 
@@ -212,14 +215,14 @@ class CountModeRepositoryTest {
         repository.recordCount(raceId, beaconNumber = 1, bibNumber = 101, totalCount = 1)
         repository.recordEject(raceId, beaconNumber = 1)
         repository.recordUneject(raceId, beaconNumber = 1)
-        assertEquals(mapOf(1 to CountBeaconStatus.WAS_EJECTED), repository.observeStatusByBeacon(raceId).first())
+        assertEquals(mapOf(1 to CountBeaconStatus.WAS_EJECTED), statusByBeacon(repository.observeStatusEvents(raceId).first()))
 
         // Mirrors tapping the outstanding list's own "was-ejected" link a second time — this
         // beacon has no live COUNT_SEEN row right now (it was never re-counted since the
         // un-eject), so recordEject can't point a refLineNumber at one the way it does from the
         // seen list; it must still land as EJECTED again.
         repository.recordEject(raceId, beaconNumber = 1)
-        assertEquals(mapOf(1 to CountBeaconStatus.EJECTED), repository.observeStatusByBeacon(raceId).first())
+        assertEquals(mapOf(1 to CountBeaconStatus.EJECTED), statusByBeacon(repository.observeStatusEvents(raceId).first()))
 
         val reEjectRow = db.historyLineDao().getAllForRaceAndMode(raceId, HistoryMode.COUNT)
             .filter { it.action == HistoryAction.COUNT_EJECTED }

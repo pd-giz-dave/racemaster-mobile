@@ -181,11 +181,6 @@ object MuleGattProfile {
     private const val MODE_WIRE_TIME: Byte = 1
     private const val MODE_WIRE_BIBS: Byte = 2
 
-    // 5/6, not 3/4 — see the retired-byte doc just below for why those two stay unused rather
-    // than being reassigned to Count/Close.
-    private const val MODE_WIRE_COUNT: Byte = 5
-    private const val MODE_WIRE_CLOSE: Byte = 6
-
     // 3 was MODE_WIRE_MULE, back when Mule was a 4th value of the AppMode enum this byte
     // encodes — retired, not reassigned, now that Mule syncing is its own independent flag (see
     // SettingsRepository.muleSyncEnabled) rather than a recording mode. decodeMode's `else`
@@ -198,20 +193,24 @@ object MuleGattProfile {
     // rationalisation"). Same graceful degradation: a not-yet-updated phone still advertising a
     // 4 here is simply read as "mode unknown" by an updated one, nothing crashes or misreads it
     // as Time/Bibs.
+    //
+    // 5/6 were MODE_WIRE_COUNT/MODE_WIRE_CLOSE, back when Count/Close were their own AppMode
+    // values — likewise retired, not reassigned, once they amalgamated into Bibs (TODO.md:
+    // "amalgamate Bibs, Count and Close modes" — see AppMode's own doc). Same graceful
+    // degradation again: a not-yet-updated phone still advertising a 5/6 here is read as "mode
+    // unknown," and an updated phone now at Pen/Close advertises MODE_WIRE_BIBS instead, with
+    // location (not this byte) telling peers apart — see PeerGroupDetector/PeerSyncRepository's
+    // own doc for why that's enough.
 
     private fun encodeMode(mode: AppMode?): Byte = when (mode) {
         AppMode.TIME -> MODE_WIRE_TIME
         AppMode.BIBS -> MODE_WIRE_BIBS
-        AppMode.COUNT -> MODE_WIRE_COUNT
-        AppMode.CLOSE -> MODE_WIRE_CLOSE
         null -> 0
     }
 
     private fun decodeMode(wire: Byte): AppMode? = when (wire) {
         MODE_WIRE_TIME -> AppMode.TIME
         MODE_WIRE_BIBS -> AppMode.BIBS
-        MODE_WIRE_COUNT -> AppMode.COUNT
-        MODE_WIRE_CLOSE -> AppMode.CLOSE
         else -> null
     }
 

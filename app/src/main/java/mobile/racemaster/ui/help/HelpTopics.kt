@@ -8,7 +8,7 @@ package mobile.racemaster.ui.help
 data class HelpTopic(val title: String, val tips: List<String>)
 
 /** One topic per screen, except where several screens share a single topic because they're
- *  really the same concern seen from different places (e.g. Setup Race and Relocate both just
+ *  really the same concern seen from different places (e.g. Setup Race and Move both just
  *  edit a race's name/location/mode) — see each screen's own `helpTopic` wiring for which one it
  *  uses. [all] is what the full Help screen indexes, in the order a new operator would actually
  *  meet each screen. */
@@ -73,17 +73,19 @@ object HelpTopics {
     )
 
     val SetupRace = HelpTopic(
-        title = "Setup Race / Relocate",
+        title = "Setup Race / Move",
         tips = listOf(
             "One race per device at a time — name, location and mode are all set here; type " +
-                "any Seniors/Juniors suffix straight into the name.",
+                "any Seniors/Juniors suffix straight into the name. Bibs Mode at \"Pen\" or " +
+                "\"Close\" behaves as Count Mode/Close Mode did before — location now decides " +
+                "that, not a separate mode.",
             "Scan Server fills in the race's exact server name so this phone's data lands in " +
                 "the right place.",
             "Disabled while a race is already active — Reset it first, or use Progress's own " +
                 "\"Resume\" if it was stopped by accident.",
-            "Relocate (each mode's own top bar) edits name/location/mode mid-race — location " +
+            "Move (Bibs Mode's own top bar) edits name/location/mode mid-race — location " +
                 "can change any time, name locks once the race has started.",
-            "Relocating to a location already visited picks up exactly where it left off, " +
+            "Moving to a location already visited picks up exactly where it left off, " +
                 "instead of starting over.",
         ),
     )

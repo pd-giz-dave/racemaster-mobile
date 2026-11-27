@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import mobile.racemaster.data.db.entity.HistoryAction
+import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.NON_ENTRY_ACTIONS
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.BtPollingStatus
@@ -21,6 +22,7 @@ import mobile.racemaster.data.repository.parseBeaconClose
 import mobile.racemaster.data.repository.parseBeaconCount
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.SettingsRepository
+import mobile.racemaster.data.settings.toHistoryMode
 import mobile.racemaster.di.appContainer
 import mobile.racemaster.ui.locationServicesEnabledFlow
 import mobile.racemaster.util.formatBibsSoFarText
@@ -30,6 +32,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -105,66 +108,71 @@ class ModePickerViewModel(
 
     // Once a race has genuinely been set up (a race exists AND its mode is known), the same
     // device/race/location/sync/progress summary the live mode screens themselves show (see
-    // RaceProgressSummary) — sourced from whichever of Time/Bibs repositories matches [raceMode],
-    // since that's this race's one currently-recording mode.
+    // RaceProgressSummary) — sourced from whichever repository matches this race's own current
+    // (location-aware — see AppMode.toHistoryMode(location)'s own doc) HistoryMode, since Pen/
+    // Close are just two more Bibs locations now (Count/Close no longer have their own AppMode
+    // value — see AppMode's own doc on the amalgamation) but still keep their own distinct rows.
     val raceSummary: StateFlow<RaceSummaryUiState?> = combine(settingsRepository.activeRaceId, raceMode) { raceId, mode -> raceId to mode }
         .flatMapLatest { (raceId, mode) ->
             if (raceId == null || mode == null) {
                 flowOf(null)
             } else {
-                val unsyncedFlow: Flow<Int> = when (mode) {
-                    AppMode.TIME -> timeModeRepository.observeUnsyncedCount(raceId)
-                    AppMode.BIBS -> bibsModeRepository.observeUnsyncedCount(raceId)
-                    AppMode.COUNT -> countModeRepository.observeUnsyncedCount(raceId)
-                    AppMode.CLOSE -> closeModeRepository.observeUnsyncedCount(raceId)
-                }
-                val lastSyncedFlow: Flow<Long?> = when (mode) {
-                    AppMode.TIME -> timeModeRepository.observeLastSyncedAtMillis(raceId)
-                    AppMode.BIBS -> bibsModeRepository.observeLastSyncedAtMillis(raceId)
-                    AppMode.COUNT -> countModeRepository.observeLastSyncedAtMillis(raceId)
-                    AppMode.CLOSE -> closeModeRepository.observeLastSyncedAtMillis(raceId)
-                }
-                val progressTextFlow: Flow<String> = when (mode) {
-                    // Matches TimeModeViewModel's own splitCount exactly (action == SPLIT, an
-                    // allowlist) — not splitNumber != 0, which would also count the fixed Start
-                    // marker's... no, Start's splitNumber is 0 so that's excluded correctly, but
-                    // a LOCATION row's splitNumber is null, and null != 0 is true, wrongly
-                    // counting it as a real split.
-                    AppMode.TIME -> timeModeRepository.observeCurrentSegmentSplits(raceId)
-                        .map { formatTimeSplitsText(it.count { s -> s.action == HistoryAction.SPLIT }) }
-                    AppMode.BIBS -> bibsModeRepository.observeCurrentSegmentEntries(raceId)
-                        .map { formatBibsSoFarText(it.count { e -> e.action !in NON_ENTRY_ACTIONS }) }
-                    // Unique beacons, not total rows — a re-presented, re-closed beacon
-                    // shouldn't inflate this count (see HistoryAction.CLOSE's own doc).
-                    AppMode.COUNT -> countModeRepository.observeCounts(raceId)
-                        .map { rows -> "${rows.mapNotNull { parseBeaconCount(it.note) }.distinct().size} beacons counted" }
-                    AppMode.CLOSE -> closeModeRepository.observeCloses(raceId)
-                        .map { rows -> "${rows.mapNotNull { parseBeaconClose(it.note)?.first }.distinct().size} beacons closed" }
-                }
-                combine(
-                    raceRepository.observeRace(raceId),
-                    unsyncedFlow,
-                    lastSyncedFlow,
-                    progressTextFlow,
-                    serverStatusRepository.state,
-                ) { race, unsynced, lastSynced, progressText, serverStatus ->
-                    if (race == null) return@combine null
-                    // Count/Close have no NextSplit column (see showNextSplit's own doc) — this
-                    // value is never actually displayed for them, so 0 is a harmless placeholder.
-                    val nextSplitNumber = when (mode) {
-                        AppMode.TIME -> race.timeModeNextSplit
-                        AppMode.BIBS -> race.bibsModeNextSplit
-                        AppMode.COUNT, AppMode.CLOSE -> 0
+                raceRepository.observeRace(raceId).map { it?.location }.distinctUntilChanged().flatMapLatest { location ->
+                    val historyMode = mode.toHistoryMode(location.orEmpty())
+                    val unsyncedFlow: Flow<Int> = when (historyMode) {
+                        HistoryMode.TIME -> timeModeRepository.observeUnsyncedCount(raceId)
+                        HistoryMode.BIBS -> bibsModeRepository.observeUnsyncedCount(raceId)
+                        HistoryMode.COUNT -> countModeRepository.observeUnsyncedCount(raceId)
+                        HistoryMode.CLOSE -> closeModeRepository.observeUnsyncedCount(raceId)
                     }
-                    RaceSummaryUiState(
-                        raceLabel = race.label,
-                        raceLocation = race.location,
-                        nextSplitNumber = nextSplitNumber,
-                        unsyncedCount = unsynced,
-                        lastSyncedAtMillis = lastSynced,
-                        serverStatus = serverStatus,
-                        progressText = progressText,
-                    )
+                    val lastSyncedFlow: Flow<Long?> = when (historyMode) {
+                        HistoryMode.TIME -> timeModeRepository.observeLastSyncedAtMillis(raceId)
+                        HistoryMode.BIBS -> bibsModeRepository.observeLastSyncedAtMillis(raceId)
+                        HistoryMode.COUNT -> countModeRepository.observeLastSyncedAtMillis(raceId)
+                        HistoryMode.CLOSE -> closeModeRepository.observeLastSyncedAtMillis(raceId)
+                    }
+                    val progressTextFlow: Flow<String> = when (historyMode) {
+                        // Matches TimeModeViewModel's own splitCount exactly (action == SPLIT, an
+                        // allowlist) — not splitNumber != 0, which would also count the fixed Start
+                        // marker's... no, Start's splitNumber is 0 so that's excluded correctly, but
+                        // a LOCATION row's splitNumber is null, and null != 0 is true, wrongly
+                        // counting it as a real split.
+                        HistoryMode.TIME -> timeModeRepository.observeCurrentSegmentSplits(raceId)
+                            .map { formatTimeSplitsText(it.count { s -> s.action == HistoryAction.SPLIT }) }
+                        HistoryMode.BIBS -> bibsModeRepository.observeCurrentSegmentEntries(raceId)
+                            .map { formatBibsSoFarText(it.count { e -> e.action !in NON_ENTRY_ACTIONS }) }
+                        // Unique beacons, not total rows — a re-presented, re-closed beacon
+                        // shouldn't inflate this count (see HistoryAction.CLOSE's own doc).
+                        HistoryMode.COUNT -> countModeRepository.observeCounts(raceId)
+                            .map { rows -> "${rows.mapNotNull { parseBeaconCount(it.note) }.distinct().size} beacons counted" }
+                        HistoryMode.CLOSE -> closeModeRepository.observeCloses(raceId)
+                            .map { rows -> "${rows.mapNotNull { parseBeaconClose(it.note)?.first }.distinct().size} beacons closed" }
+                    }
+                    combine(
+                        raceRepository.observeRace(raceId),
+                        unsyncedFlow,
+                        lastSyncedFlow,
+                        progressTextFlow,
+                        serverStatusRepository.state,
+                    ) { race, unsynced, lastSynced, progressText, serverStatus ->
+                        if (race == null) return@combine null
+                        // Count/Close have no NextSplit column (see showNextSplit's own doc) — this
+                        // value is never actually displayed for them, so 0 is a harmless placeholder.
+                        val nextSplitNumber = when (historyMode) {
+                            HistoryMode.TIME -> race.timeModeNextSplit
+                            HistoryMode.BIBS -> race.bibsModeNextSplit
+                            HistoryMode.COUNT, HistoryMode.CLOSE -> 0
+                        }
+                        RaceSummaryUiState(
+                            raceLabel = race.label,
+                            raceLocation = race.location,
+                            nextSplitNumber = nextSplitNumber,
+                            unsyncedCount = unsynced,
+                            lastSyncedAtMillis = lastSynced,
+                            serverStatus = serverStatus,
+                            progressText = progressText,
+                        )
+                    }
                 }
             }
         }

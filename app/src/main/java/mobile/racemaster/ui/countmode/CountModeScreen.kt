@@ -31,9 +31,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.data.repository.CountBeaconStatus
+import mobile.racemaster.ui.components.ModeScreenTopBar
 import mobile.racemaster.ui.components.RaceProgressSummary
 import mobile.racemaster.ui.components.ResetButton
-import mobile.racemaster.ui.components.ScreenTopBar
 import mobile.racemaster.ui.components.rowColorFor
 import mobile.racemaster.ui.help.HelpTopics
 import mobile.racemaster.util.withClickSound
@@ -53,13 +53,14 @@ import mobile.racemaster.util.withClickSound
  *  dialog here "shows a confusing dialog", simplified). There is no bulk "Eject All" any more
  *  (TODO.md: redundant now there's Reset) and no other per-beacon dialog or result banner for an
  *  ordinary first-time detection, since counting one has no fallible action to report on the way
- *  a BLE connect/power-off does. "Stop" and "Reset" now sit side by side as body-level buttons
+ *  a BLE connect/power-off does. "Stop" and "Reset" sit side by side as body-level buttons
  *  (direct feedback: a text link buried in the top bar read as too easy to miss, or to hit by
- *  accident, for an action that ends the mode) — the top bar itself is the same
- *  [mobile.racemaster.ui.components.ScreenTopBar] every non-mode screen uses (Help/Back/Home,
- *  direct feedback: this screen used to be the odd one out with only one trailing icon), not
- *  [mobile.racemaster.ui.components.ModeScreenTopBar] (Bibs/Time's own secondary-action shape).
- *  Stop clears the race's mode back to null
+ *  accident, for an action that ends the mode); the top bar itself is now
+ *  [mobile.racemaster.ui.components.ModeScreenTopBar] (Bibs/Time's own shape), its one
+ *  secondary-action slot wired to "Move" rather than Stop/Reset — TODO.md's "allow moving
+ *  to/from any of these locations [...] and their implied modes" is what gives Count Mode this
+ *  link at all, reusing the exact same [mobile.racemaster.ui.racedetails.RaceDetailsScreen]
+ *  Bibs' own "Move" link already opens. Stop clears the race's mode back to null
  *  ([mobile.racemaster.data.repository.RaceRepository.stopMode]) — it's the only way
  *  to ever move this race out of Count mode once it's set up. Reset (reusing the shared
  *  [ResetButton] composable Bibs/Time already use) additionally closes out the current Count
@@ -68,7 +69,8 @@ import mobile.racemaster.util.withClickSound
  *  does not do this, since pausing without losing the running tally is still useful on its own.
  *  Both call [onHome] themselves immediately after (same reasoning for either): this screen's
  *  scan loop would otherwise immediately re-detect and re-record the very beacons just
- *  stopped/reset. Reached only via Routes.COUNT_MODE (Setup Race) — unlike Close, the Beacons
+ *  stopped/reset. Reached only via Routes.BIBS_MODE's own location dispatch at "Pen" (Setup
+ *  Race) — unlike Close, the Beacons
  *  hub's own "Count" button is no longer a standing shortcut straight to this screen (TODO.md:
  *  Count only ever makes sense against a race already set up for it, unlike Close — see
  *  [mobile.racemaster.ui.beaconops.BeaconOperationsScreen]'s own doc), so both Stop and Reset's
@@ -78,6 +80,7 @@ import mobile.racemaster.util.withClickSound
 @Composable
 fun CountModeScreen(
     onHome: () -> Unit,
+    onEditRace: (raceId: Long) -> Unit,
     viewModel: CountModeViewModel = viewModel(factory = CountModeViewModel.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -142,14 +145,10 @@ fun CountModeScreen(
 
     Scaffold(
         topBar = {
-            ScreenTopBar(
-                title = { Text("Count Mode") },
-                // Back and Home both just navigate home — a mode screen's own back stack is
-                // always exactly [ModePicker, this screen] (see RacemasterNavHost), so a single
-                // pop and jumping straight to Mode Picker land on the same place; still shown as
-                // two separate icons (direct feedback) to match every other screen's own
-                // Help/Back/Home layout rather than standing out as the only screen missing one.
-                onBack = onHome,
+            ModeScreenTopBar(
+                title = "Count Mode",
+                thisRaceEnabled = uiState.raceId != null,
+                onThisRace = { uiState.raceId?.let(onEditRace) },
                 onHome = onHome,
                 helpTopic = HelpTopics.CountMode,
             )

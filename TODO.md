@@ -621,7 +621,7 @@ In outline the 'beacon plan' consists of:
 
 ## More Tweaks
 
-- [ ] amalgamate Bibs, Count and Close modes into a single Bibs mode that is sensitive to location,
+- [x] amalgamate Bibs, Count and Close modes into a single Bibs mode that is sensitive to location,
       the location repertoire is: pen, start, CPn, finish, close and the location implies the mode,
       pen==count, start==start, CPn==cp, finish==finish,
       the 'relocate' link in bibs mode should be renamed 'move' and allow moving to/from any of

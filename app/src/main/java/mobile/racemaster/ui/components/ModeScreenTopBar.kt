@@ -38,11 +38,11 @@ fun ModeScreenTopBar(
     // Null omits this action entirely — Time Mode's own call (TODO.md's "A rationalisation": it
     // records irrespective of where the device is, so there's nothing for it to relocate) leaves
     // this unset rather than wiring a button to a screen that would only ever edit a location it
-    // doesn't use. Bibs still wires it, unchanged. Close/Count wire it too, but to a plain
-    // "Stop" action (see CloseModeScreen/CountModeScreen's own doc) rather than Relocate's
-    // full name/location/mode editor — [thisRaceLabel] is what tells the two apart on screen.
+    // doesn't use. Bibs still wires it, unchanged. CountModeScreen/CloseModeScreen don't use this
+    // component at all (their own body-level Stop/Reset buttons cover that instead — see each
+    // screen's own doc), so [thisRaceLabel] only ever actually shows "Move" today.
     onThisRace: (() -> Unit)? = null,
-    thisRaceLabel: String = "Relocate",
+    thisRaceLabel: String = "Move",
     // Always jumps straight to Mode Picker (see RacemasterNavHost.navigateHome) rather than a
     // single pop — a dashboard's own back stack is always exactly [ModePicker, this screen] (see
     // RacemasterNavHost), so a separate single-pop Back button here would always be 100% redundant
@@ -67,11 +67,13 @@ fun ModeScreenTopBar(
                     Icon(Icons.Filled.HelpOutline, contentDescription = "Help")
                 }
             }
-            // Relocate stays enabled even once the race has stopped — editing a typo in the
-            // name/location shouldn't require never having finished logging. "Relocate" (not
-            // "This Race") since that screen's own new capability — editing location mid-race,
-            // which is what this button is mostly reached for now — is the more common reason to
-            // tap it than a pre-race rename.
+            // Move stays enabled even once the race has stopped — editing a typo in the
+            // name/location shouldn't require never having finished logging. "Move" (not
+            // "Relocate"/"This Race" — TODO.md: "the 'relocate' link in bibs mode should be
+            // renamed 'move'") since that screen's own new capability — editing location mid-race
+            // and switching to/from any of Bibs' locations (including Pen/Close, which now imply
+            // Count/Close-shaped behavior — see AppMode's own doc), which is what this button is
+            // mostly reached for now — is the more common reason to tap it than a pre-race rename.
             if (onThisRace != null) {
                 TextButton(onClick = withClickSound(onThisRace), enabled = thisRaceEnabled) { Text(thisRaceLabel) }
             }

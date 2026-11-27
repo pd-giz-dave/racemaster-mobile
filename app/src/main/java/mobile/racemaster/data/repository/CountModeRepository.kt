@@ -420,7 +420,7 @@ class CountModeRepository(
      *  COUNT_SEEN row is excluded too (see [HistoryAction.COUNT_EJECTED]'s own doc) — this is the
      *  one place "is this beacon counted right now" is decided, a plain `count { action ==
      *  COUNT_SEEN }` over the result. For a beacon's own ejected/was-ejected status instead, see
-     *  [observeStatusByBeacon]. */
+     *  [observeStatusEvents]/[statusByBeacon]. */
     fun observeCounts(raceId: Long): Flow<List<HistoryLineEntity>> =
         historyLineDao.observeAllForRaceAndMode(raceId, HistoryMode.COUNT).map(::currentSegment)
 

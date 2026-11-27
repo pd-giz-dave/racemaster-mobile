@@ -98,10 +98,12 @@ data class CloseModeUiState(
     // For the body's own foot-of-page "Stop" button — Close has no Reset of its own (see
     // CloseModeRepository's own doc), so Stop (clearing the race's mode back to null — see
     // RaceRepository.stopMode) is the only way to ever move this race out of Close mode once
-    // it's set up. [canStopCloseMode] additionally requires the race's own CURRENT mode to
-    // actually be Close — reached via the Beacons hub's own standing shortcut (see this class's
-    // own doc), this screen can be open while the active race is genuinely in Bibs/Time/Count
-    // mode instead, and Stop must never clear a mode this screen had nothing to do with.
+    // it's set up. [canStopCloseMode] additionally requires the race's own CURRENT mode/location
+    // to actually be Bibs-at-Close (Close no longer has its own AppMode value — see AppMode's own
+    // doc on the Count/Close amalgamation) — reached via the Beacons hub's own standing shortcut
+    // (see this class's own doc), this screen can be open while the active race is genuinely in
+    // Time/Bibs mode at some other location instead, and Stop must never clear a mode this screen
+    // had nothing to do with.
     val raceId: Long? = null,
     val canStopCloseMode: Boolean = false,
     // Same feedback RaceProgressSummary already shows for Bibs/Time/Count Mode — Close had none
@@ -133,7 +135,8 @@ private data class RaceProgressInfo(
  *  needs Mule Mode paused while it runs — this screen doesn't, since it adds no second scan
  *  registration).
  *
- *  Reached two ways — Setup Race's own Close mode (`Routes.CLOSE_MODE`) and the Beacons hub's
+ *  Reached two ways — Setup Race's own Bibs mode at the "Close" location (`Routes.BIBS_MODE`'s
+ *  own location dispatch) and the Beacons hub's
  *  standing "Close" shortcut (`Routes.CLOSE_BEACONS`), kept for ad-hoc use regardless of the
  *  active race's own mode (see the plan's own Part A doc for why both stay). Recording a close
  *  itself never branches on `race.mode` — it just records CLOSE rows against whatever
@@ -238,9 +241,12 @@ class CloseModeViewModel(
         }
         viewModelScope.launch {
             raceIdFlow.flatMapLatest { raceId ->
-                if (raceId == null) flowOf(null) else raceRepository.observeRace(raceId).map { it?.mode }
-            }.collectLatest { mode ->
-                _uiState.update { it.copy(canStopCloseMode = mode == AppMode.CLOSE.name) }
+                if (raceId == null) flowOf(null) else raceRepository.observeRace(raceId).map { it?.mode to it?.location }
+            }.collectLatest { modeAndLocation ->
+                val (mode, location) = modeAndLocation ?: (null to null)
+                _uiState.update {
+                    it.copy(canStopCloseMode = mode == AppMode.BIBS.name && location.equals("Close", ignoreCase = true))
+                }
             }
         }
         viewModelScope.launch {

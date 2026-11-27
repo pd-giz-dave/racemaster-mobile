@@ -31,12 +31,15 @@ import mobile.racemaster.data.db.entity.TargetedProgressEntity
         TargetedProgressEntity::class,
         PeerSeenRecordEntity::class,
     ],
-    // Bumped for PeerSeenRecordEntity.splitNumber (Phase 5 of the same-mode peer-sync feature —
-    // the cross-device duplicate check needs a peer row's own split number, same as a local
-    // HistoryLineEntity row's). No explicit Migration needed, same as the last several bumps —
-    // AppContainer's fallbackToDestructiveMigration(dropAllTables = true) already wipes and
-    // recreates the whole local DB on any version mismatch.
-    version = 40,
+    // Bumped for the Count/Close-into-Bibs amalgamation (TODO.md: "amalgamate Bibs, Count and
+    // Close modes" — see AppMode's own doc) — no column actually changed shape, but
+    // RaceEntity.mode can no longer hold "COUNT"/"CLOSE" going forward, and per direct
+    // instruction it's fine to simply wipe local history rather than migrate any already-stored
+    // rows still carrying those values (nothing outside the dev test rig depends on this data;
+    // the only external dependency is the companion web app). No explicit Migration needed, same
+    // as the last several bumps — AppContainer's fallbackToDestructiveMigration(dropAllTables =
+    // true) already wipes and recreates the whole local DB on any version mismatch.
+    version = 41,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

@@ -43,7 +43,7 @@ class PeerGroupDetectorTest {
     @Test
     fun groupKeyOfIsNullForAnIdentityAdvertisingNoActiveRace() {
         val blank = MuleGattProfile.decodeAdvertisedIdentity(
-            MuleGattProfile.encodeAdvertisedIdentity(lastLineNumber = 0L, deviceId = "device-a", deviceName = "", mode = AppMode.COUNT),
+            MuleGattProfile.encodeAdvertisedIdentity(lastLineNumber = 0L, deviceId = "device-a", deviceName = "", mode = AppMode.BIBS),
         )!!
 
         assertEquals(null, detector.groupKeyOf(blank))
@@ -59,9 +59,12 @@ class PeerGroupDetectorTest {
     }
 
     @Test
-    fun twoCountPhonesOnTheSameRaceShareAGroupKeyRegardlessOfLocation() {
-        val one = identity("lmv-23-08-2026", AppMode.COUNT, location = "Start Pen")
-        val two = identity("lmv-23-08-2026", AppMode.COUNT, location = "Somewhere Else")
+    fun twoBibsPhonesAtPenShareAGroupKey() {
+        // Count no longer has its own AppMode value (see AppMode's own doc on the amalgamation)
+        // — it's just Bibs at the "Pen" location now, same location-keyed grouping as any other
+        // Bibs station, which is why two real Count-mode phones (always at "Pen") still converge.
+        val one = identity("lmv-23-08-2026", AppMode.BIBS, location = "Pen")
+        val two = identity("lmv-23-08-2026", AppMode.BIBS, location = "Pen")
 
         assertEquals(detector.groupKeyOf(one), detector.groupKeyOf(two))
     }
@@ -91,11 +94,14 @@ class PeerGroupDetectorTest {
     }
 
     @Test
-    fun countAndCloseOnTheSameRaceNeverShareAGroupKeyEvenThoughNeitherUsesLocation() {
-        val count = identity("lmv-23-08-2026", AppMode.COUNT)
-        val close = identity("lmv-23-08-2026", AppMode.CLOSE)
+    fun bibsAtPenAndBibsAtCloseOnTheSameRaceNeverShareAGroupKey() {
+        // Count/Close no longer have their own AppMode value — Pen and Close are now just two
+        // Bibs locations, so it's purely location (not a distinct mode, like it used to be)
+        // keeping them from ever converging with each other.
+        val pen = identity("lmv-23-08-2026", AppMode.BIBS, location = "Pen")
+        val close = identity("lmv-23-08-2026", AppMode.BIBS, location = "Close")
 
-        assertTrue(detector.groupKeyOf(count) != detector.groupKeyOf(close))
+        assertTrue(detector.groupKeyOf(pen) != detector.groupKeyOf(close))
     }
 
     @Test
@@ -116,18 +122,18 @@ class PeerGroupDetectorTest {
 
     @Test
     fun sameGroupPeerKeysIsEmptyWithNoOwnGroupKey() {
-        val decoded = mapOf("peer-a" to identity("lmv-23-08-2026", AppMode.COUNT))
+        val decoded = mapOf("peer-a" to identity("lmv-23-08-2026", AppMode.BIBS, location = "Pen"))
 
         assertEquals(emptySet<String>(), detector.sameGroupPeerKeys(null, decoded))
     }
 
     @Test
     fun sameGroupPeerKeysSkipsAMissingOrUnusableDecodedIdentity() {
-        val ownKey = detector.groupKeyOf(identity("lmv-23-08-2026", AppMode.COUNT))
+        val ownKey = detector.groupKeyOf(identity("lmv-23-08-2026", AppMode.BIBS, location = "Pen"))
         val decoded = mapOf(
             "peer-missed-scan" to null,
             "peer-no-race" to MuleGattProfile.decodeAdvertisedIdentity(
-                MuleGattProfile.encodeAdvertisedIdentity(0L, "device-b", "", AppMode.COUNT),
+                MuleGattProfile.encodeAdvertisedIdentity(0L, "device-b", "", AppMode.BIBS),
             ),
         )
 
@@ -136,13 +142,13 @@ class PeerGroupDetectorTest {
 
     @Test
     fun sameGroupPeerKeysReturnsOnlyTheMatchingKeys() {
-        val ownKey = detector.groupKeyOf(identity("lmv-23-08-2026", AppMode.COUNT))
+        val ownKey = detector.groupKeyOf(identity("lmv-23-08-2026", AppMode.BIBS, location = "Pen"))
         val decoded = mapOf(
-            "same-race-count" to identity("lmv-23-08-2026", AppMode.COUNT),
-            "same-race-bibs" to identity("lmv-23-08-2026", AppMode.BIBS),
-            "different-race-count" to identity("other-race", AppMode.COUNT),
+            "same-race-pen" to identity("lmv-23-08-2026", AppMode.BIBS, location = "Pen"),
+            "same-race-finish" to identity("lmv-23-08-2026", AppMode.BIBS, location = "Finish"),
+            "different-race-pen" to identity("other-race", AppMode.BIBS, location = "Pen"),
         )
 
-        assertEquals(setOf("same-race-count"), detector.sameGroupPeerKeys(ownKey, decoded))
+        assertEquals(setOf("same-race-pen"), detector.sameGroupPeerKeys(ownKey, decoded))
     }
 }

@@ -27,13 +27,15 @@ fun List<HistoryLineEntity>.hasRealEntries(): Boolean = any { it.action !in NON_
  *
  * Count/Close have no started-at column of their own (see CloseModeRepository/
  * CountModeRepository's own doc for why — neither has a segment/Reset concept to track): a race
- * set up in either mode is simply active for as long as [mode] names it, the whole time it's the
- * race's current mode — the only way to stop being active in Count/Close is Relocate switching
- * the race to a different mode entirely, which [mode] already reflects.
+ * set up at either location is simply active for as long as [mode]/[location] still name it
+ * (Count/Close no longer have their own AppMode value — see AppMode's own doc on the
+ * amalgamation), the whole time it's the race's current mode and location — the only way to stop
+ * being active there is Relocate switching the race to a different mode/location entirely, which
+ * [mode]/[location] already reflect.
  */
-fun isRaceActive(timeModeStartedAtMillis: Long?, bibsModeStartedAtMillis: Long?, mode: String?): Boolean =
+fun isRaceActive(timeModeStartedAtMillis: Long?, bibsModeStartedAtMillis: Long?, mode: String?, location: String?): Boolean =
     timeModeStartedAtMillis != null || bibsModeStartedAtMillis != null ||
-        mode == AppMode.COUNT.name || mode == AppMode.CLOSE.name
+        (mode == AppMode.BIBS.name && (location.equals("Pen", ignoreCase = true) || location.equals("Close", ignoreCase = true)))
 
 /**
  * Which mode(s) are actually keeping [isRaceActive] true for this race — i.e. which of Time/Bibs
@@ -47,12 +49,12 @@ fun isRaceActive(timeModeStartedAtMillis: Long?, bibsModeStartedAtMillis: Long?,
  * deleted" caption can name the actual culprit instead of leaving the operator to guess which
  * screen to go reset.
  */
-fun activeModeLabels(timeModeStartedAtMillis: Long?, bibsModeStartedAtMillis: Long?, mode: String?): List<String> =
+fun activeModeLabels(timeModeStartedAtMillis: Long?, bibsModeStartedAtMillis: Long?, mode: String?, location: String?): List<String> =
     listOfNotNull(
         "Time Mode".takeIf { timeModeStartedAtMillis != null },
         "Bibs Mode".takeIf { bibsModeStartedAtMillis != null },
-        "Count Mode".takeIf { mode == AppMode.COUNT.name },
-        "Close Mode".takeIf { mode == AppMode.CLOSE.name },
+        "Count Mode".takeIf { mode == AppMode.BIBS.name && location.equals("Pen", ignoreCase = true) },
+        "Close Mode".takeIf { mode == AppMode.BIBS.name && location.equals("Close", ignoreCase = true) },
     )
 
 /**
@@ -64,14 +66,15 @@ fun activeModeLabels(timeModeStartedAtMillis: Long?, bibsModeStartedAtMillis: Lo
  */
 suspend fun isRaceCurrentlyActive(raceId: Long, raceRepository: RaceRepository): Boolean {
     val race = raceRepository.getRace(raceId) ?: return false
-    return isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.mode)
+    return isRaceActive(race.timeModeStartedAtMillis, race.bibsModeStartedAtMillis, race.mode, race.location)
 }
 
 // The one place an AppMode's recording-mode name is spelled out, so the wording can't drift
 // between call sites (the Mode Picker's own status text and active-mode labels, editing dialogs).
+// Count/Close no longer have their own value to name here (see AppMode's own doc) — Mode
+// Picker's own startButtonLabel already appends the race's location alongside this, which is
+// what actually tells a Pen/Close race apart from an ordinary Bibs one.
 fun AppMode.displayName(): String = when (this) {
     AppMode.TIME -> "Time Mode"
     AppMode.BIBS -> "Bibs Mode"
-    AppMode.COUNT -> "Count Mode"
-    AppMode.CLOSE -> "Close Mode"
 }

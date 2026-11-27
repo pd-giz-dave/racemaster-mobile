@@ -137,12 +137,11 @@ data class CountModeUiState(
     // CloseModeUiState.raceId/canStopCloseMode: Stop (clearing the race's mode back to null —
     // see RaceRepository.stopMode) is the only way to move this race out of Count mode once it's
     // set up, and Reset does that same thing before additionally resetting the tally.
-    // canStopCountMode additionally requires the race's own CURRENT mode to actually be Count —
-    // this screen is only reached via Routes.COUNT_MODE now (Setup Race), which is itself only
-    // navigated to once the race's mode already is Count (see
-    // mobile.racemaster.ui.beaconops.BeaconOperationsScreen's own doc for why the Beacons hub's
-    // old standing "Count" shortcut, which could reach this screen while some other mode was
-    // active, was dropped), so this is effectively always true in practice now — kept as a
+    // canStopCountMode additionally requires the race's own CURRENT mode/location to actually be
+    // Bibs-at-Pen (Count no longer has its own AppMode value — see AppMode's own doc on the
+    // Count/Close amalgamation) — this screen is only reached via Routes.BIBS_MODE's own
+    // location dispatch now (Setup Race), which is itself only reached once the race's mode is
+    // Bibs and its location is Pen, so this is effectively always true in practice — kept as a
     // defensive guard (same reasoning CloseModeUiState.canStopCloseMode documents) rather than
     // removed outright.
     val raceId: Long? = null,
@@ -195,7 +194,8 @@ data class CountModeUiState(
  * early; [BeaconScanEngine] dropped the same former 3-reading debounce for the same reason (see
  * its own doc).
  *
- * Reached only via Setup Race's own Count mode (`Routes.COUNT_MODE`) — unlike
+ * Reached only via Setup Race's own Bibs mode at the "Pen" location (`Routes.BIBS_MODE`'s own
+ * location dispatch — see RacemasterNavHost's own doc) — unlike
  * [mobile.racemaster.ui.closemode.CloseModeViewModel], there is no standing Beacons-hub shortcut
  * to this screen any more (TODO.md: Count only ever makes sense against a race already set up
  * for it, unlike Close — see [mobile.racemaster.ui.beaconops.BeaconOperationsScreen]'s own doc).
@@ -268,10 +268,10 @@ class CountModeViewModel(
     private var seenBeaconNumbers: Set<Int> = emptySet()
 
     // Each beacon's own EJECTED/WAS_EJECTED status, read separately from
-    // countModeRepository.observeStatusByBeacon — see that function's own doc for why this can't
-    // be derived from seenBeaconNumbers' own (fold-collapsed) rows. commitDetection's own "stay
-    // excluded until explicitly let back in" gate reads this map directly; WAS_EJECTED is purely
-    // informational there (gates nothing).
+    // countModeRepository.observeStatusEvents/statusByBeacon — see that function's own doc for why
+    // this can't be derived from seenBeaconNumbers' own (fold-collapsed) rows. commitDetection's
+    // own "stay excluded until explicitly let back in" gate reads this map directly; WAS_EJECTED
+    // is purely informational there (gates nothing).
     @Volatile
     private var statusByBeacon: Map<Int, CountBeaconStatus> = emptyMap()
 
@@ -347,9 +347,12 @@ class CountModeViewModel(
         }
         viewModelScope.launch {
             raceIdFlow.flatMapLatest { raceId ->
-                if (raceId == null) flowOf(null) else raceRepository.observeRace(raceId).map { it?.mode }
-            }.collectLatest { mode ->
-                _uiState.update { it.copy(canStopCountMode = mode == AppMode.COUNT.name) }
+                if (raceId == null) flowOf(null) else raceRepository.observeRace(raceId).map { it?.mode to it?.location }
+            }.collectLatest { modeAndLocation ->
+                val (mode, location) = modeAndLocation ?: (null to null)
+                _uiState.update {
+                    it.copy(canStopCountMode = mode == AppMode.BIBS.name && location.equals("Pen", ignoreCase = true))
+                }
             }
         }
         viewModelScope.launch {
@@ -484,14 +487,18 @@ class CountModeViewModel(
         }
     }
 
-    // This device's own current convergence-group key for HistoryMode.COUNT (see
-    // PeerGroupDetector.ownGroupKey's own doc) scoped to [raceId], re-resolved every time the
-    // race's own label changes — null (same as PeerGroupDetector's own "nothing to converge on
-    // yet" contract) folds straight through to an empty peer map via flatMapLatest below, so
-    // every downstream read stays "local only" exactly as it behaved before this feature existed.
+    // This device's own current convergence-group key (see PeerGroupDetector.ownGroupKey's own
+    // doc) scoped to [raceId], re-resolved every time the race's own label changes — null (same
+    // as PeerGroupDetector's own "nothing to converge on yet" contract) folds straight through to
+    // an empty peer map via flatMapLatest below, so every downstream read stays "local only"
+    // exactly as it behaved before this feature existed. Passes HistoryMode.BIBS, not COUNT, to
+    // ownGroupKey — that's the bucket-#2 (peer-discovery) mapping every Bibs location (including
+    // Pen) now advertises/decodes as (see AppMode.toHistoryMode's own doc), with location itself
+    // still correctly partitioning it. The *data* reads below stay keyed on HistoryMode.COUNT —
+    // that's the separate, unaffected bucket-#1 tag PeerSyncEngine's own pull/merge path uses.
     private fun peerSeenBeaconsFlow(raceId: Long): Flow<Map<Int, String>> =
         raceRepository.observeRace(raceId)
-            .map { race -> race?.let { peerGroupDetector.ownGroupKey(it.label, it.location, HistoryMode.COUNT) } }
+            .map { race -> race?.let { peerGroupDetector.ownGroupKey(it.label, it.location, HistoryMode.BIBS) } }
             .distinctUntilChanged()
             .flatMapLatest { groupKey ->
                 if (groupKey == null) flowOf(emptyMap()) else peerSyncRepository.observeLatestOriginByBeacon(groupKey, HistoryMode.COUNT)
@@ -504,7 +511,7 @@ class CountModeViewModel(
     // reads of the same underlying group, for two different purposes" precedent).
     private fun peerStatusRowsFlow(raceId: Long): Flow<List<PeerSeenRecordEntity>> =
         raceRepository.observeRace(raceId)
-            .map { race -> race?.let { peerGroupDetector.ownGroupKey(it.label, it.location, HistoryMode.COUNT) } }
+            .map { race -> race?.let { peerGroupDetector.ownGroupKey(it.label, it.location, HistoryMode.BIBS) } }
             .distinctUntilChanged()
             .flatMapLatest { groupKey ->
                 if (groupKey == null) flowOf(emptyList()) else peerSyncRepository.observeGroup(groupKey, HistoryMode.COUNT)
