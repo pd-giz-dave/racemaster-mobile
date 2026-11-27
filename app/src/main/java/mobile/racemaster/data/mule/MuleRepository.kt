@@ -352,31 +352,31 @@ class MuleRepository(
         return count
     }
 
-    // See mobile.racemaster.data.peersync.PeerSyncEngine's own doc for why this exists as a
-    // second, narrower pull primitive rather than that engine calling pullFrom above: pullFrom
-    // unconditionally stages whatever it receives into this device's own relay-to-server inbox
-    // (storePulledRecords -> PulledRecordEntity) — correct for an ordinary Mule pull, but wrong
-    // for peer-sync, whose whole convergence feature is explicitly a phone-local, on-screen-only
-    // convenience (see ~racemaster's own ToDo.MD "never synced here" doc), never a new path for a
-    // peer's data to reach the server via this device. [onReceived] is handed the raw pulled
-    // records and nothing else — the caller (PeerSyncEngine) is the one that merges them into
-    // PeerSeenRecordEntity.
-    suspend fun pullForPeerSync(
+    /** Thin passthrough to [MulePullClient.exchangePeerData] — see
+     *  [mobile.racemaster.data.peersync.PeerSyncEngine]'s own doc for why peer-sync needs its own
+     *  primitive separate from [pullFrom]/[pull]: that pair unconditionally stages whatever it
+     *  receives into this device's own relay-to-server inbox (storePulledRecords ->
+     *  PulledRecordEntity) — correct for an ordinary Mule pull, but wrong for peer-sync, whose
+     *  whole convergence feature is explicitly a phone-local, on-screen-only convenience, never a
+     *  new path for a peer's data to reach the server via this device. See
+     *  [MulePullClient.exchangePeerData]'s own doc, and
+     *  [mobile.racemaster.data.peersync.PeerSyncEngine]'s for the central/peripheral role
+     *  negotiation this belongs to. */
+    suspend fun exchangePeerData(
         advertisement: Advertisement,
-        sinceLineNumber: Long,
-        // Caps this one pull's own response — see PullRequest.maxRecords's own doc. Null (the
-        // default) is unbounded, as every caller used before this param existed.
-        maxRecords: Int? = null,
-        // See PullRequest.countStatusOnly's own doc. False (the default) is every existing
-        // caller's own behavior, unchanged — only PeerSyncEngine's Count Mode pull sets this.
-        countStatusOnly: Boolean = false,
-        onReceived: suspend (List<SyncRecord>) -> Unit,
+        countStatusOnly: Boolean,
+        expectPeerPullData: Boolean,
+        myLastLineNumber: Long,
+        myLastCountStatusLineNumber: Long,
+        myRecordsSince: suspend (sinceLineNumber: Long) -> List<SyncRecord>,
+        onPeerRecordsReceived: suspend (List<SyncRecord>) -> Unit,
     ) {
         val myDeviceId = settingsRepository.getOrCreateDeviceId()
         val myDeviceName = settingsRepository.getOrCreateDeviceName()
-        pullClient.pull(
-            advertisement, myDeviceId, myDeviceName, sinceLineNumber,
-            maxRecords = maxRecords, countStatusOnly = countStatusOnly, onReceived = onReceived,
+        pullClient.exchangePeerData(
+            advertisement, myDeviceId, myDeviceName, countStatusOnly, expectPeerPullData,
+            myLastLineNumber, myLastCountStatusLineNumber,
+            myRecordsSince = myRecordsSince, onPeerRecordsReceived = onPeerRecordsReceived,
         )
     }
 

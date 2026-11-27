@@ -258,6 +258,17 @@ chipset capability, not an OS one.
 - [x] add a start-up option to set the phone in kiosk mode if not in it, or to exit kiosk mode
       if it is, the objective is to lock things down so only this app can send/recieve data
       either as mobile, wifi or bt - dropped the idea, too risky on bricking the phone
+- [x] add a bluetooth logging option (similar to the web-app, default off) so connection issues
+      can be viewed and resolved (so not relying on the logcat buffer that can overflow), the log
+      needs to be visible as an item on the history files list with a delete option
+- [x] amalgamate Bibs, Count and Close modes into a single Bibs mode that is sensitive to location,
+      the location repertoire is: pen, start, CPn, finish, close and the location implies the mode,
+      pen==count, start==start, CPn==cp, finish==finish,
+      the 'relocate' link in bibs mode should be renamed 'move' and allow moving to/from any of
+      these locations and their implied modes, the location drop-down in setup race should include
+      'Pen'
+- [x] when setup race completes and the user set a mode/location, go straight to that mode when
+      the screen exits
 
 ## Programming the DX-CP27 Bluetooth Beacon
 
@@ -479,7 +490,7 @@ In outline the 'beacon plan' consists of:
       ProgressDetailScreen.kt's ProgressEntryRow, now a single Row reusing
       ui/components/HistoryRowStyle.kt's historyRowModifier
 
-# Tweaks/Bugs
+## Tweaks/Bugs
 
 - [x] use location 'Pen' for count mode — **done**: `RaceRepository.recordModeStart`'s
       `effectiveLocation` for `AppMode.COUNT` is now `"Pen"`, not `"Start"`.
@@ -621,23 +632,45 @@ In outline the 'beacon plan' consists of:
 
 ## More Tweaks
 
-- [x] amalgamate Bibs, Count and Close modes into a single Bibs mode that is sensitive to location,
-      the location repertoire is: pen, start, CPn, finish, close and the location implies the mode,
-      pen==count, start==start, CPn==cp, finish==finish,
-      the 'relocate' link in bibs mode should be renamed 'move' and allow moving to/from any of
-      these locations and their implied modes, the location drop-down in setup race should include
-      'Pen'
-- [x] when setup race completes and the user set a mode/location, go straight to that mode when
-      the screen exits
 - [ ] implement the nearby peer sync mechanism for all modes except close
 - [ ] add the race name as a feedback line to the setup device screen
 - [ ] need a battery health check on the phone - one of the XCover4 is a bit dodgy
+- [ ] make min api level 26 not 24 (and remove the fallback for <26)
 
 ## Factor out all the BLe stuff so there is a single source of truth
 
 - [ ] Mule mode uses BLE to transport data when there is no mobile signal or no wifi,
       Other modes use BLE to detect nearby peers and to update the mule,
       Document how all this hangs together so a niaive code reader can work out what is going on
+- [x] restrict peers to 2, if more are visible the operator must select which one to connect
+      to, then hold the connection open for as long as in range — **done, superseded mid-build**:
+      clarified live to a mesh-wide rule, not a per-device cap — exactly one bidirectional pair
+      may exist among any set of mutually-visible same-group phones (`PeerSyncEngine.
+      resolvePairingOutcome`), everyone else excluded. 2 nearby auto-pairs with no operator
+      action; 3+ shows every phone an inline picker (`RaceProgressSummary`'s chip row) and both
+      operators must tap to confirm the same pair (piggybacked on the existing DeviceInfo read,
+      `DeviceInfo.peerPickedShortDeviceId`) before either side connects.
+- [x] on peer data tx go ack-less and use block counts to detect missed messages with re-tx —
+      **done**: `PEER_PULL_DATA`/`PEER_PUSH_DATA` chunks are sequence-numbered and sent with no
+      per-chunk ack; only the final chunk is sent reliably (GATT indication / WithResponse write),
+      and the receiver diffs its buffered seqs against the now-known total and asks for exactly
+      the missing ones via `PEER_RESEND_CHARACTERISTIC_UUID`.
+- [x] peer pairing feature: there can only ever be a max of 2 nearby peer phones, the first
+      phone to appear does its thing, when another one appears it auto connects to it and they
+      keep each other in sync, if a phone goes out of range the pairing is nominally held 
+      (by device name not address) but indicated 'gone' in the UI, the pairing must be indicated
+      on the count mode screen in the form: "Paired with ...", if that out-of-range phone 
+      re-appears the pair syncing resumes, if another peer arrives the selection rig-ma-role
+      should be triggered — **done, differs from the ask in one way, confirmed live**: role
+      negotiation is deterministic (lower shortDeviceId dials, the other only ever accepts — see
+      `PeerSyncEngine`'s Part 2 doc), and the confirmed partner's name shows on the existing
+      "Nearby: ..." line rather than a separate "Paired with ..." one. A phone excluded from the
+      mesh's one pair gets a dismissable "Not selected for peer sync" dialog and is returned to
+      the Mode Picker rather than held/shown as "gone" — the operator confirmed this (not a
+      silent hold) is what they actually wanted once 3-phone testing showed what "gone" would
+      mean in practice. A partner that drops fully out of range (not just excluded by another
+      pair forming) is NOT nominally held — `recomputeOwnPick` clears the pick outright and the
+      picker/auto-pair logic re-runs fresh, same as a first encounter.
 
 ## Count mode
 
@@ -647,6 +680,8 @@ In outline the 'beacon plan' consists of:
       web app, beacons not counted can be determined from the progress.json file
 - [ ] bibs retired at CPn should not be expected to be seen at CPn+ or the finish, but should
       be expected at the close station, this is irrespective of the timing method
+- [ ] the propagated ejected lines should follow the same colour scheme as the rest,
+      red->orange->green to follow their sync status
 
 ## Start line
 
@@ -671,14 +706,14 @@ In outline the 'beacon plan' consists of:
 
 - [ ] mobile app detects, records and times beacons crossing the finish line
       (bibs mode at the finish location)
-- [ ] timing is critical so two co-ordinated phones are required
+- [ ] timing is critical so two co-ordinated phones are required, one either side of the finish line
 - [ ] finish time needs to be set when the strongest signal is seen (on either phone)
 - [ ] runners will mill about in-range after finishing so a means of knowing they have finished
-        is required - how? the finish line will typically be 3 metres wide, the finish funnel
-        typically 5 metres long, with a phone either side of the finish line the runner will pass
-        within 1.5 metres of a phone, 3 times nearer than the end of the finish funnel, this
-        should create a characteristic and detectable power curve (bell curve?), but false local
-        peaks need to be allowed for
+      is required - how? the finish line will typically be 3 metres wide, the finish funnel
+      typically 5 metres long, with a phone either side of the finish line the runner will pass
+      within 1.5 metres of a phone, 3 times nearer than the end of the finish funnel, this
+      should create a characteristic and detectable power curve (bell curve?), but false local
+      peaks need to be allowed for
 
 ## Sweep
 

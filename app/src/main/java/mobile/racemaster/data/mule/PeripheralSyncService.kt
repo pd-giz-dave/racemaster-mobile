@@ -1,6 +1,7 @@
 package mobile.racemaster.data.mule
 
 import mobile.racemaster.data.db.entity.HistoryAction
+import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.RaceEntity
 
 import android.Manifest
@@ -63,6 +64,7 @@ import mobile.racemaster.RacemasterApplication
 import mobile.racemaster.data.db.dao.PulledSourceSummary
 import mobile.racemaster.data.settings.AppMode
 import mobile.racemaster.data.settings.DEFAULT_RACE_STALE_AFTER_DAYS
+import mobile.racemaster.data.settings.toHistoryMode
 
 /**
  * Runs on every device (Time, Bibs, CP and Mule) regardless of which screen is showing, so a
@@ -115,6 +117,12 @@ class PeripheralSyncService : Service() {
     private var gattServer: BluetoothGattServer? = null
     private var advertiser: BluetoothLeAdvertiser? = null
     private var dataCharacteristic: BluetoothGattCharacteristic? = null
+
+    // The Mule Mode peer-sync feature's own notify characteristic — see
+    // PEER_PULL_DATA_CHARACTERISTIC_UUID's own doc. Kept as its own field, not reusing
+    // dataCharacteristic, since the two can be mid-stream for different purposes at once (a Mule
+    // relay pull and a peer-sync exchange are independent connections/requests).
+    private var peerPullDataCharacteristic: BluetoothGattCharacteristic? = null
 
     // Non-null only on API 26+ (Build.VERSION_CODES.O), once startAdvertisingSetAttempt's own
     // start has actually been confirmed via onAdvertisingSetStarted — see that function's own
@@ -307,6 +315,51 @@ class PeripheralSyncService : Service() {
     // app's own deliverProgress() deliberately avoids relying on that instead (see its own doc:
     // no requestMtu()-equivalent exists for page JS to size chunks against reliably).
     private val pendingProgressBytes = mutableMapOf<String, MutableList<ByteArray>>()
+
+    // The Mule Mode peer-sync feature's own per-connection state — see
+    // mobile.racemaster.data.peersync.PeerSyncEngine's own doc for the central/peripheral role
+    // negotiation this belongs to, and each field's own doc below. All keyed by MAC address, all
+    // cleared on disconnect in onConnectionStateChange, same lifecycle pendingProgressBytes/
+    // deviceInfoSnapshots already have.
+
+    // The dialing device's own deviceId/deviceName, cached from its PEER_HELLO write — what
+    // PEER_SINCE's own read responds with (via peerSyncRepository.lastMergedLineNumber/
+    // lastMergedCountStatusLineNumber(deviceId)) and what a reassembled PEER_PUSH_DATA stream is
+    // merged under.
+    private val peerHelloByAddress = java.util.concurrent.ConcurrentHashMap<String, PeerHello>()
+
+    // Computed asynchronously (a suspend DB call) the moment a PEER_HELLO write arrives, cached
+    // here so the synchronous onCharacteristicReadRequest callback for PEER_SINCE — which cannot
+    // itself suspend — has something to answer with. The PEER_HELLO write's own GATT response is
+    // deferred until this is populated (see that branch's own doc), so by the time the dialing
+    // side's WithResponse write actually returns and it proceeds to read PEER_SINCE, this is
+    // already here.
+    private val peerSinceByAddress = java.util.concurrent.ConcurrentHashMap<String, PeerSince>()
+
+    // Mirrors outboundChunks/OutboundStream above, but for PEER_PULL_DATA_CHARACTERISTIC_UUID —
+    // kept as its own separate queue/map rather than reusing those, since a Mule relay pull and a
+    // peer-sync exchange are independent connections/requests that could in principle be mid-stream
+    // at once. See sendPeerPullData/sendNextPeerChunk.
+    private data class PeerOutboundStream(val device: BluetoothDevice, val chunks: ArrayDeque<ByteArray>, var lastProgressAtMillis: Long)
+    private val peerOutboundChunks = java.util.concurrent.ConcurrentHashMap<String, PeerOutboundStream>()
+
+    // The full set of framed chunks most recently sent to this address via PEER_PULL_DATA — kept
+    // around briefly (cleared on disconnect, same as everything else here; there's no need for a
+    // separate retention timer since a resend request only ever makes sense within the same
+    // connection that just received the stream it's about) so a PEER_RESEND_CHARACTERISTIC_UUID
+    // write can re-notify exactly the missing seq(s) without recomputing the payload.
+    private val lastSentPeerPullChunks = java.util.concurrent.ConcurrentHashMap<String, Map<Int, ByteArray>>()
+
+    // Chunks received so far for this address's current PEER_PUSH_DATA_CHARACTERISTIC_UUID
+    // stream, keyed by seq — the write-direction twin of lastSentPeerPullChunks. Checked for
+    // completeness after every write (see handleWrite's branch); once every seq up to the
+    // declared totalChunks is present, the stream is reassembled and merged immediately — no
+    // separate "stream finished" signal needed, since WithResponse writes already arrive to this
+    // callback strictly one at a time. Left in place (not cleared) once complete, so a late
+    // resent duplicate is harmless; PEER_PUSH_STATUS's own read recomputes the gap fresh from
+    // whatever's here at read time regardless.
+    private val peerPushChunksByAddress = java.util.concurrent.ConcurrentHashMap<String, MutableMap<Int, ByteArray>>()
+    private val peerPushTotalChunksByAddress = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -888,12 +941,61 @@ class PeripheralSyncService : Service() {
         )
         dataCharacteristic = dataCharacteristicLocal
 
+        // The Mule Mode peer-sync feature's own bidirectional exchange — see
+        // mobile.racemaster.data.peersync.PeerSyncEngine's own doc, and MuleGattProfile's doc on
+        // each of these UUIDs for what carries what. Purely additive alongside the five
+        // characteristics above: a Mule or the web app never writes/reads any of these.
+        val peerHelloCharacteristic = BluetoothGattCharacteristic(
+            MuleGattProfile.PEER_HELLO_CHARACTERISTIC_UUID,
+            BluetoothGattCharacteristic.PROPERTY_WRITE,
+            BluetoothGattCharacteristic.PERMISSION_WRITE,
+        )
+        val peerSinceCharacteristic = BluetoothGattCharacteristic(
+            MuleGattProfile.PEER_SINCE_CHARACTERISTIC_UUID,
+            BluetoothGattCharacteristic.PROPERTY_READ,
+            BluetoothGattCharacteristic.PERMISSION_READ,
+        )
+        val peerPullDataCharacteristicLocal = BluetoothGattCharacteristic(
+            MuleGattProfile.PEER_PULL_DATA_CHARACTERISTIC_UUID,
+            BluetoothGattCharacteristic.PROPERTY_NOTIFY,
+            BluetoothGattCharacteristic.PERMISSION_READ,
+        ).apply {
+            addDescriptor(
+                BluetoothGattDescriptor(
+                    CLIENT_CHARACTERISTIC_CONFIG_UUID,
+                    BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE,
+                ),
+            )
+        }
+        val peerPushDataCharacteristic = BluetoothGattCharacteristic(
+            MuleGattProfile.PEER_PUSH_DATA_CHARACTERISTIC_UUID,
+            BluetoothGattCharacteristic.PROPERTY_WRITE,
+            BluetoothGattCharacteristic.PERMISSION_WRITE,
+        )
+        val peerResendCharacteristic = BluetoothGattCharacteristic(
+            MuleGattProfile.PEER_RESEND_CHARACTERISTIC_UUID,
+            BluetoothGattCharacteristic.PROPERTY_WRITE,
+            BluetoothGattCharacteristic.PERMISSION_WRITE,
+        )
+        val peerPushStatusCharacteristic = BluetoothGattCharacteristic(
+            MuleGattProfile.PEER_PUSH_STATUS_CHARACTERISTIC_UUID,
+            BluetoothGattCharacteristic.PROPERTY_READ,
+            BluetoothGattCharacteristic.PERMISSION_READ,
+        )
+        peerPullDataCharacteristic = peerPullDataCharacteristicLocal
+
         val service = BluetoothGattService(MuleGattProfile.SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY).apply {
             addCharacteristic(deviceInfoCharacteristic)
             addCharacteristic(controlCharacteristic)
             addCharacteristic(dataCharacteristicLocal)
             addCharacteristic(ackCharacteristic)
             addCharacteristic(progressCharacteristic)
+            addCharacteristic(peerHelloCharacteristic)
+            addCharacteristic(peerSinceCharacteristic)
+            addCharacteristic(peerPullDataCharacteristicLocal)
+            addCharacteristic(peerPushDataCharacteristic)
+            addCharacteristic(peerResendCharacteristic)
+            addCharacteristic(peerPushStatusCharacteristic)
         }
         // addService() is fire-and-forget — it returns immediately, with the real result
         // delivered later via onServiceAdded, and nothing here used to wait for that before
@@ -1012,8 +1114,13 @@ class PeripheralSyncService : Service() {
         pendingAdvertisingStart = null
         if (status == null) {
             Log.w(TAG, "BLE advertising start never confirmed via a callback within $ADVERTISING_START_LIVENESS_TIMEOUT — treating as failed")
+            container.bleConnectionLog.warn("advertise", "start never confirmed within $ADVERTISING_START_LIVENESS_TIMEOUT")
             isAdvertising = false
             container.bluetoothStateRepository.recordAdvertisingFailure()
+        } else if (status != AdvertisingSetCallback.ADVERTISE_SUCCESS) {
+            container.bleConnectionLog.warn("advertise", "start failed: status=$status")
+        } else {
+            container.bleConnectionLog.log("advertise", "started")
         }
     }
 
@@ -1217,6 +1324,27 @@ class PeripheralSyncService : Service() {
             offset: Int,
             characteristic: BluetoothGattCharacteristic,
         ) {
+            if (characteristic.uuid == MuleGattProfile.PEER_SINCE_CHARACTERISTIC_UUID) {
+                val bytes = json.encodeToString(peerSinceByAddress[device.address] ?: PeerSince(0, 0)).toByteArray(Charsets.UTF_8)
+                if (offset > bytes.size) {
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_INVALID_OFFSET, offset, null)
+                } else {
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, bytes.copyOfRange(offset, bytes.size))
+                }
+                return
+            }
+            if (characteristic.uuid == MuleGattProfile.PEER_PUSH_STATUS_CHARACTERISTIC_UUID) {
+                val total = peerPushTotalChunksByAddress[device.address]
+                val received = peerPushChunksByAddress[device.address]?.keys ?: emptySet()
+                val missing = if (total == null) emptyList() else MuleGattProfile.missingPeerChunkSeqs(total, received)
+                val bytes = json.encodeToString(PeerPushStatus(missing)).toByteArray(Charsets.UTF_8)
+                if (offset > bytes.size) {
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_INVALID_OFFSET, offset, null)
+                } else {
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, bytes.copyOfRange(offset, bytes.size))
+                }
+                return
+            }
             if (characteristic.uuid != MuleGattProfile.DEVICE_INFO_CHARACTERISTIC_UUID) {
                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, null)
                 return
@@ -1250,6 +1378,7 @@ class PeripheralSyncService : Service() {
                     relayManifestVersion = relayManifestVersion,
                     progressGeneratedAt = container.progressRepository.generatedAtFor(servingState.raceId),
                     lastCountStatusLineNumber = cachedLastCountStatusLineNumber,
+                    peerPickedShortDeviceId = container.peerSyncEngine.ownPickedPeerId ?: 0,
                 )
                 json.encodeToString(info).toByteArray(Charsets.UTF_8).also { fresh ->
                     deviceInfoSnapshots[device.address] = fresh
@@ -1447,6 +1576,86 @@ class PeripheralSyncService : Service() {
                         gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
                     }
                 }
+                MuleGattProfile.PEER_HELLO_CHARACTERISTIC_UUID -> {
+                    val hello = runCatching { json.decodeFromString<PeerHello>(String(value, Charsets.UTF_8)) }.getOrNull()
+                    if (hello == null) {
+                        if (responseNeeded) gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, 0, null)
+                        return
+                    }
+                    peerHelloByAddress[device.address] = hello
+                    // The PEER_SINCE read that follows this write (see MulePullClient.exchangePeerData's
+                    // own ordering) needs peerSinceByAddress already populated — deferring this
+                    // write's own GATT response until that's done (same shape as the ACK branch's
+                    // own wait-for-markSynced-before-responding above) is what guarantees that,
+                    // since the dialing side's WithResponse write doesn't return until this fires.
+                    serviceScope.launch {
+                        val since = runCatching {
+                            PeerSince(
+                                sinceLineNumber = container.peerSyncRepository.lastMergedLineNumber(hello.deviceId),
+                                sinceCountStatusLineNumber = container.peerSyncRepository.lastMergedCountStatusLineNumber(hello.deviceId),
+                            )
+                        }.getOrDefault(PeerSince(0, 0))
+                        peerSinceByAddress[device.address] = since
+                        if (responseNeeded) {
+                            gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+                        }
+                        // This device's own pull-direction payload for the dialing side — its own
+                        // countStatusOnly-ness picks which of hello's two cursors applies, the same
+                        // way the CONTROL branch's countStatusOnly comes from the *requester* for an
+                        // ordinary Mule pull, except here both sides are already known to share one
+                        // mode/group (see PeerHello's own doc), so this device's own currentMode is
+                        // the right source rather than anything carried on the wire.
+                        runCatching {
+                            val countStatusOnly = currentMode?.toHistoryMode(servingState.location) == HistoryMode.COUNT
+                            val sinceLineNumber = if (countStatusOnly) hello.sinceCountStatusLineNumber else hello.sinceLineNumber
+                            val payload = if (countStatusOnly) {
+                                computeCountStatusEventsPayload(sinceLineNumber, null)
+                            } else {
+                                computeRecordsPayload(sinceLineNumber, null)
+                            }
+                            if (payload != null) sendPeerPullData(device, payload)
+                        }.onFailure { Log.e(TAG, "peer pull-data payload computation failed for ${device.address}", it) }
+                    }
+                }
+                MuleGattProfile.PEER_PUSH_DATA_CHARACTERISTIC_UUID -> {
+                    val chunk = MuleGattProfile.decodePeerChunk(value)
+                    if (chunk != null) {
+                        val buffer = peerPushChunksByAddress.getOrPut(device.address) { java.util.concurrent.ConcurrentHashMap() }
+                        buffer[chunk.seq] = chunk.payload
+                        peerPushTotalChunksByAddress[device.address] = chunk.totalChunks
+                        if ((0 until chunk.totalChunks).all { it in buffer }) {
+                            val hello = peerHelloByAddress[device.address]
+                            val assembled = (0 until chunk.totalChunks).fold(ByteArray(0)) { acc, seq -> acc + (buffer[seq] ?: ByteArray(0)) }
+                            val payloadJson = String(assembled, Charsets.UTF_8)
+                            if (hello != null) {
+                                serviceScope.launch {
+                                    runCatching { mergePeerPushPayload(hello, payloadJson) }
+                                        .onFailure { Log.e(TAG, "peer push-data merge failed for ${device.address}", it) }
+                                }
+                            }
+                        }
+                    }
+                    if (responseNeeded) {
+                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+                    }
+                }
+                MuleGattProfile.PEER_RESEND_CHARACTERISTIC_UUID -> {
+                    val request = runCatching { json.decodeFromString<ResendRequest>(String(value, Charsets.UTF_8)) }.getOrNull()
+                    if (request != null) {
+                        val sent = lastSentPeerPullChunks[device.address]
+                        if (sent != null) {
+                            for (seq in request.missingSeqs) {
+                                val framed = sent[seq] ?: continue
+                                peerOutboundChunks.getOrPut(device.address) { PeerOutboundStream(device, ArrayDeque(), System.currentTimeMillis()) }
+                                    .chunks.add(framed)
+                            }
+                            sendNextPeerChunk(device)
+                        }
+                    }
+                    if (responseNeeded) {
+                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+                    }
+                }
                 else -> {
                     if (responseNeeded) {
                         gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
@@ -1568,10 +1777,19 @@ class PeripheralSyncService : Service() {
         @SuppressLint("MissingPermission")
         override fun onNotificationSent(device: BluetoothDevice, status: Int) {
             sendNextChunk(device)
+            sendNextPeerChunk(device)
         }
 
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
+            if (newState == android.bluetooth.BluetoothProfile.STATE_CONNECTED) {
+                container.bleConnectionLog.log("gatt-server", "inbound connect: address=${device.address} status=$status")
+            }
             if (newState == android.bluetooth.BluetoothProfile.STATE_DISCONNECTED) {
+                if (status != android.bluetooth.BluetoothGatt.GATT_SUCCESS) {
+                    container.bleConnectionLog.warn("gatt-server", "inbound disconnect with error: address=${device.address} status=$status")
+                } else {
+                    container.bleConnectionLog.log("gatt-server", "inbound disconnect: address=${device.address}")
+                }
                 outboundChunks.remove(device.address)
                 deviceMtus.remove(device.address)
                 deviceInfoSnapshots.remove(device.address)
@@ -1582,6 +1800,13 @@ class PeripheralSyncService : Service() {
                 // Same backstop for a progress delivery that never sent its terminator before
                 // dropping.
                 pendingProgressBytes.remove(device.address)
+                // Peer-sync's own per-connection state — see each map's own doc.
+                peerHelloByAddress.remove(device.address)
+                peerSinceByAddress.remove(device.address)
+                peerOutboundChunks.remove(device.address)
+                lastSentPeerPullChunks.remove(device.address)
+                peerPushChunksByAddress.remove(device.address)
+                peerPushTotalChunksByAddress.remove(device.address)
             }
         }
 
@@ -1676,6 +1901,69 @@ class PeripheralSyncService : Service() {
         return json.encodeToString(entries)
     }
 
+    // Decodes and merges a fully-reassembled PEER_PUSH_DATA_CHARACTERISTIC_UUID stream — see that
+    // characteristic's own handleWrite branch for the completeness check that leads here. Computes
+    // its own groupKey/mode from currentMode/servingState exactly like PeerSyncEngine's own
+    // computeOwnContextFlow does on the central side — both sides are already known to share one
+    // convergence group by construction (PeerGroupDetector matching happened before the dialing
+    // side ever selected this peer), so there's no need for either value to travel over the wire.
+    //
+    // groupKey MUST use the plain, location-blind mapping (AppMode.toHistoryMode(), bucket #2 —
+    // see computeOwnContextFlow's own doc for why location is folded in via locationCode instead,
+    // through PeerSyncRepository.groupKey's own BIBS-only rule), never the location-aware [mode]
+    // below — confirmed live as a real bug: using [mode] (COUNT) here landed every pushed record
+    // in raceGroupId "<race>:COUNT:0" while CountModeViewModel's own queries
+    // (peerSeenBeaconsFlow/peerStatusRowsFlow) ask PeerGroupDetector.ownGroupKey for
+    // "<race>:BIBS:<locationCode>" — two different buckets, so a push that completed and merged
+    // perfectly well (confirmed in peer_seen_records) never once reached Count Mode's own screen.
+    private suspend fun mergePeerPushPayload(hello: PeerHello, payloadJson: String) {
+        val raceId = servingState.raceId ?: return
+        val appMode = currentMode ?: return
+        val mode = appMode.toHistoryMode(servingState.location)
+        val records: List<SyncRecord> = if (payloadJson.isBlank()) emptyList() else json.decodeFromString(payloadJson)
+        if (records.isEmpty()) return
+        val groupKey = container.peerGroupDetector.ownGroupKey(servingState.raceLabel, servingState.location, appMode.toHistoryMode())
+        container.peerSyncRepository.mergeRecords(groupKey, mode, hello.deviceId, hello.deviceName, records)
+    }
+
+    // Peer-sync's own mirror of sendChunked/sendNextChunk below, for
+    // PEER_PULL_DATA_CHARACTERISTIC_UUID — see that characteristic's own doc for the chunk framing
+    // difference (every chunk self-describing, no END_OF_STREAM_MARKER) and peerOutboundChunks'
+    // own doc for why this is a separate queue/map rather than reusing outboundChunks.
+    private fun sendPeerPullData(device: BluetoothDevice, recordsJson: String) {
+        val negotiatedMtu = deviceMtus[device.address]
+        val chunkSize = ((negotiatedMtu?.let { (it - 3).coerceAtLeast(1) } ?: MuleGattProfile.FALLBACK_CHUNK_SIZE_BYTES)
+            .coerceAtMost(MuleGattProfile.MAX_SAFE_CHUNK_SIZE_BYTES) - MuleGattProfile.PEER_CHUNK_HEADER_BYTES)
+            .coerceAtLeast(1)
+        val bytes = recordsJson.toByteArray(Charsets.UTF_8)
+        val payloadChunks = if (bytes.isEmpty()) listOf(ByteArray(0)) else bytes.toList().chunked(chunkSize).map { it.toByteArray() }
+        val totalChunks = payloadChunks.size
+        val framed = payloadChunks.mapIndexed { seq, payload -> MuleGattProfile.encodePeerChunk(seq, totalChunks, payload) }
+        lastSentPeerPullChunks[device.address] = framed.withIndex().associate { (seq, chunk) -> seq to chunk }
+        peerOutboundChunks[device.address] = PeerOutboundStream(device, ArrayDeque(framed), System.currentTimeMillis())
+        sendNextPeerChunk(device)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun sendNextPeerChunk(device: BluetoothDevice) {
+        if (!hasConnectPermission()) return
+        val stream = peerOutboundChunks[device.address] ?: return
+        val chunk = stream.chunks.removeFirstOrNull() ?: return
+        stream.lastProgressAtMillis = System.currentTimeMillis()
+        val characteristic = peerPullDataCharacteristic ?: return
+        val server = gattServer ?: return
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                server.notifyCharacteristicChanged(device, characteristic, false, chunk)
+            } else {
+                @Suppress("DEPRECATION")
+                characteristic.value = chunk
+                @Suppress("DEPRECATION")
+                server.notifyCharacteristicChanged(device, characteristic, false)
+            }
+        }.onFailure { Log.e(TAG, "peer pull-data notifyCharacteristicChanged failed for chunk of ${chunk.size} bytes", it) }
+    }
+
     // ATT header is 3 bytes, so the usable notification payload is (MTU - 3). Sizing to
     // whatever actually got negotiated (see onMtuChanged) is what fixed real truncation
     // corruption in the field: a fixed chunk size larger than the un-negotiated default
@@ -1763,6 +2051,13 @@ class PeripheralSyncService : Service() {
             if (now - stream.lastProgressAtMillis < CHUNK_SEND_TIMEOUT.inWholeMilliseconds) continue
             Log.w(TAG, "Chunk stream to ${stream.device.address} stalled — forcing disconnect so it can retry")
             outboundChunks.remove(stream.device.address)
+            runCatching { gattServer?.cancelConnection(stream.device) }
+        }
+        for (stream in peerOutboundChunks.values) {
+            if (stream.chunks.isEmpty()) continue
+            if (now - stream.lastProgressAtMillis < CHUNK_SEND_TIMEOUT.inWholeMilliseconds) continue
+            Log.w(TAG, "Peer pull-data stream to ${stream.device.address} stalled — forcing disconnect so it can retry")
+            peerOutboundChunks.remove(stream.device.address)
             runCatching { gattServer?.cancelConnection(stream.device) }
         }
     }

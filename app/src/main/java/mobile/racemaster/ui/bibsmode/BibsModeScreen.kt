@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -35,6 +36,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import mobile.racemaster.data.db.entity.HistoryAction
 import mobile.racemaster.data.db.entity.NON_ENTRY_ACTIONS
 import mobile.racemaster.data.mule.BtPollingStatus
+import mobile.racemaster.data.peersync.PeerSyncEngine
 import mobile.racemaster.ui.components.ActionPickerDialog
 import mobile.racemaster.ui.components.DigitKeypad
 import mobile.racemaster.ui.components.EntryLogList
@@ -109,10 +111,34 @@ fun BibsModeScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
     val btPollingStatus by viewModel.btPollingStatus.collectAsStateWithLifecycle()
-    val nearbyPeerNames by viewModel.nearbyPeerNames.collectAsStateWithLifecycle()
+    val selectedPeerNames by viewModel.selectedPeerNames.collectAsStateWithLifecycle()
+    val peerChoices by viewModel.peerChoices.collectAsStateWithLifecycle()
+    val excludedNotice by viewModel.excludedNotice.collectAsStateWithLifecycle()
 
     // No external HID trigger here (unlike Time Mode) — entry is now bib-driven/auto-saving
     // rather than a single "log the pending event" action a volume button could stand in for.
+
+    // TODO.md's "the dropped ones should detect they've been dropped and exit count mode" (the
+    // same requirement applies to Bibs/Pen/Close) — some OTHER pair of same-group phones has
+    // already mutually agreed to sync with each other (see PeerSyncEngine.excludedNotice's own
+    // doc), so this device isn't part of any pair. Bibs Mode has no dedicated "stop" dialog of
+    // its own (unlike Count — see CountModeScreen), so dismissing goes straight home, same as
+    // ModeScreenTopBar's own Home icon already does with no further confirmation.
+    excludedNotice?.let { notice ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Not selected for peer sync") },
+            text = {
+                Text(
+                    "${notice.pairedName1} and ${notice.pairedName2} paired up with each other instead. " +
+                        "Returning to Mode Picker.",
+                )
+            },
+            confirmButton = {
+                Button(onClick = withClickSound(onHome)) { Text("OK") }
+            },
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -133,7 +159,9 @@ fun BibsModeScreen(
         BibsModeContent(
             uiState = uiState,
             deviceName = deviceName,
-            nearbyPeerNames = nearbyPeerNames,
+            nearbyPeerNames = selectedPeerNames,
+            peerChoices = peerChoices,
+            onPeerSelectedChanged = viewModel::setPeerSelected,
             btPollingStatus = btPollingStatus,
             onStart = viewModel::startBibsMode,
             onDigit = viewModel::onDigit,
@@ -162,6 +190,8 @@ private fun BibsModeContent(
     uiState: BibsModeUiState,
     deviceName: String?,
     nearbyPeerNames: List<String>,
+    peerChoices: List<PeerSyncEngine.SelectablePeer>,
+    onPeerSelectedChanged: (shortDeviceId: Long, selected: Boolean) -> Unit,
     btPollingStatus: BtPollingStatus,
     onStart: () -> Unit,
     onDigit: (Int) -> Unit,
@@ -218,6 +248,8 @@ private fun BibsModeContent(
                 EntryModeHeaderInfo(
                     deviceName = deviceName,
                     nearbyPeerNames = nearbyPeerNames,
+                    peerChoices = peerChoices,
+                    onPeerSelectedChanged = onPeerSelectedChanged,
                     raceLabel = uiState.raceLabel,
                     raceLocation = uiState.raceLocation,
                     nextSplitNumber = uiState.nextSplitNumber,

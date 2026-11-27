@@ -10,6 +10,7 @@ import mobile.racemaster.data.beacon.BeaconScanEngine
 import mobile.racemaster.data.beacon.DxCp27Client
 import mobile.racemaster.data.beacon.RangeSampleLogger
 import mobile.racemaster.data.db.RacemasterDatabase
+import mobile.racemaster.data.mule.BleConnectionLog
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.LocationStateRepository
 import mobile.racemaster.data.mule.MulePullClient
@@ -52,6 +53,7 @@ interface AppContainer {
     val peerSyncRepository: PeerSyncRepository
     val peerGroupDetector: PeerGroupDetector
     val peerSyncEngine: PeerSyncEngine
+    val bleConnectionLog: BleConnectionLog
 }
 
 class DefaultAppContainer(context: Context) : AppContainer {
@@ -63,6 +65,10 @@ class DefaultAppContainer(context: Context) : AppContainer {
 
     override val settingsRepository: SettingsRepository by lazy {
         SettingsRepository(context.dataStore)
+    }
+
+    override val bleConnectionLog: BleConnectionLog by lazy {
+        BleConnectionLog(context, settingsRepository)
     }
 
     override val raceRepository: RaceRepository by lazy {
@@ -86,7 +92,7 @@ class DefaultAppContainer(context: Context) : AppContainer {
     private val muleSyncClient: MuleSyncClient by lazy { MuleSyncClient() }
 
     override val muleRepository: MuleRepository by lazy {
-        MuleRepository(database.pulledRecordDao(), settingsRepository, MulePullClient(), muleSyncClient, raceRepository, database.knownDeviceDao())
+        MuleRepository(database.pulledRecordDao(), settingsRepository, MulePullClient(bleConnectionLog), muleSyncClient, raceRepository, database.knownDeviceDao())
     }
 
     override val muleSyncEngine: MuleSyncEngine by lazy {
@@ -101,7 +107,7 @@ class DefaultAppContainer(context: Context) : AppContainer {
     }
 
     override val peerSyncEngine: PeerSyncEngine by lazy {
-        PeerSyncEngine(muleRepository, raceRepository, settingsRepository, peerGroupDetector, peerSyncRepository, bluetoothStateRepository)
+        PeerSyncEngine(muleRepository, raceRepository, settingsRepository, peerGroupDetector, peerSyncRepository, bluetoothStateRepository, bleConnectionLog, countModeRepository)
     }
 
     override val beaconScanEngine: BeaconScanEngine by lazy {

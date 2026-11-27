@@ -9,6 +9,8 @@ import mobile.racemaster.data.db.entity.HistoryMode
 import mobile.racemaster.data.db.entity.RaceEntity
 import mobile.racemaster.data.db.dao.PeerOriginSummary
 import mobile.racemaster.data.db.dao.PulledSourceSummary
+import mobile.racemaster.data.mule.BleConnectionLog
+import mobile.racemaster.data.mule.BleLogStatus
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.ProgressRepository
 import mobile.racemaster.data.mule.StoredProgress
@@ -120,6 +122,12 @@ sealed interface HistoryItemUi {
         val lineCount: Int,
         val lastSeenAtMillis: Long,
     ) : HistoryItemUi
+    // TODO.md: "add a bluetooth logging option ... the log needs to be visible as an item on
+    // the history files list with a delete option" — see BleConnectionLog's own doc. Not
+    // tied to any one race (one file for the whole device), so unlike every other item above
+    // there's exactly zero or one of these; absent entirely whenever BleConnectionLog.status
+    // is null (nothing recorded yet, or already deleted).
+    data class BleLogFile(val sizeBytes: Long, val lastModifiedAtMillis: Long) : HistoryItemUi
 }
 
 // PeerSeenRecordEntity.raceGroupId is an opaque hash (see PeerSyncRepository.groupKey's own doc)
@@ -159,6 +167,9 @@ internal fun HistoryItemUi.isStaleAndDeletable(): Boolean = when (this) {
     // Same reasoning as ProgressFile above — a diagnostic view, not a sync-staleness concern;
     // its own individual delete button is enough.
     is HistoryItemUi.PeerActivity -> false
+    // Same reasoning again — a diagnostic file the operator deletes deliberately once they're
+    // done with it, not something staleness sweeps up on its own.
+    is HistoryItemUi.BleLogFile -> false
 }
 
 // What RaceHistoryScreen's "Delete stale" confirmation dialog shows — split by kind since the
@@ -187,6 +198,7 @@ private data class HistorySources(
     val pendingDeleteIds: Set<Long>,
     val tombstonedSources: Set<Pair<String, String>>,
     val peerOriginSummaries: List<PeerOriginSummary>,
+    val bleLogStatus: BleLogStatus?,
 )
 
 private data class ExtraSources(
@@ -195,6 +207,7 @@ private data class ExtraSources(
     val pendingDeleteIds: Set<Long>,
     val tombstonedSources: Set<Pair<String, String>>,
     val peerOriginSummaries: List<PeerOriginSummary>,
+    val bleLogStatus: BleLogStatus?,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -205,6 +218,7 @@ class RaceHistoryViewModel(
     private val settingsRepository: SettingsRepository,
     private val peerSyncRepository: PeerSyncRepository,
     private val peerGroupDetector: PeerGroupDetector,
+    private val bleConnectionLog: BleConnectionLog,
 ) : ViewModel() {
 
     val historyItems: StateFlow<List<HistoryItemUi>> = combine(
@@ -214,24 +228,29 @@ class RaceHistoryViewModel(
         muleRepository.raceStaleAfterDays,
         // Paired rather than added as the combine's own 6th argument — kotlinx coroutines'
         // typed combine() overloads only go up to 5, same reason BibsModeViewModel's own
-        // RaceContext combine already pairs theirs.
+        // RaceContext combine already pairs theirs. peerOriginSummaries/bleLogStatus are
+        // themselves paired a second time for the same reason, now that this inner combine is
+        // also at 5.
         combine(
             progressRepository.observeStored(),
             settingsRepository.activeRaceId,
             raceRepository.observePendingDeleteRaceIds(),
             muleRepository.tombstonedSources,
-            peerSyncRepository.observeOriginSummaries(),
-        ) { progressFiles, activeRaceId, pendingDeleteIds, tombstonedSources, peerOriginSummaries ->
-            ExtraSources(progressFiles, activeRaceId, pendingDeleteIds.toSet(), tombstonedSources, peerOriginSummaries)
+            combine(peerSyncRepository.observeOriginSummaries(), bleConnectionLog.status) { peerOriginSummaries, bleLogStatus ->
+                peerOriginSummaries to bleLogStatus
+            },
+        ) { progressFiles, activeRaceId, pendingDeleteIds, tombstonedSources, peerOriginSummariesAndBleLogStatus ->
+            val (peerOriginSummaries, bleLogStatus) = peerOriginSummariesAndBleLogStatus
+            ExtraSources(progressFiles, activeRaceId, pendingDeleteIds.toSet(), tombstonedSources, peerOriginSummaries, bleLogStatus)
         },
     ) { races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, extra ->
         HistorySources(
             races, sourceSummaries, lastTouchedAtMillis, maxAgeDays,
             extra.progressFiles, extra.activeRaceId, extra.pendingDeleteIds, extra.tombstonedSources,
-            extra.peerOriginSummaries,
+            extra.peerOriginSummaries, extra.bleLogStatus,
         )
     }
-        .flatMapLatest { (races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, progressFiles, activeRaceId, pendingDeleteIds, tombstonedSources, peerOriginSummaries) ->
+        .flatMapLatest { (races, sourceSummaries, lastTouchedAtMillis, maxAgeDays, progressFiles, activeRaceId, pendingDeleteIds, tombstonedSources, peerOriginSummaries, bleLogStatus) ->
             // A relayed source held only as a deletion tombstone — its device deleted that race.
             val muleItems = sourceSummaries.filterNot { (it.sourceDeviceId to it.sourceRaceLabel) in tombstonedSources }.map {
                 HistoryItemUi.MuleSource(
@@ -265,8 +284,9 @@ class RaceHistoryViewModel(
                     lastSeenAtMillis = summary.lastSeenAtMillis,
                 )
             }
+            val bleLogItems = bleLogStatus?.let { listOf(HistoryItemUi.BleLogFile(it.sizeBytes, it.lastModifiedAtMillis)) } ?: emptyList()
             if (races.isEmpty()) {
-                flowOf(muleItems + progressItems + peerItems)
+                flowOf(muleItems + progressItems + peerItems + bleLogItems)
             } else {
                 // One flow per race — its own last-activity timestamp (for staleness — a local
                 // race's own real history, not any Mule-inbox bookkeeping; see
@@ -294,7 +314,7 @@ class RaceHistoryViewModel(
                             )
                         }
                     },
-                ) { localRaces -> localRaces.toList() + muleItems + progressItems + peerItems }
+                ) { localRaces -> localRaces.toList() + muleItems + progressItems + peerItems + bleLogItems }
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -353,6 +373,16 @@ class RaceHistoryViewModel(
         viewModelScope.launch { peerSyncRepository.deleteGroupOrigin(raceGroupId, mode, originDeviceId) }
     }
 
+    // See BleConnectionLog.delete's own doc — always deletable, same reasoning as
+    // deleteMuleSource/deleteProgress/deletePeerActivityOrigin above. Not suspend (a plain file
+    // delete), so no viewModelScope.launch needed, unlike those three.
+    fun deleteBleLog() = bleConnectionLog.delete()
+
+    // Null when there's nothing recorded yet — RaceHistoryScreen only shows this item's row (and
+    // so only offers tapping it) once BleConnectionLog.status is non-null, but this stays
+    // defensive against the file disappearing between that check and the tap landing.
+    fun shareBleLogIntent() = bleConnectionLog.shareIntent()
+
     // Bulk counterpart to deleteRace/deleteMuleSource above, for RaceHistoryScreen's own
     // "Delete stale" action. Reads historyItems.value fresh at call time — not whatever
     // snapshot the confirmation dialog was opened against — so an item that changed state
@@ -371,6 +401,7 @@ class RaceHistoryViewModel(
                     // this stays an exhaustive `when` rather than needing an `else`.
                     is HistoryItemUi.ProgressFile -> Unit
                     is HistoryItemUi.PeerActivity -> Unit
+                    is HistoryItemUi.BleLogFile -> Unit
                 }
             }
         }
@@ -387,6 +418,7 @@ class RaceHistoryViewModel(
                     container.settingsRepository,
                     container.peerSyncRepository,
                     container.peerGroupDetector,
+                    container.bleConnectionLog,
                 )
             }
         }

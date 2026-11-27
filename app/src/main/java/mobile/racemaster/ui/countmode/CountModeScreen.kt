@@ -85,7 +85,9 @@ fun CountModeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val deviceName by viewModel.deviceName.collectAsStateWithLifecycle()
-    val nearbyPeerNames by viewModel.nearbyPeerNames.collectAsStateWithLifecycle()
+    val selectedPeerNames by viewModel.selectedPeerNames.collectAsStateWithLifecycle()
+    val peerChoices by viewModel.peerChoices.collectAsStateWithLifecycle()
+    val excludedNotice by viewModel.excludedNotice.collectAsStateWithLifecycle()
     val btPollingStatus by viewModel.btPollingStatus.collectAsStateWithLifecycle()
     var showStopConfirm by remember { mutableStateOf(false) }
     var pendingEjectBeaconNumber by remember { mutableStateOf<Int?>(null) }
@@ -105,6 +107,29 @@ fun CountModeScreen(
             },
             dismissButton = {
                 OutlinedButton(onClick = withClickSound { showStopConfirm = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    // TODO.md's "the dropped ones should detect they've been dropped and exit count mode" —
+    // some OTHER pair of same-group phones has already mutually agreed to sync with each other
+    // (see PeerSyncEngine.excludedNotice's own doc), so this device isn't part of any pair.
+    // Dismissing exits exactly the same way the "Stop Count Mode?" dialog below does.
+    excludedNotice?.let { notice ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Not selected for peer sync") },
+            text = {
+                Text(
+                    "${notice.pairedName1} and ${notice.pairedName2} paired up with each other instead. " +
+                        "Returning to Mode Picker.",
+                )
+            },
+            confirmButton = {
+                Button(onClick = withClickSound {
+                    viewModel.stopMode()
+                    onHome()
+                }) { Text("OK") }
             },
         )
     }
@@ -175,11 +200,14 @@ fun CountModeScreen(
                     // standalone "N of M yet to be seen" line, so nothing here is shown twice.
                     RaceProgressSummary(
                         deviceName = deviceName,
-                        nearbyPeerNames = nearbyPeerNames,
+                        nearbyPeerNames = selectedPeerNames,
+                        peerChoices = peerChoices,
+                        onPeerSelectedChanged = viewModel::setPeerSelected,
                         // TODO.md "put the peer activity feedback line under the nearby devices
                         // line and in the same style" — RaceProgressSummary renders it directly
                         // under "Nearby: ..." using that same line's own style; see its own doc.
                         peerActivityCount = uiState.peerActivityCount,
+                        peerActivityLatestAtMillis = uiState.peerActivityLatestAtMillis,
                         raceLabel = uiState.raceLabel,
                         raceLocation = uiState.raceLocation,
                         nextSplitNumber = 0,

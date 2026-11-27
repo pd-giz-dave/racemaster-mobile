@@ -184,7 +184,7 @@ class BibsModeViewModel(
     private val bibSpeaker: BibSpeaker,
     private val peerGroupDetector: PeerGroupDetector,
     private val peerSyncRepository: PeerSyncRepository,
-    peerSyncEngine: PeerSyncEngine,
+    private val peerSyncEngine: PeerSyncEngine,
 ) : ViewModel() {
 
     private val raceIdFlow: StateFlow<Long?> = settingsRepository.activeRaceId
@@ -211,6 +211,17 @@ class BibsModeViewModel(
     // Same-group peers currently nearby over BLE — see CountModeViewModel's own identical field
     // for why this just exposes PeerSyncEngine's already-live StateFlow directly.
     val nearbyPeerNames: StateFlow<List<String>> = peerSyncEngine.nearbyPeerNames
+
+    // See CountModeViewModel's own identical fields.
+    val selectedPeerNames: StateFlow<List<String>> = peerSyncEngine.selectedPeerNames
+    val peerChoices: StateFlow<List<PeerSyncEngine.SelectablePeer>> = peerSyncEngine.peerChoices
+
+    // See CountModeViewModel's own identical field.
+    val excludedNotice: StateFlow<PeerSyncEngine.ExcludedNotice?> = peerSyncEngine.excludedNotice
+
+    fun setPeerSelected(shortDeviceId: Long, selected: Boolean) {
+        peerSyncEngine.setPeerSelected(shortDeviceId, selected)
+    }
 
     private val digitsFlow = MutableStateFlow("")
     // True whenever the digits currently on screen are already committed (either just

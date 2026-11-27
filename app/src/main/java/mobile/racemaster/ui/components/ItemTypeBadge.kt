@@ -75,6 +75,35 @@ fun ProgressTypeIcon(tint: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
     }
 }
 
+/** A recorded BLE connection trace (HistoryItemUi.BleLogFile) — the classic Bluetooth rune glyph
+ *  (a vertical spine with two triangles crossing through its middle), the one shape that reads
+ *  as "Bluetooth" at a glance rather than needing a label to explain it. */
+@Composable
+fun BleLogTypeIcon(tint: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
+    Canvas(modifier = Modifier.size(BADGE_ICON_SIZE)) {
+        val stroke = Stroke(width = size.width * 0.12f)
+        val spineX = size.width * 0.5f
+        val topY = size.height * 0.08f
+        val midY = size.height * 0.5f
+        val bottomY = size.height * 0.92f
+        val quarterY = size.height * 0.29f
+        val threeQuarterY = size.height * 0.71f
+        val wingX = size.width * 0.88f
+        val path = Path().apply {
+            moveTo(spineX, topY)
+            lineTo(wingX, quarterY)
+            lineTo(spineX, midY)
+            lineTo(wingX, threeQuarterY)
+            lineTo(spineX, bottomY)
+            moveTo(spineX, topY)
+            lineTo(size.width * 0.12f, threeQuarterY)
+            moveTo(spineX, bottomY)
+            lineTo(size.width * 0.12f, quarterY)
+        }
+        drawPath(path, color = tint, style = stroke)
+    }
+}
+
 /** A same-mode peer's own cross-device activity (HistoryItemUi.PeerActivity) — two overlapping
  *  phone/device outlines, the plainest "another nearby device" shorthand there is. */
 @Composable

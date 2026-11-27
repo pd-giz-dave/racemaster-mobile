@@ -71,6 +71,7 @@ class SettingsRepository(
         val BLUETOOTH_OFF = booleanPreferencesKey("bluetooth_off")
         val SERVER_SYNC_OFF = booleanPreferencesKey("server_sync_off")
         val PEER_SYNC_OFF = booleanPreferencesKey("peer_sync_off")
+        val BLUETOOTH_LOGGING_ENABLED = booleanPreferencesKey("bluetooth_logging_enabled")
         val DRAFT_SERVER_URL = stringPreferencesKey("draft_server_url")
         val DRAFT_USERNAME = stringPreferencesKey("draft_username")
         val DRAFT_PASSWORD = stringPreferencesKey("draft_password")
@@ -416,6 +417,19 @@ class SettingsRepository(
 
     suspend fun setPeerSyncOff(off: Boolean) {
         dataStore.edit { prefs -> prefs[Keys.PEER_SYNC_OFF] = off }
+    }
+
+    // TODO.md: "add a bluetooth logging option (similar to the web-app, default off) so
+    // connection issues can be viewed and resolved (so not relying on the logcat buffer that can
+    // overflow)" — gates BleConnectionLog.log (routine connect/pull/advertise trace) the same way
+    // the web app's own racemaster-ble-logging localStorage flag gates js/mule-ble.js's bleLog;
+    // BleConnectionLog.warn (a genuine connect/collision failure) bypasses this entirely, same as
+    // that file's bleError always prints regardless of the toggle. Off by default — this is a
+    // diagnostic aid turned on only while actively chasing a connection issue, not a standing cost.
+    val bluetoothLoggingEnabled: Flow<Boolean> = dataStore.data.map { prefs -> prefs[Keys.BLUETOOTH_LOGGING_ENABLED] ?: false }
+
+    suspend fun setBluetoothLoggingEnabled(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.BLUETOOTH_LOGGING_ENABLED] = enabled }
     }
 
     // General "how long is a race worth still chasing" cutoff, shared by every sync path

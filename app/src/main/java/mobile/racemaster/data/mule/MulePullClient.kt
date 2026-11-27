@@ -48,7 +48,7 @@ import kotlin.uuid.toKotlinUuid
 /** BLE central: scans for [MuleGattProfile.SERVICE_UUID], connects to a nearby Time/Bibs/Mule
  *  phone, and pulls whatever unsynced records it's holding. */
 @OptIn(ExperimentalUuidApi::class, ExperimentalCoroutinesApi::class)
-class MulePullClient {
+class MulePullClient(private val bleConnectionLog: BleConnectionLog) {
     // encodeDefaults = true — see PeripheralSyncService's own doc on its identically-configured
     // Json instance for why a default-valued field (e.g. AckPayload.isSink, PullRequest's null
     // origin fields) must not be silently omitted from the wire payload just because it
@@ -274,12 +274,20 @@ class MulePullClient {
             Log.w(TAG, "peripheral not Disconnected before connect (was $stateBeforeConnect) — disconnecting first: address=${advertisement.identifier}")
             runCatching { peripheral.disconnect() }
         }
+        val connectStartedAtMillis = System.currentTimeMillis()
+        bleConnectionLog.log("connect", "attempt: address=${advertisement.identifier}")
         try {
             withTimeout(CONNECT_TIMEOUT) { peripheral.connect() }
         } catch (e: Throwable) {
+            val elapsedMs = System.currentTimeMillis() - connectStartedAtMillis
+            bleConnectionLog.warn("connect", "failed after ${elapsedMs}ms: address=${advertisement.identifier} error=$e")
             evictAfterFailedConnect(advertisement, peripheral)
             throw e
         }
+        bleConnectionLog.log(
+            "connect",
+            "connected after ${System.currentTimeMillis() - connectStartedAtMillis}ms: address=${advertisement.identifier}",
+        )
         // Mirrors js/mule-ble.js's GATT_CONNECT_SETTLE_MS — see that constant's own doc for the
         // field evidence: a newly-established link resolving connect() quickly but then dying
         // again within 1-3s, before service/characteristic discovery (which this app's own first
@@ -880,6 +888,218 @@ class MulePullClient {
         }
     } }
 
+    /** The Mule Mode peer-sync feature's own bidirectional exchange — see
+     *  [mobile.racemaster.data.peersync.PeerSyncEngine] for the central/peripheral role
+     *  negotiation this belongs to (this is always run by whichever side that negotiation picked
+     *  as central/dialer), and [PeerHello]/[PeerSince] for why it needs no [PullRequest] or
+     *  groupKey of its own. Meant to be called right after [readDeviceInfo] against the same
+     *  [advertisement] — reuses that same connection via [heldConnection] rather than
+     *  reconnecting, exactly like [pull] already does for its own ack write.
+     *
+     *  Writes [PeerHello], reads [PeerSince], pulls the peripheral's own new records via
+     *  [MuleGattProfile.PEER_PULL_DATA_CHARACTERISTIC_UUID] (ack-less notify chunks, gap-checked
+     *  against [MuleGattProfile.missingPeerChunkSeqs] and resent via one
+     *  [MuleGattProfile.PEER_RESEND_CHARACTERISTIC_UUID] round if needed), then pushes this
+     *  device's own new records — [myRecordsSince] called with whichever of [PeerSince]'s two
+     *  cursors [countStatusOnly] names, mirroring [PullRequest.countStatusOnly]'s own split — the
+     *  same way over [MuleGattProfile.PEER_PUSH_DATA_CHARACTERISTIC_UUID], polling
+     *  [MuleGattProfile.PEER_PUSH_STATUS_CHARACTERISTIC_UUID] once afterward for the same gap
+     *  check in that direction (see that characteristic's own doc for why it's a poll rather than
+     *  a peripheral-initiated resend request). [onPeerRecordsReceived] is only called with what
+     *  the peripheral pulled back, for the caller to merge — this function has no merge logic of
+     *  its own, the same separation [pull]'s own [onReceived] already keeps for Mule relay.
+     *
+     *  [expectPeerPullData] must be false whenever the caller's own cursor check (comparing its
+     *  already-merged line number for this peer against that peer's own [DeviceInfo.lastLineNumber]/
+     *  [DeviceInfo.lastCountStatusLineNumber], already read via [readDeviceInfo] before this is
+     *  called — the exact same comparison today's `pullFromPeerIfNeeded` already makes) shows
+     *  nothing new to pull: with no reliable end-of-stream signal on [MuleGattProfile
+     *  .PEER_PULL_DATA_CHARACTERISTIC_UUID] (see that characteristic's own doc), subscribing and
+     *  waiting for a stream that was never going to arrive would otherwise cost a full settle-wait
+     *  on literally every steady-state tick, the overwhelmingly common case. [myLastLineNumber]/
+     *  [myLastCountStatusLineNumber] are this device's own already-merged cursor against this
+     *  peer's deviceId — forwarded as-is into [PeerHello], see that class's own doc for why the
+     *  peripheral needs it. */
+    suspend fun exchangePeerData(
+        advertisement: Advertisement,
+        myDeviceId: String,
+        myDeviceName: String,
+        countStatusOnly: Boolean,
+        expectPeerPullData: Boolean,
+        myLastLineNumber: Long,
+        myLastCountStatusLineNumber: Long,
+        myRecordsSince: suspend (sinceLineNumber: Long) -> List<SyncRecord>,
+        onPeerRecordsReceived: suspend (List<SyncRecord>) -> Unit,
+    ): Unit = sharedConnectSemaphore.withPermit { mutexFor(advertisement).withLock {
+        coroutineScope {
+            val peripheral = peripheralFor(advertisement)
+            try {
+                connectOrEvict(advertisement, peripheral)
+            } catch (e: TimeoutCancellationException) {
+                throw MulePhaseTimeoutException("connecting", e)
+            }
+            var succeeded = false
+            try {
+                val serviceUuid = MuleGattProfile.SERVICE_UUID.toKotlinUuid()
+                val helloCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.PEER_HELLO_CHARACTERISTIC_UUID.toKotlinUuid())
+                val sinceCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.PEER_SINCE_CHARACTERISTIC_UUID.toKotlinUuid())
+                val pullDataCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.PEER_PULL_DATA_CHARACTERISTIC_UUID.toKotlinUuid())
+                val pushDataCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.PEER_PUSH_DATA_CHARACTERISTIC_UUID.toKotlinUuid())
+                val resendCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.PEER_RESEND_CHARACTERISTIC_UUID.toKotlinUuid())
+                val pushStatusCharacteristic = characteristicOf(serviceUuid, MuleGattProfile.PEER_PUSH_STATUS_CHARACTERISTIC_UUID.toKotlinUuid())
+
+                // Pull direction setup: subscribe BEFORE writing PEER_HELLO below, mirroring
+                // collectChunkedResponse's own subscribe-before-request ordering — the peripheral
+                // may start notifying PEER_PULL_DATA chunks the instant it sees PEER_HELLO, so
+                // subscribing any later risks missing the first one(s). Skipped entirely when
+                // expectPeerPullData is false — see this function's own doc.
+                val chunksBySeq = mutableMapOf<Int, ByteArray>()
+                var totalChunks: Int? = null
+                val collectJob = if (expectPeerPullData) {
+                    launch {
+                        peripheral.observe(pullDataCharacteristic).collect { raw ->
+                            val chunk = MuleGattProfile.decodePeerChunk(raw) ?: return@collect
+                            chunksBySeq[chunk.seq] = chunk.payload
+                            totalChunks = chunk.totalChunks
+                        }
+                    }
+                } else {
+                    null
+                }
+                // Same reasoning as collectChunkedResponse's own identical delay — gives the
+                // notification subscription (CCCD write) time to land before PEER_HELLO below.
+                if (collectJob != null) delay(300.milliseconds)
+
+                try {
+                    withTimeout(ACK_WRITE_TIMEOUT) {
+                        peripheral.write(
+                            helloCharacteristic,
+                            json.encodeToString(PeerHello(myDeviceId, myDeviceName, myLastLineNumber, myLastCountStatusLineNumber)).toByteArray(Charsets.UTF_8),
+                            WriteType.WithResponse,
+                        )
+                    }
+                } catch (e: TimeoutCancellationException) {
+                    throw MulePhaseTimeoutException("sending peer hello", e)
+                }
+
+                val since = try {
+                    withTimeout(READ_TIMEOUT) {
+                        json.decodeFromString<PeerSince>(peripheral.read(sinceCharacteristic).toString(Charsets.UTF_8))
+                    }
+                } catch (e: TimeoutCancellationException) {
+                    throw MulePhaseTimeoutException("reading peer since", e)
+                } catch (e: SerializationException) {
+                    PeerSince(0, 0)
+                }
+
+                // Pull direction: chunksBySeq/totalChunks were already being collected (via
+                // collectJob, subscribed before PEER_HELLO above) while PEER_HELLO/PEER_SINCE's
+                // own round trips above were in flight — settle via awaitPeerStreamSettled, then
+                // one resend round for any gap. Skipped entirely when expectPeerPullData is false
+                // (collectJob is null in that case) — see this function's own doc.
+                if (collectJob != null) {
+                    try {
+                        withTimeout(PULL_TIMEOUT) { awaitPeerStreamSettled(chunksBySeq) { totalChunks } }
+                    } catch (e: TimeoutCancellationException) {
+                        throw MulePhaseTimeoutException("collecting peer pull data", e)
+                    }
+                    val firstPassTotal = totalChunks
+                    if (firstPassTotal != null) {
+                        val missing = MuleGattProfile.missingPeerChunkSeqs(firstPassTotal, chunksBySeq.keys)
+                        if (missing.isNotEmpty()) {
+                            bleConnectionLog.warn("peer-resend", "requesting pull resend: address=${advertisement.identifier} missingSeqs=$missing")
+                            try {
+                                withTimeout(ACK_WRITE_TIMEOUT) {
+                                    peripheral.write(
+                                        resendCharacteristic,
+                                        json.encodeToString(ResendRequest(missing)).toByteArray(Charsets.UTF_8),
+                                        WriteType.WithResponse,
+                                    )
+                                }
+                                withTimeout(PULL_TIMEOUT) { awaitPeerStreamSettled(chunksBySeq) { totalChunks } }
+                            } catch (e: TimeoutCancellationException) {
+                                throw MulePhaseTimeoutException("resending peer pull data", e)
+                            }
+                        }
+                    }
+                    collectJob.cancel()
+                    val knownTotal = totalChunks
+                    val peerRecords = if (knownTotal == null || chunksBySeq.isEmpty()) {
+                        emptyList()
+                    } else {
+                        val assembled = (0 until knownTotal).fold(ByteArray(0)) { acc, seq -> acc + (chunksBySeq[seq] ?: ByteArray(0)) }
+                        val payload = assembled.toString(Charsets.UTF_8)
+                        if (payload.isBlank()) emptyList() else json.decodeFromString<List<SyncRecord>>(payload)
+                    }
+                    if (peerRecords.isNotEmpty()) onPeerRecordsReceived(peerRecords)
+                }
+
+                // Push direction: this device's own new records, same chunk framing, but ordinary
+                // WithResponse writes throughout — see PEER_PUSH_DATA_CHARACTERISTIC_UUID's own doc
+                // for why no WithoutResponse split here, unlike the notify side above.
+                val sinceForPush = if (countStatusOnly) since.sinceCountStatusLineNumber else since.sinceLineNumber
+                val myRecords = myRecordsSince(sinceForPush)
+                if (myRecords.isNotEmpty()) {
+                    val bytes = json.encodeToString(myRecords).toByteArray(Charsets.UTF_8)
+                    val chunkPayloadSize = MuleGattProfile.MAX_SAFE_CHUNK_SIZE_BYTES - MuleGattProfile.PEER_CHUNK_HEADER_BYTES
+                    val pushTotalChunks = ((bytes.size + chunkPayloadSize - 1) / chunkPayloadSize).coerceAtLeast(1)
+                    suspend fun writePushChunk(seq: Int) {
+                        val start = seq * chunkPayloadSize
+                        val end = minOf(start + chunkPayloadSize, bytes.size)
+                        val framed = MuleGattProfile.encodePeerChunk(seq, pushTotalChunks, bytes.copyOfRange(start, end))
+                        withTimeout(ACK_WRITE_TIMEOUT) { peripheral.write(pushDataCharacteristic, framed, WriteType.WithResponse) }
+                    }
+                    try {
+                        for (seq in 0 until pushTotalChunks) writePushChunk(seq)
+                    } catch (e: TimeoutCancellationException) {
+                        throw MulePhaseTimeoutException("pushing peer data", e)
+                    }
+                    // Same settle reasoning as INTER_OPERATION_SETTLE_DELAY's own doc — this read
+                    // follows a run of writes on the same connection with no gap otherwise.
+                    delay(INTER_OPERATION_SETTLE_DELAY)
+                    val status = try {
+                        withTimeout(READ_TIMEOUT) {
+                            json.decodeFromString<PeerPushStatus>(peripheral.read(pushStatusCharacteristic).toString(Charsets.UTF_8))
+                        }
+                    } catch (e: Exception) {
+                        PeerPushStatus()
+                    }
+                    if (status.missingSeqs.isNotEmpty()) {
+                        bleConnectionLog.warn("peer-resend", "resending push: address=${advertisement.identifier} missingSeqs=${status.missingSeqs}")
+                        try {
+                            for (seq in status.missingSeqs) if (seq in 0 until pushTotalChunks) writePushChunk(seq)
+                        } catch (e: TimeoutCancellationException) {
+                            throw MulePhaseTimeoutException("resending peer push data", e)
+                        }
+                    }
+                }
+                succeeded = true
+            } finally {
+                endConnection(advertisement, peripheral, succeeded)
+            }
+        }
+    } }
+
+    // See PEER_STREAM_QUIET_PERIOD's own doc for why this exists instead of a reliable
+    // end-of-stream signal: returns once every chunk up to the current totalChunks() has arrived,
+    // or once a full PEER_STREAM_QUIET_PERIOD passes with no new chunk arriving (checked against
+    // the latest known totalChunks() each time, since that can itself change mid-wait as the
+    // first chunks come in) — whichever happens first. The caller's own withTimeout is the real
+    // backstop if the stream never settles at all (e.g. the connection died mid-stream).
+    private suspend fun awaitPeerStreamSettled(chunksBySeq: Map<Int, ByteArray>, totalChunks: () -> Int?) {
+        var lastSize = -1
+        while (true) {
+            val total = totalChunks()
+            if (total != null && chunksBySeq.size >= total) return
+            // No growth across a full quiet period, and we already know how many chunks to
+            // expect: nothing more is coming. Only applies once totalChunks is known — before
+            // that, size staying at 0 just means the first chunk hasn't arrived yet.
+            if (total != null && chunksBySeq.size == lastSize) return
+            lastSize = chunksBySeq.size
+            delay(PEER_STREAM_QUIET_PERIOD)
+        }
+    }
+
     // Writes [payload] to the peer's PROGRESS_CHARACTERISTIC_UUID as a sequence of small,
     // ordinary writes terminated by a single END_OF_STREAM_MARKER byte — the write-direction
     // twin of collectChunkedResponse's own read-direction framing below, and identical to the
@@ -1046,6 +1266,18 @@ class MulePullClient {
         // primitive call here, so a busy relay device's sequence no longer monopolizes the one
         // shared slot for its entire duration.
         private const val MAX_CONCURRENT_CENTRAL_CONNECTS = 1
+
+        // exchangePeerData's own pull-direction settle heuristic: PEER_PULL_DATA_CHARACTERISTIC_UUID
+        // chunks arrive as plain fire-and-forget notifications (no indication, no per-chunk ack —
+        // see that characteristic's own doc), so unlike collectChunkedResponse's own
+        // END_OF_STREAM_MARKER wait, there's no single event that reliably means "every chunk that's
+        // coming has arrived." Polling for no further growth in what's been received for this long,
+        // once totalChunks is already known from an earlier chunk, is the same kind of
+        // no-progress-means-done heuristic PeripheralSyncService.checkStalledChunkStreams already
+        // uses server-side, just client-side and far shorter (that one exists to time out a genuinely
+        // stuck stream after many seconds; this one just needs to be comfortably longer than the gap
+        // between two chunks sent back-to-back over a healthy connection).
+        private val PEER_STREAM_QUIET_PERIOD = 400.milliseconds
     }
 }
 

@@ -159,6 +159,10 @@ data class CountModeUiState(
     // RaceHistoryDetailViewModel); this is just its count, for CountModeScreen's own one-line
     // feedback.
     val peerActivityCount: Int = 0,
+    // Diagnostic aid for the live "paired but not converging" investigation — lets the one-line
+    // feedback below actually show whether anything new just arrived, not just a count that could
+    // itself be stale. Null (never shown) until at least one peer row exists.
+    val peerActivityLatestAtMillis: Long? = null,
 )
 
 /**
@@ -213,7 +217,7 @@ class CountModeViewModel(
     private val settingsRepository: SettingsRepository,
     private val peerGroupDetector: PeerGroupDetector,
     private val peerSyncRepository: PeerSyncRepository,
-    peerSyncEngine: PeerSyncEngine,
+    private val peerSyncEngine: PeerSyncEngine,
     bluetoothStateRepository: BluetoothStateRepository,
     locationStateRepository: LocationStateRepository,
     private val serverStatusRepository: ServerStatusRepository,
@@ -233,6 +237,22 @@ class CountModeViewModel(
     // ViewModel's own lifecycle (see its own doc), so this just exposes its already-live
     // StateFlow directly rather than re-deriving anything.
     val nearbyPeerNames: StateFlow<List<String>> = peerSyncEngine.nearbyPeerNames
+
+    // The subset of nearbyPeerNames this device is actually syncing with, and (only when there's
+    // an actual choice to make) the inline picker's own options — see PeerSyncEngine.
+    // selectedPeerNames/peerChoices' own docs.
+    val selectedPeerNames: StateFlow<List<String>> = peerSyncEngine.selectedPeerNames
+    val peerChoices: StateFlow<List<PeerSyncEngine.SelectablePeer>> = peerSyncEngine.peerChoices
+
+    // Non-null once some OTHER mutual pair has formed among the nearby same-group peers,
+    // excluding this device — see PeerSyncEngine.excludedNotice's own doc. The screen's own
+    // dismiss action on this is the exact same stopMode()+onHome() the "Stop Count Mode?" dialog
+    // already uses; nothing here forces that navigation on its own.
+    val excludedNotice: StateFlow<PeerSyncEngine.ExcludedNotice?> = peerSyncEngine.excludedNotice
+
+    fun setPeerSelected(shortDeviceId: Long, selected: Boolean) {
+        peerSyncEngine.setPeerSelected(shortDeviceId, selected)
+    }
 
     // Same Bluetooth/Location status Bibs/Time Mode already show (see BtPollingStatusLine's own
     // doc) — Count has no such line of its own today; this is what makes a Location-off phone's
@@ -394,7 +414,13 @@ class CountModeViewModel(
                     statusByBeacon = mergedStatusByBeacon(statusEvents, peerStatusRows)
                     localStatusRowByBeacon = latestCountEventRowByBeacon(statusEvents)
                     peerSeenOriginByBeacon = peerSeen
-                    _uiState.update { it.copy(totalIssued = issued.size, peerActivityCount = peerStatusRows.size) }
+                    _uiState.update {
+                        it.copy(
+                            totalIssued = issued.size,
+                            peerActivityCount = peerStatusRows.size,
+                            peerActivityLatestAtMillis = peerStatusRows.maxOfOrNull { row -> row.timestampMillis },
+                        )
+                    }
                     recomputeOutstanding()
                 }.collect { }
             }

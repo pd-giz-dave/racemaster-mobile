@@ -96,6 +96,8 @@ fun SetupOptionsScreen(
             HorizontalDivider()
             PeerSyncControl(uiState = uiState, viewModel = viewModel)
             HorizontalDivider()
+            BluetoothLoggingControl(viewModel = viewModel)
+            HorizontalDivider()
             SpeakBibsAloudControl(viewModel = viewModel)
             HorizontalDivider()
             AutoSyncControls(uiState = uiState, viewModel = viewModel)
@@ -184,6 +186,42 @@ internal fun PeerSyncControl(uiState: MuleModeUiState, viewModel: MuleModeViewMo
             Button(onClick = withClickSound(viewModel::turnPeerSyncOn)) { Text("Enable fast peer sync") }
         } else {
             OutlinedButton(onClick = withClickSound(viewModel::turnPeerSyncOff)) { Text("Disable fast peer sync") }
+        }
+    }
+}
+
+// TODO.md: "add a bluetooth logging option (similar to the web-app, default off) so connection
+// issues can be viewed and resolved" — see SettingsRepository.bluetoothLoggingEnabled's own doc.
+// Plain on/off, same shape as PeerSyncControl above: a diagnostic aid the operator turns on only
+// while actively chasing a connection issue, viewed/shared/deleted from Race History afterwards
+// (see RaceHistoryViewModel's HistoryItemUi.BleLogFile) — not a standing setting with a "why is
+// this off" signal to surface here.
+@Composable
+internal fun BluetoothLoggingControl(viewModel: MuleModeViewModel) {
+    val enabled by viewModel.bluetoothLoggingEnabled.collectAsStateWithLifecycle()
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            if (enabled) {
+                "Bluetooth logging: ON — recording connection events to a file"
+            } else {
+                "Bluetooth logging: OFF"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            "Diagnostic trace of BLE connect attempts, collisions and advertising — viewable, " +
+                "shareable and deletable from Race History once recorded.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (enabled) {
+            OutlinedButton(onClick = withClickSound { viewModel.setBluetoothLoggingEnabled(false) }) {
+                Text("Disable Bluetooth logging")
+            }
+        } else {
+            Button(onClick = withClickSound { viewModel.setBluetoothLoggingEnabled(true) }) {
+                Text("Enable Bluetooth logging")
+            }
         }
     }
 }

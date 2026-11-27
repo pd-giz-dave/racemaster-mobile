@@ -49,6 +49,72 @@ object MuleGattProfile {
      *  [PeripheralSyncService]'s own reassembly of this characteristic's writes. */
     val PROGRESS_CHARACTERISTIC_UUID: UUID = UUID.fromString("6d6f6269-6c65-2e72-6163-000000000005")
 
+    /** Write: the Mule Mode peer-sync feature's own bidirectional exchange (see
+     *  [PeerSyncEngine][mobile.racemaster.data.peersync.PeerSyncEngine]'s own doc for the
+     *  central/peripheral role negotiation this belongs to) — the dialing side's small identity
+     *  announcement, [PeerHello], written right after it's read the peripheral's own
+     *  [DEVICE_INFO_CHARACTERISTIC_UUID]. Deliberately separate from
+     *  [CONTROL_CHARACTERISTIC_UUID]/[PullRequest], which exist for the unrelated, unmodified
+     *  Mule-relay pull this device may also be the peripheral for at the same time — nothing
+     *  here touches that protocol or its wire format. */
+    val PEER_HELLO_CHARACTERISTIC_UUID: UUID = UUID.fromString("6d6f6269-6c65-2e72-6163-000000000006")
+
+    /** Read: the peripheral's own computed [PeerSince] reply to whichever device's
+     *  [PEER_HELLO_CHARACTERISTIC_UUID] it most recently received — see that class's own doc. */
+    val PEER_SINCE_CHARACTERISTIC_UUID: UUID = UUID.fromString("6d6f6269-6c65-2e72-6163-000000000007")
+
+    /** Notify: peer-sync's own mirror of [DATA_CHARACTERISTIC_UUID] — a chunked JSON array of
+     *  [SyncRecord], framed with [encodePeerChunk]'s own sequence-numbered header instead of
+     *  [DATA_CHARACTERISTIC_UUID]'s plain [END_OF_STREAM_MARKER] convention. Every chunk (not just
+     *  the last) carries the stream's true `totalChunks` in its own header, so the central side
+     *  learns it from the very first chunk to arrive rather than needing a special reliable final
+     *  chunk — see [PEER_RESEND_CHARACTERISTIC_UUID]'s own doc for how a gap against that is then
+     *  detected and resent. Plain fire-and-forget notifications throughout (`confirm = false`),
+     *  same delivery guarantee [DATA_CHARACTERISTIC_UUID] already has today — deliberately not a
+     *  GATT indication: this codebase has never used one, and this feature's own
+     *  gap-detect-and-resend mechanism already covers the dropped-chunk case an indication would
+     *  otherwise exist for, without adding an unproven primitive on hardware already documented
+     *  elsewhere in this file as sensitive to GATT timing. Kept as its own characteristic, not a
+     *  reuse of [DATA_CHARACTERISTIC_UUID], so Mule relay's own wire format — and the racemaster
+     *  web app's own BLE client, which only ever speaks that one — is entirely untouched by this
+     *  feature. */
+    val PEER_PULL_DATA_CHARACTERISTIC_UUID: UUID = UUID.fromString("6d6f6269-6c65-2e72-6163-000000000008")
+
+    /** Write: the dialing side's own chunked push of its own new records to the peripheral — the
+     *  other half of the bidirectional exchange [PEER_PULL_DATA_CHARACTERISTIC_UUID] only covers
+     *  one direction of. Same sequence-numbered chunk framing; every chunk sent
+     *  [com.juul.kable.WriteType.WithResponse] like every other write in this profile (not the
+     *  per-chunk-fast/final-chunk-reliable split [PEER_PULL_DATA_CHARACTERISTIC_UUID]'s own notify
+     *  stream uses) — this codebase has never used `WriteType.WithoutResponse`, and a gap in a
+     *  WithResponse write would already surface to the dialing side as a thrown exception on the
+     *  write call itself, so [PEER_PUSH_STATUS_CHARACTERISTIC_UUID]'s own gap check is a
+     *  defensive backstop here rather than this direction's primary reliability mechanism. */
+    val PEER_PUSH_DATA_CHARACTERISTIC_UUID: UUID = UUID.fromString("6d6f6269-6c65-2e72-6163-000000000009")
+
+    /** Write, central only: the dialing side asks the peripheral to resend specific missing
+     *  chunks of [PEER_PULL_DATA_CHARACTERISTIC_UUID] — see [ResendRequest]'s own doc. Written
+     *  once the dialing side has settled its own buffered chunk set for a stream (see
+     *  [PEER_PULL_DATA_CHARACTERISTIC_UUID]'s own doc — it knows the true `totalChunks` from the
+     *  first chunk it received) and [missingPeerChunkSeqs] finds a gap against it. A GATT
+     *  peripheral can't itself write to, or otherwise initiate anything toward, the central that
+     *  connected to it (BLE's ATT layer is inherently one-directional for requests — see
+     *  [PEER_PUSH_STATUS_CHARACTERISTIC_UUID]'s own doc for how the opposite-direction gap is
+     *  instead detected, by the dialing side polling a read rather than the peripheral pushing a
+     *  request of its own), so this characteristic only ever needs to carry requests in this one
+     *  direction. */
+    val PEER_RESEND_CHARACTERISTIC_UUID: UUID = UUID.fromString("6d6f6269-6c65-2e72-6163-00000000000a")
+
+    /** Read: the peripheral's own computed [PeerPushStatus] for whichever central's
+     *  [PEER_PUSH_DATA_CHARACTERISTIC_UUID] stream it most recently reassembled — the
+     *  push-direction counterpart to [PEER_RESEND_CHARACTERISTIC_UUID]'s pull-direction request.
+     *  Since a peripheral can never initiate a request toward the central that connected to it
+     *  (see [PEER_RESEND_CHARACTERISTIC_UUID]'s own doc), the dialing side instead reads this
+     *  right after its own push write loop finishes, to learn whether the peripheral is missing
+     *  anything (which, per [PEER_PUSH_DATA_CHARACTERISTIC_UUID]'s own doc, should only ever
+     *  happen if the connection itself dropped mid-stream, not from an ordinary WithResponse write
+     *  silently losing data) and, if so, resend just those chunks itself. */
+    val PEER_PUSH_STATUS_CHARACTERISTIC_UUID: UUID = UUID.fromString("6d6f6269-6c65-2e72-6163-00000000000b")
+
     /** Advertised (primary-packet) only — never registered as an actual GATT service, since an
      *  advertised service UUID is purely an advertisement-layer claim to begin with (the web
      *  app's own `connectAndVerify` in mule-ble.js already treats it that way, confirming via a
@@ -135,6 +201,41 @@ object MuleGattProfile {
     // onMtuChanged reports.
     const val MAX_SAFE_CHUNK_SIZE_BYTES = 509
     const val END_OF_STREAM_MARKER: Byte = 0
+
+    // 2-byte seq + 2-byte totalChunks header prefixing every PEER_PULL_DATA_CHARACTERISTIC_UUID/
+    // PEER_PUSH_DATA_CHARACTERISTIC_UUID chunk — see those characteristics' own doc for why:
+    // ack-less delivery (no per-chunk confirmation) means a chunk can simply go missing, and this
+    // is what lets a receiver tell exactly which seq(s) without needing them to arrive in order.
+    // Unsigned 16-bit each (via `.toInt() and 0xffff` on decode) — a same-tick peer-sync page is
+    // already bounded small (PeerSyncEngine's own PEER_SYNC_PAGE_SIZE), so 65535 chunks is a
+    // generous ceiling, not a real constraint.
+    const val PEER_CHUNK_HEADER_BYTES = 4
+
+    fun encodePeerChunk(seq: Int, totalChunks: Int, payload: ByteArray): ByteArray {
+        val buffer = java.nio.ByteBuffer.allocate(PEER_CHUNK_HEADER_BYTES + payload.size)
+        buffer.putShort(seq.toShort())
+        buffer.putShort(totalChunks.toShort())
+        buffer.put(payload)
+        return buffer.array()
+    }
+
+    /** Inverse of [encodePeerChunk] — null for anything shorter than the fixed header, same
+     *  defensive posture as [decodeAdvertisedIdentity]. */
+    fun decodePeerChunk(bytes: ByteArray): PeerChunk? {
+        if (bytes.size < PEER_CHUNK_HEADER_BYTES) return null
+        val buffer = java.nio.ByteBuffer.wrap(bytes)
+        val seq = buffer.short.toInt() and 0xffff
+        val totalChunks = buffer.short.toInt() and 0xffff
+        return PeerChunk(seq, totalChunks, bytes.copyOfRange(PEER_CHUNK_HEADER_BYTES, bytes.size))
+    }
+
+    /** Every chunk index in `0 until totalChunks` not present in [receivedSeqs] — what a receiver
+     *  of [PEER_PULL_DATA_CHARACTERISTIC_UUID]/[PEER_PUSH_DATA_CHARACTERISTIC_UUID] diffs its own
+     *  buffered seqs against once it considers a stream settled (every chunk already carries the
+     *  true [totalChunks] — see those characteristics' own doc), to build the [ResendRequest]/
+     *  [PeerPushStatus] it reports back if the result isn't empty. */
+    fun missingPeerChunkSeqs(totalChunks: Int, receivedSeqs: Set<Int>): List<Int> =
+        (0 until totalChunks).filterNot { it in receivedSeqs }
 
     // Single source of truth for how often anything pulling from a device on this protocol
     // should re-poll it — this device's own [MuleSyncEngine] auto-sync loop uses it directly,
@@ -443,6 +544,16 @@ data class DeviceInfo(
     // puller running newer code — that puller just falls back to never seeing anything new from
     // it via the countStatusOnly path, same graceful-degradation precedent as pollIntervalMs.
     val lastCountStatusLineNumber: Long = 0,
+    // This device's own currently-picked same-mode peer-sync partner (Part 1's "exactly one
+    // mutually-agreed pair, everyone else excluded" model — see
+    // mobile.racemaster.data.peersync.PeerSyncEngine.resolvePairingOutcome's own doc), 0 if none
+    // picked yet. Lets any nearby peer learn this device's own pick via the same DeviceInfo read
+    // it already performs for every other reason, with no dedicated characteristic or connect of
+    // its own needed — piggybacking here rather than riding the scan-response advertisement,
+    // whose 31-byte budget is already tight (see ADVERTISED_NAME_MAX_BYTES' own doc). Defaulted
+    // so an old-build responder predating this field still deserializes fine for a newer
+    // requester, which then just never resolves a confirmed pairing against it.
+    val peerPickedShortDeviceId: Long = 0,
 )
 
 /** Written to [MuleGattProfile.CONTROL_CHARACTERISTIC_UUID] to request either a delta stream of
@@ -570,6 +681,70 @@ data class AckPayload(
     val isSink: Boolean = false,
     val sinkConfirmedOrigins: List<AckedOrigin> = emptyList(),
 )
+
+/** One decoded chunk of a [MuleGattProfile.PEER_PULL_DATA_CHARACTERISTIC_UUID]/
+ *  [MuleGattProfile.PEER_PUSH_DATA_CHARACTERISTIC_UUID] stream — see
+ *  [MuleGattProfile.decodePeerChunk]. Not [Serializable] — this is the raw binary framing wrapper
+ *  *around* a slice of a JSON payload, never itself encoded as JSON. Plain `data class` over a
+ *  `ByteArray` field follows the same precedent [PeripheralSyncService]'s own `PendingWrite`
+ *  already sets in this codebase — equals/hashCode on [payload] are never relied on anywhere this
+ *  travels. */
+data class PeerChunk(val seq: Int, val totalChunks: Int, val payload: ByteArray)
+
+/** Written to [MuleGattProfile.PEER_HELLO_CHARACTERISTIC_UUID] by the dialing side of a Mule Mode
+ *  peer-sync connection (see [mobile.racemaster.data.peersync.PeerSyncEngine]'s own doc for the
+ *  central/peripheral role negotiation this belongs to), right after reading the peripheral's own
+ *  [DeviceInfo]. No `groupKey`/mode field: both sides already independently confirmed they're in
+ *  the same convergence group before the dialing side ever selected this peer to connect to (see
+ *  [mobile.racemaster.data.peersync.PeerGroupDetector]), so the peripheral's own already-known
+ *  serving race/mode and the dialer's own already-known one are enough — nothing about the group
+ *  needs to travel again. [deviceId] is all the peripheral needs to look up what it's already
+ *  merged from this exact device (the same
+ *  [mobile.racemaster.data.peersync.PeerSyncRepository.lastMergedLineNumber]/
+ *  `lastMergedCountStatusLineNumber` calls the dialing side itself already makes for the
+ *  mirror-image direction) and reply with [PeerSince]. [sinceLineNumber]/[sinceCountStatusLineNumber]
+ *  are the dialing side's own already-merged cursor against *this* peripheral's deviceId — the
+ *  mirror image of what [PeerSince] carries back — since the peripheral has no other way to know
+ *  where to resume the dialing side's own pull-direction stream from; which of the two the
+ *  peripheral actually uses is decided locally by its own currently-serving mode, the same way
+ *  [PullRequest.countStatusOnly] already is for an ordinary Mule pull. */
+@Serializable
+data class PeerHello(
+    val deviceId: String,
+    val deviceName: String = "",
+    val sinceLineNumber: Long = 0,
+    val sinceCountStatusLineNumber: Long = 0,
+)
+
+/** The peripheral's reply to a [PeerHello], read from [MuleGattProfile.PEER_SINCE_CHARACTERISTIC_UUID]
+ *  right after writing it — the cursor the dialing side should push its own new records from.
+ *  Mirrors [DeviceInfo.lastLineNumber]/[DeviceInfo.lastCountStatusLineNumber]'s own
+ *  general-vs-Count-Mode split, just in the opposite (inbound-to-the-peripheral) direction; which
+ *  one the dialing side's own push actually uses is decided the same way
+ *  [PullRequest.countStatusOnly] already is, by the shared mode both sides are already known to be
+ *  running. */
+@Serializable
+data class PeerSince(val sinceLineNumber: Long, val sinceCountStatusLineNumber: Long = 0)
+
+/** Written to [MuleGattProfile.PEER_RESEND_CHARACTERISTIC_UUID] by the dialing side once
+ *  [MuleGattProfile.PEER_PULL_DATA_CHARACTERISTIC_UUID]'s own reliable completion signal has
+ *  revealed its true chunk count and [MuleGattProfile.missingPeerChunkSeqs] found a gap against
+ *  what actually arrived — replacing [MuleGattProfile.ACK_CHARACTERISTIC_UUID]'s
+ *  whole-page-redo-on-any-gap behavior (which this feature never uses at all) with a request for
+ *  exactly what's missing. See [PeerPushStatus] for the opposite-direction half of this same
+ *  mechanism, which a peripheral can't request this way (see
+ *  [MuleGattProfile.PEER_RESEND_CHARACTERISTIC_UUID]'s own doc for why). */
+@Serializable
+data class ResendRequest(val missingSeqs: List<Int>)
+
+/** Read from [MuleGattProfile.PEER_PUSH_STATUS_CHARACTERISTIC_UUID] — the peripheral's own gap
+ *  report against the most recent [MuleGattProfile.PEER_PUSH_DATA_CHARACTERISTIC_UUID] stream it
+ *  reassembled from this specific central, computed the same [MuleGattProfile.missingPeerChunkSeqs]
+ *  way [ResendRequest] is. Empty [missingSeqs] means the peripheral has everything; the dialing
+ *  side polls this once, right after its own push stream's reliable final chunk completes, and
+ *  resends exactly what's named if anything is. */
+@Serializable
+data class PeerPushStatus(val missingSeqs: List<Int> = emptyList())
 
 /**
  * One transferable record — Time Mode splits and Bibs Mode entries both flatten into this

@@ -168,6 +168,16 @@ class MuleModeViewModel(
         viewModelScope.launch { settingsRepository.setMuleSyncEnabled(enabled) }
     }
 
+    // See SettingsRepository.bluetoothLoggingEnabled's own doc — same direct pass-through
+    // pattern as speakBibsAloud/muleSyncEnabled above, not part of the live-BLE-state uiState
+    // combine below since this is a plain settings toggle.
+    val bluetoothLoggingEnabled: StateFlow<Boolean> = settingsRepository.bluetoothLoggingEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setBluetoothLoggingEnabled(enabled: Boolean) {
+        viewModelScope.launch { settingsRepository.setBluetoothLoggingEnabled(enabled) }
+    }
+
     @Suppress("UNCHECKED_CAST")
     val uiState: StateFlow<MuleModeUiState> = combine(
         muleSyncEngine.discoveredDevices,

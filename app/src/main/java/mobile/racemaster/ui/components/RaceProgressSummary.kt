@@ -1,6 +1,8 @@
 package mobile.racemaster.ui.components
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -8,6 +10,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -24,6 +27,8 @@ import androidx.compose.ui.unit.dp
 import mobile.racemaster.data.db.entity.formatSplitRef
 import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.data.mule.ServerStatusState
+import mobile.racemaster.data.peersync.PeerSyncEngine
+import mobile.racemaster.util.formatWallClockTime
 import mobile.racemaster.util.withClickSound
 
 /** The device/race/location/progress/sync info block common to every screen that shows a race
@@ -62,6 +67,9 @@ fun RaceProgressSummary(
     // activity feedback line under the nearby devices line and in the same style") — null (every
     // other caller) omits the line entirely, same as nearbyPeerNames' own empty-list convention.
     peerActivityCount: Int? = null,
+    // Diagnostic aid, temporary — see CountModeUiState.peerActivityLatestAtMillis's own doc. Null
+    // whenever peerActivityCount is null or no peer row has ever arrived.
+    peerActivityLatestAtMillis: Long? = null,
     raceLabel: String,
     raceLocation: String,
     nextSplitNumber: Int,
@@ -77,6 +85,12 @@ fun RaceProgressSummary(
     showNextSplit: Boolean = true,
     otherOpenLocations: List<String> = emptyList(),
     onGoToLocation: ((String) -> Unit)? = null,
+    // Non-empty only when there are more same-group peers nearby than PeerSyncEngine's own
+    // MAX_SELECTED_PEERS cap — the inline picker below only ever renders then (see
+    // PeerSyncEngine.peerChoices' own doc). Left empty/null by callers with no peer-sync feature
+    // of their own (Time Mode, Mode Picker).
+    peerChoices: List<PeerSyncEngine.SelectablePeer> = emptyList(),
+    onPeerSelectedChanged: ((shortDeviceId: Long, selected: Boolean) -> Unit)? = null,
 ) {
     ServerStatusLine(serverStatus)
     BluetoothRadioStatusLine(btPollingStatus)
@@ -90,8 +104,41 @@ fun RaceProgressSummary(
     if (nearbyPeerNames.isNotEmpty()) {
         Text(text = "Nearby: ${nearbyPeerNames.joinToString(", ")}", style = MaterialTheme.typography.labelMedium)
     }
+    // Only ever non-empty with more than one same-group peer nearby and no confirmed pair yet —
+    // TODO.md's "restrict peers to 2... if more are visible the operator must select which one
+    // to connect to" is a mesh-wide, mutual-agreement decision (see
+    // PeerSyncEngine.resolvePairingOutcome's own doc), not a personal preference, so this needs
+    // its own explanatory line rather than just appearing as unlabelled chips — confirmed in the
+    // field as genuinely unreadable without one ("some highlighted but no indication what any of
+    // it means"). Inline rather than a dialog (confirmed via this feature's own
+    // AskUserQuestion) — nothing else on these screens needs a modal for this.
+    if (peerChoices.isNotEmpty() && onPeerSelectedChanged != null) {
+        val ownPickName = peerChoices.firstOrNull { it.isSelected }?.name
+        Text(
+            text = if (ownPickName == null) {
+                "Too many nearby — tap the ONE phone to sync with:"
+            } else {
+                "Waiting for $ownPickName to also pick this phone back:"
+            },
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            for (choice in peerChoices) {
+                FilterChip(
+                    selected = choice.isSelected,
+                    onClick = withClickSound { onPeerSelectedChanged(choice.shortDeviceId, !choice.isSelected) },
+                    label = { Text(choice.name) },
+                )
+            }
+        }
+    }
     if (peerActivityCount != null) {
-        Text(text = "Peer activity: $peerActivityCount lines received", style = MaterialTheme.typography.labelMedium)
+        val latestSuffix = peerActivityLatestAtMillis?.let { " (latest ${formatWallClockTime(it)})" } ?: ""
+        Text(text = "Peer activity: $peerActivityCount lines received$latestSuffix", style = MaterialTheme.typography.labelMedium)
     }
     Text(text = "Race name: $raceLabel", style = MaterialTheme.typography.labelMedium)
     if (showLocation) {

@@ -10,6 +10,20 @@ data class VersionNotes(val version: String, val highlights: List<String>)
 object WhatsNew {
     val versions: List<VersionNotes> = listOf(
         VersionNotes(
+            version = "0.0.32",
+            highlights = listOf(
+                "Count Mode's same-race peer sync now only ever forms one connected pair at a " +
+                    "time: with exactly two phones nearby they pair up automatically, but with " +
+                    "three or more every phone shows a \"tap the ONE phone to sync with\" " +
+                    "picker, and a phone left out gets a clear \"Not selected for peer sync\" " +
+                    "notice before being sent back to the Mode Picker, instead of silently " +
+                    "colliding with the other two.",
+                "Fixed a bug where a same-race peer's newly-counted/ejected/un-ejected beacons " +
+                    "could merge successfully in the background but never actually show up on " +
+                    "the other phone's screen.",
+            ),
+        ),
+        VersionNotes(
             version = "0.0.31",
             highlights = listOf(
                 "Setup Race gains two new modes, Count and Close, each a standing role a phone " +

@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.style.TextOverflow
 import mobile.racemaster.data.mule.BtPollingStatus
 import mobile.racemaster.data.mule.ServerStatusState
+import mobile.racemaster.data.peersync.PeerSyncEngine
 import mobile.racemaster.util.formatBibsExpectedText
 
 /** The device/race/location/progress/sync/duplicate/outstanding-bib info block for Bibs Mode's
@@ -40,6 +41,8 @@ fun EntryModeHeaderInfo(
     btPollingStatus: BtPollingStatus,
     otherOpenLocations: List<String> = emptyList(),
     onGoToLocation: ((String) -> Unit)? = null,
+    peerChoices: List<PeerSyncEngine.SelectablePeer> = emptyList(),
+    onPeerSelectedChanged: ((shortDeviceId: Long, selected: Boolean) -> Unit)? = null,
 ) {
     RaceProgressSummary(
         deviceName = deviceName,
@@ -54,6 +57,8 @@ fun EntryModeHeaderInfo(
         progressText = soFarText,
         otherOpenLocations = otherOpenLocations,
         onGoToLocation = onGoToLocation,
+        peerChoices = peerChoices,
+        onPeerSelectedChanged = onPeerSelectedChanged,
         nextRowTrailingContent = {
             if (dupCount > 0) {
                 Text(

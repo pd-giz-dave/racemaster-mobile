@@ -19,6 +19,12 @@ fun formatWallClock(millis: Long): String =
 fun formatTimeOfDay(millis: Long, locale: Locale): String =
     SimpleDateFormat("HH:mm", locale).format(Date(millis))
 
+/** Second-precision "HH:mm:ss" — [formatTimeOfDay]'s minute precision is too coarse to tell
+ *  whether a fast-ticking feedback line (e.g. RaceProgressSummary's "Peer activity" line) just
+ *  moved or is stuck on stale data. */
+fun formatWallClockTime(millis: Long): String =
+    SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(millis))
+
 /** Short "yy-MM-dd" date — used only to keep Setup Race's own "unknown" fallback name (a device
  *  that hasn't been given a real name yet — see SetupRaceScreen's own doc) distinguishable across
  *  devices/days, since unlike a real name (typed, inherited from the server, or following its

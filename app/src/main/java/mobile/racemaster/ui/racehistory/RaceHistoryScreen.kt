@@ -28,8 +28,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import mobile.racemaster.ui.components.BleLogTypeIcon
 import mobile.racemaster.ui.components.ItemTypeBadge
 import mobile.racemaster.ui.components.PeersTypeIcon
 import mobile.racemaster.ui.components.ProgressTypeIcon
@@ -55,11 +57,13 @@ fun RaceHistoryScreen(
     viewModel: RaceHistoryViewModel = viewModel(factory = RaceHistoryViewModel.Factory),
 ) {
     val items by viewModel.historyItems.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     var pendingDelete by remember { mutableStateOf<HistoryItemUi.LocalRace?>(null) }
     var pendingDeleteNow by remember { mutableStateOf<HistoryItemUi.LocalRace?>(null) }
     var pendingMuleSourceDelete by remember { mutableStateOf<HistoryItemUi.MuleSource?>(null) }
     var pendingProgressDelete by remember { mutableStateOf<HistoryItemUi.ProgressFile?>(null) }
     var pendingPeerActivityDelete by remember { mutableStateOf<HistoryItemUi.PeerActivity?>(null) }
+    var pendingBleLogDelete by remember { mutableStateOf<HistoryItemUi.BleLogFile?>(null) }
     // A separate dialog from pendingDelete above — an active race needs its stuck mode(s)
     // cleared first (see RaceRepository.forceResetActiveModes' own doc), not immediate deletion.
     var pendingForceReset by remember { mutableStateOf<HistoryItemUi.LocalRace?>(null) }
@@ -103,6 +107,7 @@ fun RaceHistoryScreen(
                             is HistoryItemUi.MuleSource -> "mule-${it.raceLabel}-${it.sourceDeviceId}"
                             is HistoryItemUi.ProgressFile -> "progress-${it.raceId}"
                             is HistoryItemUi.PeerActivity -> "peer-${it.raceGroupId}-${it.mode}-${it.originDeviceId}"
+                            is HistoryItemUi.BleLogFile -> "ble-log"
                         }
                     },
                 ) { item ->
@@ -273,6 +278,31 @@ fun RaceHistoryScreen(
                             },
                             modifier = Modifier.clickable(onClick = withClickSound { onPeerActivitySelected(item) }),
                         )
+                        // TODO.md: "the log needs to be visible as an item on the history files
+                        // list with a delete option" — tapping shares it (the one way to
+                        // actually view its content — see BleConnectionLog.shareIntent's own
+                        // doc) rather than opening a dedicated detail screen, the same "viewing
+                        // happens via share" affordance RangeCalibrationScreen's own Share
+                        // button already uses for its one other plain-file diagnostic.
+                        is HistoryItemUi.BleLogFile -> ListItem(
+                            overlineContent = { ItemTypeBadge("Bluetooth log") { BleLogTypeIcon() } },
+                            headlineContent = { Text("Bluetooth connection log") },
+                            supportingContent = {
+                                Text("${formatFileSize(item.sizeBytes)} — last ${formatWallClock(item.lastModifiedAtMillis)}")
+                            },
+                            trailingContent = {
+                                IconButton(onClick = withClickSound { pendingBleLogDelete = item }) {
+                                    Icon(
+                                        Icons.Filled.Delete,
+                                        contentDescription = "Delete Bluetooth log",
+                                        tint = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                            },
+                            modifier = Modifier.clickable(
+                                onClick = withClickSound { viewModel.shareBleLogIntent()?.let { context.startActivity(it) } },
+                            ),
+                        )
                     }
                     HorizontalDivider()
                 }
@@ -432,6 +462,25 @@ fun RaceHistoryScreen(
         )
     }
 
+    pendingBleLogDelete?.let {
+        AlertDialog(
+            onDismissRequest = { pendingBleLogDelete = null },
+            title = { Text("Delete the Bluetooth connection log?") },
+            text = { Text("This permanently erases the recorded log file. New events are recorded again as long as Bluetooth logging stays on in Options.") },
+            confirmButton = {
+                TextButton(
+                    onClick = withClickSound {
+                        viewModel.deleteBleLog()
+                        pendingBleLogDelete = null
+                    },
+                ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = withClickSound { pendingBleLogDelete = null }) { Text("Cancel") }
+            },
+        )
+    }
+
     if (pendingDeleteAllStale) {
         AlertDialog(
             onDismissRequest = { pendingDeleteAllStale = false },
@@ -469,3 +518,9 @@ fun RaceHistoryScreen(
 // nothing or crashing.
 internal fun formatGeneratedAt(generatedAt: String): String =
     generatedAt.replace('T', ' ').substringBefore('.').ifBlank { generatedAt }
+
+// Plain binary-prefixed size for the Bluetooth log row — this file never approaches MB (see
+// BleConnectionLog.MAX_FILE_SIZE_BYTES), so just KB/bytes, no need for a general-purpose
+// formatter.
+internal fun formatFileSize(sizeBytes: Long): String =
+    if (sizeBytes < 1024) "$sizeBytes B" else "${sizeBytes / 1024} KB"

@@ -29,10 +29,13 @@ import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import mobile.racemaster.data.db.entity.HistoryMode
+import mobile.racemaster.data.mule.BleConnectionLog
 import mobile.racemaster.data.mule.BluetoothStateRepository
 import mobile.racemaster.data.mule.MuleGattProfile
 import mobile.racemaster.data.mule.MuleRepository
 import mobile.racemaster.data.mule.SyncRecord
+import mobile.racemaster.data.mule.toSyncRecord
+import mobile.racemaster.data.repository.CountModeRepository
 import mobile.racemaster.data.repository.RaceRepository
 import mobile.racemaster.data.settings.SettingsRepository
 import mobile.racemaster.data.settings.toHistoryMode
@@ -40,8 +43,18 @@ import mobile.racemaster.data.settings.toHistoryMode
 /**
  * Fast same-mode peer sync: lets several phones running the *same* mode for the *same* race (e.g.
  * several Count phones covering a start pen, several Bibs/Finish phones at the finish) converge on
- * shared state fast while nearby, by pulling full history rows directly from each other over BLE
- * and merging them into [PeerSyncRepository].
+ * shared state fast while nearby. Restricted, mesh-wide, to exactly one bidirectional pair at a
+ * time (TODO.md: "restrict peers to 2... one as central one as peripheral... the rest not in the
+ * loop") — never a per-device fan-out: with 2+ same-group peers in range of each other, every one
+ * of them shows a picker (see [peerChoices]/[setPeerSelected]), and only once two of them have
+ * explicitly, mutually picked each other (see [resolvePairingOutcome]) does that one pair start
+ * syncing; whichever other phones aren't part of it are told so (see [excludedNotice]) rather than
+ * silently sitting idle. For the one confirmed pair, the two devices deterministically negotiate
+ * which one dials (see [ownShortDeviceId]'s own call site in [startPullLoop]) so there is ever
+ * only one BLE connection for it, carrying a bidirectional, ack-less (sequence-numbered,
+ * gap-detected-and-resent rather than redone-from-scratch — see [MuleGattProfile.PeerHello]/
+ * [MuleGattProfile.PeerSince]/[MuleGattProfile.ResendRequest]) exchange of both sides' new history
+ * rows, merged into [PeerSyncRepository] on whichever side receives them.
  *
  * Deliberately its own standalone engine, not a part of
  * [mobile.racemaster.data.mule.MuleSyncEngine] — an earlier version of this feature was built as
@@ -55,10 +68,11 @@ import mobile.racemaster.data.settings.toHistoryMode
  *   Mule Mode/BeaconScanEngine already use (see that function's own doc for why it's one shared
  *   native scan, not a second independent one), but subscribed to on its own, with no dependency
  *   on [mobile.racemaster.data.mule.MuleSyncEngine]'s own discoveredFlow/connect bookkeeping.
- * - Pulls a same-group peer's rows via [MuleRepository.pullForPeerSync], never
- *   [MuleRepository.pullFrom] — that call always stages whatever it receives into this device's
- *   own relay-to-server inbox, which would wrongly turn every Count phone into a server relay for
- *   its peers' data (see [MuleRepository.pullForPeerSync]'s own doc).
+ * - Exchanges a selected peer's rows via [MuleRepository.exchangePeerData], never
+ *   [MuleRepository.pullFrom]/[MuleRepository.pull] — that pair always stages whatever it
+ *   receives into this device's own relay-to-server inbox, which would wrongly turn every Count
+ *   phone into a server relay for its peers' data (see [MuleRepository.exchangePeerData]'s own
+ *   doc).
  * - Is started/stopped as its own independent sibling of [mobile.racemaster.data.mule.MuleSyncEngine]
  *   from [mobile.racemaster.data.mule.PeripheralSyncService] (see that class's own `onCreate`),
  *   so it keeps running in the background for the whole process's life exactly as that engine
@@ -77,6 +91,11 @@ class PeerSyncEngine(
     private val peerGroupDetector: PeerGroupDetector,
     private val peerSyncRepository: PeerSyncRepository,
     private val bluetoothStateRepository: BluetoothStateRepository,
+    private val bleConnectionLog: BleConnectionLog,
+    // Only needed for the Part 3 push direction's own countStatusOnly query (mirrors
+    // PeripheralSyncService.computeCountStatusEventsPayload's identical use) — every other
+    // dependency here predates that and is unchanged.
+    private val countModeRepository: CountModeRepository,
 ) {
     // Same reasoning as MuleSyncEngine's own identically-named field: a background engine that
     // talks to arbitrary other phones over BLE must never let a stray uncaught exception take
@@ -87,10 +106,15 @@ class PeerSyncEngine(
     private var engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
 
     private data class NearbyPeer(val advertisement: Advertisement, val decoded: MuleGattProfile.AdvertisedIdentity, val lastSeenAtMillis: Long)
-    private data class OwnContext(val groupKey: String?, val mode: HistoryMode?)
+
+    // raceId/raceStartedAtMillis are fetched once here (reusing computeOwnContextFlow's own
+    // observeRace call) rather than separately per peer per tick in pullFromPeerIfNeeded's own
+    // Part 3 push-direction query — both are needed there (raceId to query
+    // raceRepository/countModeRepository against, raceStartedAtMillis for toSyncRecord).
+    private data class OwnContext(val raceId: Long?, val groupKey: String?, val mode: HistoryMode?, val raceStartedAtMillis: Long?)
 
     private val nearbyPeersFlow = MutableStateFlow<Map<String, NearbyPeer>>(emptyMap())
-    private val ownContextFlow = MutableStateFlow(OwnContext(null, null))
+    private val ownContextFlow = MutableStateFlow(OwnContext(null, null, null, null))
 
     private val hasSameGroupPeerNearbyFlow = MutableStateFlow(false)
     val hasSameGroupPeerNearby: StateFlow<Boolean> = hasSameGroupPeerNearbyFlow.asStateFlow()
@@ -100,6 +124,81 @@ class PeerSyncEngine(
     // display — nothing here depends on ordering.
     private val nearbyPeerNamesFlow = MutableStateFlow<List<String>>(emptyList())
     val nearbyPeerNames: StateFlow<List<String>> = nearbyPeerNamesFlow.asStateFlow()
+
+    /** One nearby same-group peer, as offered to the operator whenever more than one of them is
+     *  nearby at once and no confirmed pair has settled yet — see [peerChoices]'s own doc. */
+    data class SelectablePeer(val shortDeviceId: Long, val name: String, val isSelected: Boolean)
+
+    // This device's own explicit (or, with exactly one nearby, auto-) pick — see
+    // setPeerSelected/recomputeOwnPick. Only this device's HALF of the handshake: the actual
+    // synced-with partner additionally requires that peer to report the identical pick back (see
+    // resolvePairingOutcome) — TODO.md's "restrict peers to 2"/"one as central one as
+    // peripheral... the rest not in the loop" is a MESH-WIDE constraint (exactly one bidirectional
+    // pair may exist among any set of mutually-visible same-group phones), not a per-device
+    // fan-out cap, so one side's own pick alone is never enough to start syncing. Keyed by
+    // AdvertisedIdentity.shortDeviceId — same reasoning as fullDeviceNamesFlow/peerBackoffState's
+    // own key choice, stable across a peer's advertised BLE address rotating.
+    private val ownPickFlow = MutableStateFlow<Long?>(null)
+
+    // This device's own current pick, read by PeripheralSyncService when building its own
+    // DeviceInfo response (see MuleGattProfile.DeviceInfo.peerPickedShortDeviceId's own doc) —
+    // the mechanism that lets every other nearby peer learn this device's pick via a DeviceInfo
+    // read it already performs for other reasons, with no dedicated characteristic or extra
+    // connect of its own needed.
+    val ownPickedPeerId: Long? get() = ownPickFlow.value
+
+    // Every nearby same-group peer's own last-reported pick (from its own
+    // DeviceInfo.peerPickedShortDeviceId), used to resolve whether a confirmed, MUTUAL pair
+    // exists — see resolvePairingOutcome. A null value means that peer reported no pick (or
+    // hasn't been read yet). Refreshed by startPairingDiscoveryLoop while undecided, and — at
+    // zero extra connect cost — by pullFromPeerIfNeeded's own regular read once this device is
+    // actually paired with whoever it's tracking here.
+    private val peerPicksFlow = MutableStateFlow<Map<Long, Long?>>(emptyMap())
+
+    // The two-sided, confirmed result of the above — see PairingOutcome's own doc.
+    private val pairingOutcomeFlow = MutableStateFlow<PairingOutcome>(PairingOutcome.Undecided)
+
+    // This device's own confirmed sync partner, once resolved — the only thing startPullLoop
+    // actually acts on (never the raw, one-sided ownPickFlow above, which the other side hasn't
+    // necessarily reciprocated yet).
+    private val confirmedPartnerIdFlow = MutableStateFlow<Long?>(null)
+
+    // The subset of nearbyPeerNames this device is actually syncing with (at most one, now that
+    // a pair is mesh-wide rather than a per-device fan-out) — what every mode screen's
+    // "Nearby: ..." line displays in place of the raw nearbyPeerNames, so a merely-visible-but-
+    // not-yet-confirmed peer isn't shown as though it were already converging.
+    private val selectedPeerNamesFlow = MutableStateFlow<List<String>>(emptyList())
+    val selectedPeerNames: StateFlow<List<String>> = selectedPeerNamesFlow.asStateFlow()
+
+    // Non-empty only while genuinely undecided (more than one same-group peer nearby, no
+    // confirmed pair resolved yet) — the inline picker UI (RaceProgressSummary/
+    // EntryModeHeaderInfo) only ever renders then, exactly the "shown only when there's an
+    // actual choice" behavior confirmed via this feature's own AskUserQuestion earlier in its
+    // design. Lets every operator in a 3+-phone group see and explicitly agree on the same one
+    // pair; see excludedNotice for what a phone that isn't part of it sees instead.
+    private val peerChoicesFlow = MutableStateFlow<List<SelectablePeer>>(emptyList())
+    val peerChoices: StateFlow<List<SelectablePeer>> = peerChoicesFlow.asStateFlow()
+
+    /** Shown once this device has confirmed (via [resolvePairingOutcome]) that some OTHER mutual
+     *  pair has formed among the nearby same-group peers, excluding it — see TODO.md's "the
+     *  dropped ones should detect they've been dropped and exit count mode". Carries the two
+     *  paired devices' own display names purely for that message. This engine has no navigation
+     *  of its own to perform — the screen's own dismiss action on this notice is expected to be
+     *  the exact same stopMode()+onHome() the existing "Stop Mode" dialog already uses (confirmed
+     *  via this feature's own AskUserQuestion), which naturally clears this device's own
+     *  OwnContext and lets this flow settle back to null on its own. */
+    data class ExcludedNotice(val pairedName1: String, val pairedName2: String)
+    private val excludedNoticeFlow = MutableStateFlow<ExcludedNotice?>(null)
+    val excludedNotice: StateFlow<ExcludedNotice?> = excludedNoticeFlow.asStateFlow()
+
+    /** Sets (or clears) this device's own pick — always replaces whatever was previously picked,
+     *  since exactly one pick (or none) is ever meaningful now; see [ownPickFlow]'s own doc for
+     *  why this alone doesn't yet start any syncing. Only meaningful while [peerChoices] is
+     *  non-empty — with one or zero nearby, [startDetectionLoop]'s own auto-pick (see
+     *  [recomputeOwnPick]) already settles it and there's nothing for the operator to toggle. */
+    fun setPeerSelected(shortDeviceId: Long, selected: Boolean) {
+        ownPickFlow.value = if (selected) shortDeviceId else null
+    }
 
     // A peer's full device name, as read from its own DeviceInfo during a GATT pull (see
     // pullFromPeerIfNeeded) — keyed by AdvertisedIdentity.shortDeviceId rather than
@@ -148,6 +247,7 @@ class PeerSyncEngine(
         started = true
         startDiscoveryLoop()
         startDetectionLoop()
+        startPairingDiscoveryLoop()
         startPullLoop()
     }
 
@@ -166,6 +266,13 @@ class PeerSyncEngine(
         nearbyPeerNamesFlow.value = emptyList()
         fullDeviceNamesFlow.value = emptyMap()
         peerBackoffState.clear()
+        ownPickFlow.value = null
+        peerPicksFlow.value = emptyMap()
+        pairingOutcomeFlow.value = PairingOutcome.Undecided
+        confirmedPartnerIdFlow.value = null
+        selectedPeerNamesFlow.value = emptyList()
+        peerChoicesFlow.value = emptyList()
+        excludedNoticeFlow.value = null
     }
 
     // The actual discovery scan subscription — see startDiscoveryLoop's own doc for what it
@@ -266,11 +373,19 @@ class PeerSyncEngine(
     // time either this device's own convergence group changes (a race/mode switch, or the
     // operator's own kill switch — SettingsRepository.peerSyncOff) or the nearby-peer map changes
     // (a new sighting, a refreshed advertisement, or one aging out via the pruning loop above).
+    private data class DetectionTick(
+        val context: OwnContext,
+        val peers: Map<String, NearbyPeer>,
+        val fullNames: Map<Long, String>,
+        val ownPick: Long?,
+        val peerPicks: Map<Long, Long?>,
+    )
+
     private fun startDetectionLoop() {
         engineScope.launch {
-            combine(computeOwnContextFlow(), nearbyPeersFlow, fullDeviceNamesFlow) { context, peers, fullNames ->
-                Triple(context, peers, fullNames)
-            }.collect { (context, peers, fullNames) ->
+            combine(computeOwnContextFlow(), nearbyPeersFlow, fullDeviceNamesFlow, ownPickFlow, peerPicksFlow) { context, peers, fullNames, ownPick, peerPicks ->
+                DetectionTick(context, peers, fullNames, ownPick, peerPicks)
+            }.collect { (context, peers, fullNames, ownPick, peerPicks) ->
                     ownContextFlow.value = context
                     val decodedByKey = peers.mapValues { (_, peer) -> peer.decoded }
                     val matchingKeys = peerGroupDetector.sameGroupPeerKeys(context.groupKey, decodedByKey)
@@ -287,6 +402,50 @@ class PeerSyncEngine(
                         }
                         .distinct()
                         .sorted()
+
+                    // Part 1 — exactly one mesh-wide, mutually-agreed pair, never a per-device
+                    // fan-out: one matching peer per shortDeviceId (matchingKeys can hold several
+                    // BLE-address keys for the same logical peer across an address rotation —
+                    // collapsing to shortDeviceId first is what makes recomputeOwnPick/
+                    // resolvePairingOutcome's own id-based logic meaningful).
+                    val matchingPeerByShortId = matchingKeys.mapNotNull { key -> peers[key]?.decoded }.associateBy { it.shortDeviceId }
+                    val nearbyIds = matchingPeerByShortId.keys
+                    val newOwnPick = recomputeOwnPick(ownPick, nearbyIds)
+                    if (newOwnPick != ownPick) {
+                        ownPickFlow.value = newOwnPick
+                    }
+                    // Drops any cached pick for a peer no longer nearby — stale data would
+                    // otherwise let resolvePairingOutcome "confirm" a pair against a peer that's
+                    // since gone out of range.
+                    val prunedPeerPicks = peerPicks.filterKeys { it in nearbyIds }
+                    if (prunedPeerPicks != peerPicks) {
+                        peerPicksFlow.value = prunedPeerPicks
+                    }
+                    fun nameFor(id: Long): String {
+                        val decoded = matchingPeerByShortId[id]
+                        return (decoded?.let { fullNames[it.shortDeviceId] ?: it.deviceName }).takeUnless { it.isNullOrBlank() } ?: id.toString()
+                    }
+                    val outcome = resolvePairingOutcome(ownShortDeviceId(), newOwnPick, prunedPeerPicks)
+                    // Behind the same Setup Options "Bluetooth logging" toggle every other routine
+                    // BLE trace line in this file already uses (see bleConnectionLog.log's own
+                    // doc) — confirms whether this device's own pairingOutcome is actually
+                    // settling and staying Paired, or flapping back to Undecided/Excluded tick to
+                    // tick (which would explain a confirmed partner's connect traffic looking
+                    // identical to startPairingDiscoveryLoop's own, with exchangePeerData rarely
+                    // if ever actually reached) — confirmed useful chasing a live "paired but not
+                    // converging" report, kept for next time rather than ripped out.
+                    if (outcome != pairingOutcomeFlow.value) {
+                        bleConnectionLog.log("peer-sync", "pairing outcome changed: ${pairingOutcomeFlow.value} -> $outcome (ownPick=$newOwnPick peerPicks=$prunedPeerPicks)")
+                    }
+                    pairingOutcomeFlow.value = outcome
+                    confirmedPartnerIdFlow.value = (outcome as? PairingOutcome.Paired)?.partnerId
+                    excludedNoticeFlow.value = (outcome as? PairingOutcome.Excluded)?.let { ExcludedNotice(nameFor(it.pairedA), nameFor(it.pairedB)) }
+                    selectedPeerNamesFlow.value = (outcome as? PairingOutcome.Paired)?.let { listOf(nameFor(it.partnerId)) } ?: emptyList()
+                    peerChoicesFlow.value = if (nearbyIds.size > 1 && outcome is PairingOutcome.Undecided) {
+                        nearbyIds.map { id -> SelectablePeer(id, nameFor(id), id == newOwnPick) }.sortedBy { it.name }
+                    } else {
+                        emptyList()
+                    }
                 }
         }
     }
@@ -306,7 +465,7 @@ class PeerSyncEngine(
             .distinctUntilChanged()
             .flatMapLatest { (raceId, mode, peerSyncOff) ->
                 if (raceId == null || mode == null || peerSyncOff) {
-                    flowOf(OwnContext(null, null))
+                    flowOf(OwnContext(null, null, null, null))
                 } else {
                     raceRepository.observeRace(raceId).map { race ->
                         // groupKey uses the plain (bucket-#2) mapping — Pen/Close both resolve to
@@ -318,7 +477,7 @@ class PeerSyncEngine(
                         // see AppMode.toHistoryMode's two overloads for why these must differ.
                         val groupKey = race?.let { peerGroupDetector.ownGroupKey(it.label, it.location, mode.toHistoryMode()) }
                         val dataMode = mode.toHistoryMode(race?.location.orEmpty())
-                        OwnContext(groupKey, dataMode)
+                        OwnContext(raceId, groupKey, dataMode, race?.timeModeStartedAtMillis)
                     }
                 }
             }
@@ -340,6 +499,58 @@ class PeerSyncEngine(
     // PeripheralSyncService.refreshAdvertisedIdentity's own doc for the actual root cause
     // (that device's own advertised BLE address getting rotated out from under this engine by an
     // unrelated feature) and the fix that addresses it directly.
+    // This device's own shortDeviceId — cached after first computation (settingsRepository's own
+    // getOrCreateDeviceId is a one-time-generated, thereafter-stable value for the life of the
+    // install, so there's nothing to invalidate). Used only for Part 2's role negotiation below.
+    @Volatile
+    private var cachedOwnShortDeviceId: Long? = null
+
+    private suspend fun ownShortDeviceId(): Long =
+        cachedOwnShortDeviceId ?: MuleGattProfile.shortDeviceId(settingsRepository.getOrCreateDeviceId()).also { cachedOwnShortDeviceId = it }
+
+    // Refreshes peerPicksFlow by reading every nearby same-group peer's own DeviceInfo — the one
+    // new source of connect traffic this feature adds, and deliberately bounded to the brief
+    // negotiation window before an outcome settles (see the Undecided guard below): once this
+    // device is Paired, pullFromPeerIfNeeded's own regular read of its confirmed partner already
+    // keeps peerPicksFlow fresh for that one peer at zero extra connect cost, so there is nothing
+    // left worth spending a connect on here. And once Excluded, there's nothing for this device
+    // to do at all until the operator dismisses excludedNotice — confirmed live as a real,
+    // disruptive bug when this only guarded on Paired: the excluded device kept connecting to
+    // BOTH of the confirmed pair's phones every PAIRING_DISCOVERY_INTERVAL forever (it never
+    // reaches Paired itself, so a Paired-only guard never stops it), repeatedly colliding with
+    // their own now-legitimate central/peripheral traffic (the exact "Disconnect detected"
+    // mutual-collision signature this whole codebase has otherwise worked hard to eliminate) and
+    // starving their real exchange of a clean enough connection window to ever complete. Runs
+    // independently of startPullLoop's own connect — that one only ever dials this device's
+    // eventual CONFIRMED partner (Part 2's role negotiation), which is exactly what this loop
+    // doesn't yet know while still undecided.
+    private fun startPairingDiscoveryLoop() {
+        engineScope.launch {
+            while (isActive) {
+                delay(PAIRING_DISCOVERY_INTERVAL)
+                if (pairingOutcomeFlow.value !is PairingOutcome.Undecided) continue
+                val groupKey = ownContextFlow.value.groupKey ?: continue
+                val peers = nearbyPeersFlow.value.values.filter { peerGroupDetector.groupKeyOf(it.decoded) == groupKey }
+                for (peer in peers) {
+                    runCatching { muleRepository.readDeviceInfo(peer.advertisement) }
+                        .onSuccess { info ->
+                            peerPicksFlow.update { it + (peer.decoded.shortDeviceId to info.peerPickedShortDeviceId.takeIf { id -> id != 0L }) }
+                            // Same capture pullFromPeerIfNeeded already does — without this, the
+                            // picker (which only ever renders during this undecided phase, before
+                            // that function ever runs for anyone) is stuck showing the advertised
+                            // identity's own name, truncated to
+                            // MuleGattProfile.ADVERTISED_NAME_MAX_BYTES (5 bytes) — "mighty-bunting"
+                            // as "might" — confirmed live as genuinely unreadable to an operator.
+                            if (info.deviceName.isNotBlank()) {
+                                fullDeviceNamesFlow.update { it + (peer.decoded.shortDeviceId to info.deviceName) }
+                            }
+                        }
+                        .onFailure { e -> Log.w(TAG, "peer-pick discovery readDeviceInfo failed: shortDeviceId=${peer.decoded.shortDeviceId}", e) }
+                }
+            }
+        }
+    }
+
     private fun startPullLoop() {
         engineScope.launch {
             while (isActive) {
@@ -347,29 +558,40 @@ class PeerSyncEngine(
                 val context = ownContextFlow.value
                 val groupKey = context.groupKey
                 val mode = context.mode
-                if (groupKey == null || mode == null) continue
-                val peers = nearbyPeersFlow.value.values.filter { peerGroupDetector.groupKeyOf(it.decoded) == groupKey }
-                if (peers.isEmpty()) continue
-                // One budget PER PEER, not one shared across the whole loop — see
-                // PULL_PEER_TIMEOUT's own doc for the real, confirmed-in-the-field bug this fixes:
-                // a single shared withTimeout here used to let an early peer's own retries eat
-                // into (and eventually truncate, mid-connect) a later peer's turn. Each peer is
-                // also its own runCatching, not one wrapping the whole loop, so one peer timing
-                // out still lets every other nearby peer get its own attempt this tick.
-                for (peer in peers) {
-                    // Skip a peer still in its post-collision cooldown — see peerBackoffState's
-                    // own doc and pullFromPeerIfNeeded's readDeviceInfo failure branch for why
-                    // this exists and where it's set.
-                    if ((peerBackoffState[peer.decoded.shortDeviceId]?.backoffUntilMillis ?: 0L) > System.currentTimeMillis()) continue
-                    runCatching {
-                        withTimeout(PULL_PEER_TIMEOUT) { pullFromPeerIfNeeded(peer, groupKey, mode) }
-                    }.onFailure { Log.w(TAG, "peer-sync pull tick failed: shortDeviceId=${peer.decoded.shortDeviceId}", it) }
-                }
+                val raceId = context.raceId
+                if (groupKey == null || mode == null || raceId == null) continue
+                // Part 1: only this device's own CONFIRMED (mutually-agreed — see
+                // resolvePairingOutcome) partner is ever connected to, never a raw, one-sided
+                // pick that peer hasn't reciprocated, and never more than the single mesh-wide
+                // pair TODO.md's "restrict peers to 2" actually means (see ownPickFlow's own
+                // doc) — so there is at most one peer to consider here now, not a list.
+                val partnerId = confirmedPartnerIdFlow.value ?: continue
+                val peer = nearbyPeersFlow.value.values.firstOrNull {
+                    peerGroupDetector.groupKeyOf(it.decoded) == groupKey && it.decoded.shortDeviceId == partnerId
+                } ?: continue
+                // Part 2: central/peripheral role negotiation — this device only ever dials its
+                // confirmed partner if it's central for it (lower shortDeviceId wins), eliminating
+                // the mutual-dial collision this engine's whole backoff mechanism below was
+                // otherwise only ever mitigating the symptom of. If this device is NOT central
+                // for it, no outbound attempt is made at all; it's expected to dial in instead,
+                // where PeripheralSyncService's own PEER_HELLO/PEER_PUSH_DATA handlers take over —
+                // see this class's own doc for why that's an accepted assumption (both sides of a
+                // real pair always run the same build in this fleet).
+                val ownId = ownShortDeviceId()
+                if (ownId >= peer.decoded.shortDeviceId) continue
+                // Skip a peer still in its post-collision cooldown — see peerBackoffState's own
+                // doc and pullFromPeerIfNeeded's readDeviceInfo failure branch for why this
+                // exists and where it's set. Residual (non-mutual-dial) contention only now — see
+                // Part 2's own doc above — but still a reasonable backstop.
+                if ((peerBackoffState[peer.decoded.shortDeviceId]?.backoffUntilMillis ?: 0L) > System.currentTimeMillis()) continue
+                runCatching {
+                    withTimeout(PULL_PEER_TIMEOUT) { pullFromPeerIfNeeded(peer, groupKey, mode, raceId, context.raceStartedAtMillis) }
+                }.onFailure { Log.w(TAG, "peer-sync pull tick failed: shortDeviceId=${peer.decoded.shortDeviceId}", it) }
             }
         }
     }
 
-    private suspend fun pullFromPeerIfNeeded(peer: NearbyPeer, groupKey: String, mode: HistoryMode) {
+    private suspend fun pullFromPeerIfNeeded(peer: NearbyPeer, groupKey: String, mode: HistoryMode, raceId: Long, raceStartedAtMillis: Long?) {
         val info = runCatching { muleRepository.readDeviceInfo(peer.advertisement) }
             .onFailure { e ->
                 Log.w(TAG, "peer-sync readDeviceInfo failed", e)
@@ -396,63 +618,96 @@ class PeerSyncEngine(
                 val priorFailures = peerBackoffState[peer.decoded.shortDeviceId]?.consecutiveFailures ?: 0
                 val failures = (priorFailures + 1).coerceAtMost(MAX_BACKOFF_DOUBLINGS)
                 val rangeMs = (COLLISION_BACKOFF_BASE_MS shl failures).coerceAtMost(COLLISION_BACKOFF_MAX_MS)
-                peerBackoffState[peer.decoded.shortDeviceId] =
-                    PeerBackoffState(System.currentTimeMillis() + Random.nextLong(rangeMs), failures)
+                val backoffMs = Random.nextLong(rangeMs)
+                peerBackoffState[peer.decoded.shortDeviceId] = PeerBackoffState(System.currentTimeMillis() + backoffMs, failures)
+                bleConnectionLog.warn(
+                    "peer-collision",
+                    "readDeviceInfo failed: shortDeviceId=${peer.decoded.shortDeviceId} consecutiveFailures=$failures " +
+                        "backoffMs=$backoffMs error=$e",
+                )
             }
             .getOrNull() ?: return
         // A successful connect resets this peer's backoff — exponential backoff only makes sense
         // relative to a *run* of consecutive failures; carrying a doubled window over into an
         // otherwise-healthy link would just add needless latency to every future pull.
-        peerBackoffState.remove(peer.decoded.shortDeviceId)
+        if (peerBackoffState.remove(peer.decoded.shortDeviceId) != null) {
+            bleConnectionLog.log("peer-collision", "recovered: shortDeviceId=${peer.decoded.shortDeviceId}")
+        }
         // Captures the peer's own full device name regardless of whether there's anything new to
         // pull below — see fullDeviceNamesFlow's own doc for why display prefers this over the
         // advertised identity's truncated one.
         if (info.deviceName.isNotBlank()) {
             fullDeviceNamesFlow.update { it + (peer.decoded.shortDeviceId to info.deviceName) }
         }
-        // A single lineNumber-cursor delta pull, same mechanism for every mode — in steady state
-        // (the overwhelmingly common case) a peer's own backlog against this device is just
-        // whatever it recorded since the last tick, a handful of records at most, so this loop
-        // runs its body once and stops. PEER_SYNC_PAGE_SIZE/PEER_SYNC_MAX_PAGES_PER_TICK only
-        // matter for a genuinely large backlog (first contact, or a peer rejoining after a long
-        // gap): confirmed in the field that one unbounded request for a large backlog is
-        // unreliable (a single BLE connection surviving enough chunked notifications to deliver
-        // it all at once kept failing with NotConnectedException against a real multi-phone
-        // session), while small bounded pages reliably land. The cursor is re-read fresh every
-        // iteration (not a locally-tracked value) so this always resumes from whatever a
-        // just-landed page durably committed — no separate progress-tracking state needed, and a
-        // page that fails mid-loop leaves exactly what already landed, nothing more.
+        // Keeps peerPicksFlow fresh for this confirmed partner at zero extra connect cost — see
+        // that field's own doc for why startPairingDiscoveryLoop deliberately skips it once
+        // Paired. Lets a defection (this partner's own pick moving elsewhere) still be noticed
+        // and re-resolved on the very next detection tick.
+        peerPicksFlow.update { it + (peer.decoded.shortDeviceId to info.peerPickedShortDeviceId.takeIf { id -> id != 0L }) }
+        // Part 3: one bidirectional, ack-less (gap-detected/resent at the chunk level, not
+        // redone-from-scratch) exchange over this one connection, replacing both today's
+        // page-at-a-time pull loop AND the separate dial this peer used to make back toward this
+        // device for its own data — Part 2's role negotiation already guarantees this device is
+        // the dialer for this peer, so that mirror-image connection never happens at all now; the
+        // peripheral's own PEER_PUSH_DATA_CHARACTERISTIC_UUID write handler
+        // (PeripheralSyncService.mergePeerPushPayload) is what lets this device's own new records
+        // still reach it over this same connection, with no second dial needed.
         //
-        // Count Mode alone pulls through PullRequest.countStatusOnly, against its own
-        // lastMergedCountStatusLineNumber/DeviceInfo.lastCountStatusLineNumber cursor pair,
-        // instead of the general lastMergedLineNumber/DeviceInfo.lastLineNumber one every other
-        // mode (today, just Bibs) still uses — see countStatusOnly's own doc for why: confirmed
+        // Count Mode alone pulls/pushes through the countStatusOnly cursor pair
+        // (lastMergedCountStatusLineNumber/DeviceInfo.lastCountStatusLineNumber), instead of the
+        // general lastMergedLineNumber/DeviceInfo.lastLineNumber pair every other mode (today,
+        // just Bibs) still uses — see PullRequest.countStatusOnly's own doc for why: confirmed
         // live that the general path transfers every routine Ping/etc. line alongside the real
         // seen/ejected events, and a plain MAX(lineNumber) cursor with no action filter can get
         // stuck past a real, still-unmerged COUNT_EJECTED row the moment any later, irrelevant
         // row's lineNumber gets merged first.
         val countStatusOnly = mode == HistoryMode.COUNT
-        var pagesThisTick = 0
-        while (pagesThisTick < PEER_SYNC_MAX_PAGES_PER_TICK) {
-            val since = if (countStatusOnly) {
-                peerSyncRepository.lastMergedCountStatusLineNumber(info.deviceId)
-            } else {
-                peerSyncRepository.lastMergedLineNumber(info.deviceId)
-            }
-            val targetLineNumber = if (countStatusOnly) info.lastCountStatusLineNumber else info.lastLineNumber
-            if (since >= targetLineNumber) break
-            var page: List<SyncRecord>? = null
-            val succeeded = runCatching {
-                muleRepository.pullForPeerSync(peer.advertisement, since, maxRecords = PEER_SYNC_PAGE_SIZE, countStatusOnly = countStatusOnly) { records -> page = records }
-            }.onFailure { Log.w(TAG, "peer-sync pull failed: deviceId=${info.deviceId}, since=$since", it) }.isSuccess
-            if (!succeeded) break
-            val records = page.orEmpty()
-            if (records.isNotEmpty()) {
-                peerSyncRepository.mergeRecords(groupKey, mode, info.deviceId, info.deviceName, records)
-            }
-            pagesThisTick++
-            if (records.size < PEER_SYNC_PAGE_SIZE) break
+        val myLastLineNumber = peerSyncRepository.lastMergedLineNumber(info.deviceId)
+        val myLastCountStatusLineNumber = peerSyncRepository.lastMergedCountStatusLineNumber(info.deviceId)
+        val expectPeerPullData = if (countStatusOnly) {
+            myLastCountStatusLineNumber < info.lastCountStatusLineNumber
+        } else {
+            myLastLineNumber < info.lastLineNumber
         }
+        // Behind the Bluetooth logging toggle, same as pairingOutcomeFlow's own new trace line
+        // above — pins down exactly what cursor comparison this device made and whether it
+        // expected anything to pull, so a successful but no-op exchange is distinguishable from
+        // one that never ran at all (exchangePeerData's own success path previously logged
+        // nothing at all).
+        bleConnectionLog.log(
+            "peer-sync",
+            "exchange starting: shortDeviceId=${peer.decoded.shortDeviceId} deviceId=${info.deviceId} " +
+                "countStatusOnly=$countStatusOnly myLastLineNumber=$myLastLineNumber peerLastLineNumber=${info.lastLineNumber} " +
+                "myLastCountStatusLineNumber=$myLastCountStatusLineNumber peerLastCountStatusLineNumber=${info.lastCountStatusLineNumber} " +
+                "expectPeerPullData=$expectPeerPullData",
+        )
+        var myRecordsCount = -1
+        var peerRecordsCount = -1
+        runCatching {
+            muleRepository.exchangePeerData(
+                peer.advertisement,
+                countStatusOnly = countStatusOnly,
+                expectPeerPullData = expectPeerPullData,
+                myLastLineNumber = myLastLineNumber,
+                myLastCountStatusLineNumber = myLastCountStatusLineNumber,
+                myRecordsSince = { since ->
+                    val records = if (countStatusOnly) {
+                        countModeRepository.countStatusEventsSince(raceId, since, maxRecords = null).map { it.toSyncRecord(raceStartedAtMillis) }
+                    } else {
+                        raceRepository.getHistorySinceLineNumber(raceId, since).map { it.toSyncRecord(raceStartedAtMillis) }
+                    }
+                    myRecordsCount = records.size
+                    bleConnectionLog.log("peer-sync", "push myRecordsSince: since=$since countStatusOnly=$countStatusOnly found=${records.size}")
+                    records
+                },
+                onPeerRecordsReceived = { records ->
+                    peerRecordsCount = records.size
+                    peerSyncRepository.mergeRecords(groupKey, mode, info.deviceId, info.deviceName, records)
+                },
+            )
+        }.onSuccess {
+            bleConnectionLog.log("peer-sync", "exchange ok: shortDeviceId=${peer.decoded.shortDeviceId} pushed=$myRecordsCount pulled=$peerRecordsCount")
+        }.onFailure { Log.w(TAG, "peer-sync exchange failed: deviceId=${info.deviceId}", it) }
     }
 
     companion object {
@@ -474,20 +729,12 @@ class PeerSyncEngine(
         // reverted reconnect-cooldown idea hit (that one was 10 SECONDS, per connection).
         private const val PULL_JITTER_RANGE_MS = 750L
 
-        // pullFromPeerIfNeeded's own bounded-page catch-up loop — see its own doc. Small enough
-        // that one page's own chunked BLE transfer reliably survives a single connection even
-        // under field-observed flakiness, same reasoning MuleGattProfile.PullRequest.maxRecords's
-        // own doc gives.
-        private const val PEER_SYNC_PAGE_SIZE = 25
-
-        // Caps how many pages pullFromPeerIfNeeded will fetch for one peer within a single
-        // PULL_PEER_TIMEOUT-bounded tick — a large backlog (first contact, or a peer rejoining
-        // after a long gap) catches up over several ticks instead of risking this one tick's own
-        // connect+pull+RECONNECT_SETTLE_DELAY overhead, repeated per page, running past
-        // PULL_PEER_TIMEOUT. Each already-landed page is durably committed via mergeRecords before
-        // the next one starts, so stopping early here only means "continue next tick", never lost
-        // progress.
-        private const val PEER_SYNC_MAX_PAGES_PER_TICK = 3
+        // How often startPairingDiscoveryLoop re-reads every nearby same-group peer's own
+        // DeviceInfo while undecided — see that function's own doc. Deliberately slower than
+        // PULL_INTERVAL (this is a short, rare negotiation window, not steady-state syncing) but
+        // still fast enough that two operators tapping their picks within a couple of seconds of
+        // each other see the pairing resolve promptly rather than waiting out a long poll.
+        private val PAIRING_DISCOVERY_INTERVAL = 2.seconds
 
         // peerBackoffState's own cooldown window after a readDeviceInfo failure — see that
         // field's own doc and pullFromPeerIfNeeded's readDeviceInfo failure branch for the
@@ -528,4 +775,48 @@ class PeerSyncEngine(
         // connection that's still making real progress.
         private val PULL_PEER_TIMEOUT = 60.seconds
     }
+}
+
+/** Part 1's pure "zero-touch for the trivial case" auto-pick, used by
+ *  [PeerSyncEngine.startDetectionLoop]: keeps [previousPick] if it's still among [nearbyIds];
+ *  otherwise auto-picks the sole nearby peer when there's exactly one (the entire "two phones in
+ *  range of each other" case — no operator action needed), or clears to null whenever there's a
+ *  genuine choice to make (more than one nearby) or nobody nearby at all. A top-level function,
+ *  not a method, so it's directly testable with no [PeerSyncEngine] instance needed — same
+ *  convention [mobile.racemaster.data.mule.BleConnectionLog]'s own `trimOldestHalf` already
+ *  sets. */
+internal fun recomputeOwnPick(previousPick: Long?, nearbyIds: Set<Long>): Long? {
+    if (previousPick != null && previousPick in nearbyIds) return previousPick
+    return nearbyIds.singleOrNull()
+}
+
+/** The two-sided result of comparing every nearby same-group peer's own reported pick against
+ *  this device's own — see [resolvePairingOutcome]. */
+internal sealed class PairingOutcome {
+    object Undecided : PairingOutcome()
+    data class Paired(val partnerId: Long) : PairingOutcome()
+    data class Excluded(val pairedA: Long, val pairedB: Long) : PairingOutcome()
+}
+
+/** Resolves whether a confirmed, MUTUAL pair exists among [selfId] (with its own [selfPick]) and
+ *  every nearby peer's own reported pick in [peerPicks]. TODO.md's "restrict peers to 2" means
+ *  exactly one bidirectional pair may exist mesh-wide among any set of mutually-visible
+ *  same-group phones, with everyone else excluded — so a one-sided pick alone (this device's or
+ *  anyone else's) is never enough; both sides of a pair must report picking each other. Returns
+ *  [PairingOutcome.Paired] with [selfId]'s own partner if [selfId] is part of such a pair,
+ *  [PairingOutcome.Excluded] naming whichever OTHER mutual pair has already formed if one has
+ *  (so the UI can tell the operator exactly why this device was left out — TODO.md's "the
+ *  dropped ones should detect they've been dropped"), or [PairingOutcome.Undecided] if no mutual
+ *  pair exists anywhere yet. A top-level, pure function for the same testability reasons
+ *  [recomputeOwnPick] documents. */
+internal fun resolvePairingOutcome(selfId: Long, selfPick: Long?, peerPicks: Map<Long, Long?>): PairingOutcome {
+    val allPicks = peerPicks + (selfId to selfPick)
+    val mutualPairs = allPicks.entries
+        .mapNotNull { (id, pick) -> pick?.takeIf { allPicks[it] == id }?.let { partner -> setOf(id, partner) } }
+        .distinct()
+    val ownPair = mutualPairs.firstOrNull { selfId in it }
+    if (ownPair != null) return PairingOutcome.Paired((ownPair - selfId).first())
+    val otherPair = mutualPairs.firstOrNull() ?: return PairingOutcome.Undecided
+    val (a, b) = otherPair.toList()
+    return PairingOutcome.Excluded(a, b)
 }
